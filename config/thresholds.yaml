@@ -1,0 +1,54 @@
+model:
+  historical_year_start: 2018
+  historical_year_end: 2024
+  quality_completeness_min: 0.98
+  regime_d_positive_nrl_quantile: 0.90
+  regime_d_min_positive_hours: 200
+
+checks:
+  ttl_min_cd_hours: 500
+  negative_prices_in_surplus_min_share: 0.50
+  nrl_price_corr_expected_sign: "positive"
+  capture_ratio_pv_warn_low: 0.2
+  capture_ratio_pv_warn_high: 1.5
+
+q1:
+  h_negative_stage2_min: 200
+  h_negative_stage2_strong: 300
+  h_below_5_stage2_min: 500
+  capture_ratio_pv_vs_ttl_stage2_max: 0.80
+  capture_ratio_pv_vs_ttl_crisis_max: 0.70
+  days_spread_gt50_stage2_min: 150
+  sr_energy_material_min: 0.01
+  far_energy_tension_max: 0.95
+  ir_p10_high_min: 0.70
+  regime_coherence_min_for_causality: 0.55
+
+q2:
+  min_points_regression: 3
+  exclude_2022_default: false
+
+q3:
+  trend_window_years: 3
+  stage2_recent_h_negative_min: 200
+  trend_h_negative_max: -10
+  trend_capture_ratio_min: 0.0
+  far_adaptation_min: 0.60
+  sr_energy_target: 0.01
+  far_target: 0.95
+  demand_k_max: 0.30
+
+q4:
+  bess_eta_roundtrip: 0.88
+  bess_max_cycles_per_day: 1.0
+  bess_soc_init_frac: 0.50
+  target_far: 0.95
+  target_surplus_unabs_energy_twh: 0.0
+
+q5:
+  ccgt_efficiency: 0.55
+  ccgt_ef_t_per_mwh_th: 0.202
+  ccgt_vom_eur_mwh: 3.0
+  coal_efficiency: 0.38
+  coal_ef_t_per_mwh_th: 0.341
+  coal_vom_eur_mwh: 4.0

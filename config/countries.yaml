@@ -1,0 +1,121 @@
+countries:
+  FR:
+    name: "France"
+    entsoe_code: "FR"
+    timezone: "Europe/Paris"
+    color: "#003399"
+    must_run:
+      mode: "observed"
+      observed_components: [nuclear, hydro_ror, biomass]
+      floor_gw: 20.0
+      modulation_pct: 0.50
+    flex:
+      use_psh_pump: true
+      use_exports: true
+    thermal:
+      marginal_tech: "CCGT"
+
+  DE:
+    name: "Allemagne"
+    entsoe_code: "DE_LU"
+    timezone: "Europe/Berlin"
+    color: "#FFCC00"
+    must_run:
+      mode: "observed"
+      observed_components: [lignite, hydro_ror, biomass]
+      floor_gw: 5.0
+      modulation_pct: 0.40
+    flex:
+      use_psh_pump: true
+      use_exports: true
+    thermal:
+      marginal_tech: "COAL"
+
+  ES:
+    name: "Espagne"
+    entsoe_code: "ES"
+    timezone: "Europe/Madrid"
+    color: "#CC0000"
+    must_run:
+      mode: "observed"
+      observed_components: [nuclear, hydro_ror, biomass]
+      floor_gw: 6.5
+      modulation_pct: 0.90
+    flex:
+      use_psh_pump: true
+      use_exports: true
+    thermal:
+      marginal_tech: "CCGT"
+
+  NL:
+    name: "Pays-Bas"
+    entsoe_code: "NL"
+    timezone: "Europe/Amsterdam"
+    color: "#FF6F00"
+    must_run:
+      mode: "observed"
+      observed_components: [biomass, hydro_ror]
+      floor_gw: 0.8
+      modulation_pct: 0.70
+    flex:
+      use_psh_pump: false
+      use_exports: true
+    thermal:
+      marginal_tech: "CCGT"
+
+  BE:
+    name: "Belgique"
+    entsoe_code: "BE"
+    timezone: "Europe/Brussels"
+    color: "#111111"
+    must_run:
+      mode: "observed"
+      observed_components: [nuclear, biomass, hydro_ror]
+      floor_gw: 3.0
+      modulation_pct: 0.60
+    flex:
+      use_psh_pump: true
+      use_exports: true
+    thermal:
+      marginal_tech: "CCGT"
+
+  CZ:
+    name: "Tchequie"
+    entsoe_code: "CZ"
+    timezone: "Europe/Prague"
+    color: "#11457E"
+    must_run:
+      mode: "observed"
+      observed_components: [nuclear, lignite, biomass]
+      floor_gw: 4.0
+      modulation_pct: 0.50
+    flex:
+      use_psh_pump: true
+      use_exports: true
+    thermal:
+      marginal_tech: "COAL"
+
+  IT_NORD:
+    name: "Italie Nord (proxy)"
+    entsoe_code: "IT_NORD"
+    timezone: "Europe/Rome"
+    color: "#008C45"
+    must_run:
+      mode: "observed"
+      observed_components: [hydro_ror, biomass]
+      floor_gw: 2.0
+      modulation_pct: 0.60
+    flex:
+      use_psh_pump: true
+      use_exports: true
+    thermal:
+      marginal_tech: "CCGT"
+
+country_code_periods:
+  DE:
+    - code: "DE_AT_LU"
+      start: "2018-01-01"
+      end: "2018-09-30"
+    - code: "DE_LU"
+      start: "2018-10-01"
+      end: "2099-12-31"

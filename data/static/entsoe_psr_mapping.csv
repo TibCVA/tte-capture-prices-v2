@@ -1,0 +1,14 @@
+entsoe_label,canonical_column,comment
+Solar,gen_solar_mw,Solar PV
+Wind Onshore,gen_wind_on_mw,Wind onshore
+Wind Offshore,gen_wind_off_mw,Wind offshore
+Nuclear,gen_nuclear_mw,Nuclear generation
+Hydro Run-of-river and poundage,gen_hydro_ror_mw,Hydro run of river
+Hydro Water Reservoir,gen_hydro_res_mw,Hydro reservoir
+Hydro Pumped Storage,_psh_dispatch,Split between generation and pumping
+Biomass,gen_biomass_mw,Biomass generation
+Fossil Gas,gen_gas_mw,Gas generation
+Fossil Hard coal,gen_coal_mw,Hard coal generation
+Fossil Brown coal/Lignite,gen_lignite_mw,Lignite generation
+Fossil Oil,gen_oil_mw,Oil generation
+Other,gen_other_mw,Other generation

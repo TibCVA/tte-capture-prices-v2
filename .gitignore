@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+
+# Env
+.venv/
+.env
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs
+outputs/
+reports/*.tmp.md
+*.log
+
+# Streamlit caches
+.streamlit/cache/

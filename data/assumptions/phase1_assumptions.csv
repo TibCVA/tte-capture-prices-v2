@@ -1,0 +1,27 @@
+param_group,param_name,param_value,unit,description,source,last_updated,owner
+PHASE_THRESHOLDS,h_negative_stage2_min,200,hours,Seuil heures negatives stage2,default,2026-02-09,system
+PHASE_THRESHOLDS,h_negative_stage2_strong,300,hours,Seuil fort heures negatives,default,2026-02-09,system
+PHASE_THRESHOLDS,h_below_5_stage2_min,500,hours,Seuil heures basses,default,2026-02-09,system
+PHASE_THRESHOLDS,capture_ratio_pv_vs_ttl_stage2_max,0.8,ratio,Seuil capture ratio pv/ttl,default,2026-02-09,system
+PHASE_THRESHOLDS,capture_ratio_pv_vs_ttl_crisis_max,0.7,ratio,Seuil crise capture ratio pv/ttl,default,2026-02-09,system
+PHASE_THRESHOLDS,days_spread_gt50_stage2_min,150,days,Seuil jours spread>50,default,2026-02-09,system
+PHYSICS_THRESHOLDS,sr_energy_material_min,0.01,ratio,Seuil surplus ratio materialite,default,2026-02-09,system
+PHYSICS_THRESHOLDS,far_energy_tension_max,0.95,ratio,Seuil far tension,default,2026-02-09,system
+PHYSICS_THRESHOLDS,ir_p10_high_min,0.70,ratio,Seuil inflexibilite haute,default,2026-02-09,system
+QUALITY,regime_coherence_min_for_causality,0.55,ratio,Seuil coherence minimale causalite,default,2026-02-09,system
+Q2,min_points_regression,3,count,Nombre minimal de points regression,default,2026-02-09,system
+Q3,trend_window_years,3,years,Fenetre tendance Q3,default,2026-02-09,system
+Q3,sr_energy_target,0.01,ratio,Cible SR inversion,default,2026-02-09,system
+Q3,far_target,0.95,ratio,Cible FAR inversion,default,2026-02-09,system
+Q3,demand_k_max,0.30,ratio,Borne max hausse demande,default,2026-02-09,system
+Q4,bess_eta_roundtrip,0.88,ratio,Rendement roundtrip BESS,default,2026-02-09,system
+Q4,bess_max_cycles_per_day,1.0,cycles/day,Cycles max journaliers BESS,default,2026-02-09,system
+Q4,bess_soc_init_frac,0.5,ratio,SOC initial fraction,default,2026-02-09,system
+Q4,target_far,0.95,ratio,Cible FAR pour sizing,default,2026-02-09,system
+Q4,target_surplus_unabs_energy_twh,0.0,TWh,Cible surplus non absorbe,default,2026-02-09,system
+Q5,ccgt_efficiency,0.55,ratio,Rendement CCGT,default,2026-02-09,system
+Q5,ccgt_ef_t_per_mwh_th,0.202,tCO2/MWhth,Facteur emission CCGT,default,2026-02-09,system
+Q5,ccgt_vom_eur_mwh,3.0,EUR/MWh,VOM CCGT,default,2026-02-09,system
+Q5,coal_efficiency,0.38,ratio,Rendement charbon,default,2026-02-09,system
+Q5,coal_ef_t_per_mwh_th,0.341,tCO2/MWhth,Facteur emission charbon,default,2026-02-09,system
+Q5,coal_vom_eur_mwh,4.0,EUR/MWh,VOM charbon,default,2026-02-09,system
