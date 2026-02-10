@@ -61,21 +61,37 @@ def _run_has_all_questions(run_dir: Path) -> bool:
     return True
 
 
+def _generate_reports_for_run(run_id: str, strict: bool = True) -> tuple[bool, str]:
+    try:
+        from generate_report import generate_report
+
+        result = generate_report(
+            run_id=run_id,
+            strict=strict,
+            country_scope=[],
+            docx_paths=[],
+            output_dir=Path("reports"),
+        )
+        return True, f"Rapport genere. Verdict: {result.qc.get('verdict', 'UNKNOWN')}"
+    except Exception as exc:
+        return False, f"Echec generation rapport: {exc}"
+
+
 def render() -> None:
     inject_theme()
     guided_header(
         title="Conclusions",
-        purpose="Rapport final dense, traçable et annexes de preuve.",
+        purpose="Rapport final dense, tracable et annexes de preuve.",
         step_now="Conclusions: synthese executive + rapport detaille",
         step_next="Fin du parcours",
     )
 
-    st.markdown("## Run combiné complet")
+    st.markdown("## Run combine complet")
     complete_runs = discover_complete_runs(Path("outputs/combined"))
     if not complete_runs:
-        st.warning("Aucun run combiné complet (Q1..Q5) n'est disponible dans `outputs/combined`.")
+        st.warning("Aucun run combine complet (Q1..Q5) n'est disponible dans `outputs/combined`.")
         fragments = latest_fragment_per_question(Path("outputs/combined"))
-        st.markdown("### Fragments détectés par question")
+        st.markdown("### Fragments detectes par question")
         frag_rows = []
         for q in REQUIRED_QUESTIONS:
             p = fragments.get(q)
@@ -91,13 +107,13 @@ def render() -> None:
         missing = [q for q in REQUIRED_QUESTIONS if q not in fragments]
         if missing:
             st.error(f"Impossible d'assembler automatiquement un run complet. Questions manquantes: {missing}")
-            st.info("Lance au moins une analyse complète sur chaque page Q1..Q5, puis reviens ici.")
+            st.info("Lance au moins une analyse complete sur chaque page Q1..Q5, puis reviens ici.")
             return
 
-        if st.button("Assembler un run complet à partir des derniers fragments Q1..Q5", type="primary"):
+        if st.button("Assembler un run complet a partir des derniers fragments Q1..Q5", type="primary"):
             try:
                 run_dir = assemble_complete_run_from_fragments(Path("outputs/combined"))
-                st.success(f"Run assemblé: {run_dir.name}")
+                st.success(f"Run assemble: {run_dir.name}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"Echec assemblage run complet: {exc}")
@@ -105,28 +121,49 @@ def render() -> None:
 
     labels = [p.name for p in complete_runs if _run_has_all_questions(p)]
     if not labels:
-        st.error("Aucun run contenant Q1..Q5 n'a été détecté.")
+        st.error("Aucun run contenant Q1..Q5 n'a ete detecte.")
         return
 
-    selected_run = st.selectbox("Sélection du run", labels, index=0)
+    selected_run = st.selectbox("Selection du run", labels, index=0)
     run_dir = Path("outputs/combined") / selected_run
     paths = _report_paths(selected_run)
 
-    st.caption(f"Run sélectionné: `{run_dir}`")
+    st.caption(f"Run selectionne: `{run_dir}`")
 
-    st.markdown("## Résumé exécutif")
+    st.markdown("## Generation du rapport")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Generer / mettre a jour le rapport pour ce run", type="primary"):
+            with st.spinner("Generation rapport en cours..."):
+                ok, msg = _generate_reports_for_run(selected_run, strict=True)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+    with col2:
+        if st.button("Generer en mode non strict"):
+            with st.spinner("Generation rapport (non strict) en cours..."):
+                ok, msg = _generate_reports_for_run(selected_run, strict=False)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+    st.markdown("## Resume executif")
     exec_md = _safe_read_text(paths["executive"])
     if exec_md:
         st.markdown(exec_md)
     else:
-        st.info("Aucun résumé exécutif généré pour ce run.")
+        st.info("Aucun resume executif genere pour ce run.")
 
-    st.markdown("## Rapport détaillé")
+    st.markdown("## Rapport detaille")
     detailed_md = _safe_read_text(paths["detailed"])
     if detailed_md:
         st.markdown(detailed_md)
     else:
-        st.warning("Rapport détaillé non trouvé. Lance `generate_report.py --run-id <run_id>`.")
+        st.warning("Rapport detaille non trouve. Clique sur le bouton de generation ci-dessus.")
 
     st.markdown("## Annexes de preuve")
     ev = _safe_read_csv(paths["evidence"])
@@ -153,9 +190,9 @@ def render() -> None:
         else:
             st.dataframe(stx, use_container_width=True)
             missing = stx[stx["covered"].astype(str).str.lower() == "no"] if "covered" in stx.columns else pd.DataFrame()
-            st.markdown("### Écarts de couverture")
+            st.markdown("### Ecarts de couverture")
             if missing.empty:
-                st.success("Aucun écart de couverture slides.")
+                st.success("Aucun ecart de couverture slides.")
             else:
                 st.error(f"{len(missing)} exigence(s) slides non couverte(s).")
                 st.dataframe(missing, use_container_width=True)
@@ -166,6 +203,7 @@ def render() -> None:
             st.json(qc)
             verdict = str(qc.get("verdict", "UNKNOWN"))
             if verdict == "PASS":
-                st.success("Verdict qualité: PASS")
+                st.success("Verdict qualite: PASS")
             else:
-                st.warning(f"Verdict qualité: {verdict}")
+                st.warning(f"Verdict qualite: {verdict}")
+
