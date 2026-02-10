@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import plotly.express as px
 import streamlit as st
@@ -18,13 +18,18 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
     country_year_selector = _page_utils_unavailable  # type: ignore[assignment]
     load_hourly_safe = _page_utils_unavailable  # type: ignore[assignment]
     to_plot_frame = _page_utils_unavailable  # type: ignore[assignment]
-from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
-
-try:
-    from app.ui_components import show_metric_explainers
-except ImportError:  # Backward-compatible fallback if cloud cache serves an older ui_components module.
-    def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
-        return None
+from app.ui_components import (
+    REGIME_COLORS,
+    guided_header,
+    inject_theme,
+    render_interpretation,
+    render_kpi_cards_styled,
+    render_plotly_styled,
+    render_question_box,
+    render_regime_cards,
+    show_definitions_cards,
+    show_metric_explainers_tabbed,
+)
 
 
 def render() -> None:
@@ -43,17 +48,17 @@ def render() -> None:
     )
 
     st.markdown("## Question business")
-    st.markdown("La physique du systeme (surplus et absorption) est-elle coherentement reconstruite heure par heure ?")
+    render_question_box("La physique du systeme (surplus et absorption) est-elle coherentement reconstruite heure par heure ?")
 
-    show_definitions(
+    show_definitions_cards(
         [
-            ("NRL", "Load net - VRE - MustRun."),
+            ("NRL", "Load net - VRE - MustRun. Besoin residuel net du systeme."),
             ("Surplus", "Energie excedentaire quand NRL est negatif."),
             ("Flex effective", "Absorption via exports, pompage et BESS si active."),
-            ("Regimes A/B/C/D", "Classification physique anti-circularite."),
+            ("Regimes A/B/C/D", "Classification physique anti-circularite (voir ci-dessous)."),
         ]
     )
-    show_metric_explainers(
+    show_metric_explainers_tabbed(
         [
             {
                 "metric": "NRL",
@@ -88,24 +93,38 @@ def render() -> None:
     share_unabs = float((df["surplus_unabsorbed_mw"] > 0).mean())
     share_a = float((df["regime"] == "A").mean()) if "regime" in df.columns else 0.0
 
-    show_kpi_cards(
+    render_kpi_cards_styled(
         [
-            ("Heures surplus", f"{100*share_surplus:.1f}%", "Part d'heures avec surplus."),
-            ("Heures surplus non absorbe", f"{100*share_unabs:.1f}%", "Part d'heures en surplus non absorbe."),
-            ("Part regime A", f"{100*share_a:.1f}%", "Regime A = surplus non absorbe."),
+            {"label": "Heures surplus", "value": f"{100*share_surplus:.1f}%", "help": "Part d'heures avec surplus."},
+            {"label": "Heures surplus non absorbe", "value": f"{100*share_unabs:.1f}%", "help": "Part d'heures en surplus non absorbe."},
+            {"label": "Part regime A", "value": f"{100*share_a:.1f}%", "help": "Regime A = surplus non absorbe.", "delta": f"{100*share_a:.1f}%", "delta_direction": "down" if share_a > 0.05 else "neutral"},
         ]
     )
 
     st.markdown("## Resultats et interpretation")
     view = to_plot_frame(df).tail(168)
-    st.plotly_chart(
-        px.line(view, x="timestamp_utc", y=["nrl_mw", "surplus_mw", "flex_effective_mw"], title="Dernieres 168h: NRL, surplus, flex"),
-        use_container_width=True,
+    fig_lines = px.line(view, x="timestamp_utc", y=["nrl_mw", "surplus_mw", "flex_effective_mw"], title="Dernieres 168h: NRL, surplus, flex")
+    fig_lines.update_layout(xaxis_title="Date/heure UTC", yaxis_title="MW")
+    render_plotly_styled(
+        fig_lines,
+        "Les heures ou surplus_mw depasse flex_effective_mw correspondent au regime A (surplus non absorbe). "
+        "C'est le mecanisme physique central de la cannibalisation des prix.",
+        key="socle_lines",
     )
 
     reg = df["regime"].value_counts(dropna=False).rename_axis("regime").reset_index(name="hours") if "regime" in df.columns else None
     if reg is not None:
-        st.plotly_chart(px.bar(reg, x="regime", y="hours", title="Distribution des regimes physiques"), use_container_width=True)
+        color_map = {k: v for k, v in REGIME_COLORS.items() if k in reg["regime"].values}
+        fig_bar = px.bar(reg, x="regime", y="hours", title="Distribution des regimes physiques", color="regime", color_discrete_map=color_map)
+        fig_bar.update_layout(xaxis_title="Regime", yaxis_title="Heures", showlegend=False)
+        render_plotly_styled(
+            fig_bar,
+            "Regime A = pression maximale (surplus non absorbe). B = surplus absorbe. C = normal/thermique. D = tension/rarete.",
+            key="socle_regimes",
+        )
+
+    st.markdown("### Regimes en detail")
+    render_regime_cards()
 
     with st.expander("Voir details techniques", expanded=False):
         cols = [c for c in ["nrl_mw", "surplus_mw", "flex_effective_mw", "surplus_unabsorbed_mw", "regime"] if c in df.columns]

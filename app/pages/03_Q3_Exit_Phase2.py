@@ -30,23 +30,25 @@ from app.ui_components import (
     guided_header,
     inject_theme,
     render_hist_scen_comparison,
+    render_interpretation,
+    render_kpi_cards_styled,
+    render_narrative_styled,
+    render_plotly_styled,
+    render_question_box,
     render_robustness_panel,
+    render_spec_table_collapsible,
     render_status_banner,
+    render_status_interpretation,
     render_test_ledger,
+    render_test_ledger_styled,
     show_checks_summary,
-    show_definitions,
-    show_kpi_cards,
+    show_definitions_cards,
     show_limitations,
+    show_metric_explainers_tabbed,
 )
 from src.modules.bundle_result import export_question_bundle
 from src.modules.q3_exit import Q3_PARAMS
 from src.modules.test_registry import get_default_scenarios, get_question_tests
-
-try:
-    from app.ui_components import show_metric_explainers
-except ImportError:  # pragma: no cover
-    def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
-        return None
 
 
 RESULT_KEY = "q3_bundle_result"
@@ -72,16 +74,16 @@ def render() -> None:
     )
 
     st.markdown("## Question business")
-    st.markdown("Quand la phase 2 s'arrete-t-elle, et quels ordres de grandeur permettent d'inverser la trajectoire ?")
+    render_question_box("Quand la phase 2 s'arrete-t-elle, et quels ordres de grandeur permettent d'inverser la trajectoire ?")
 
-    show_definitions(
+    show_definitions_cards(
         [
             ("Tendance", "Pente observee sur fenetre glissante."),
             ("Amelioration", "Baisse des heures negatives avec stabilisation/hausse de capture ratio."),
             ("Contre-factuel", "Test statique pour quantifier un ordre de grandeur."),
         ]
     )
-    show_metric_explainers(
+    show_metric_explainers_tabbed(
         [
             {
                 "metric": "trend_h_negative",
@@ -106,10 +108,7 @@ def render() -> None:
     )
 
     st.markdown("## Ce que cette execution teste (historique + prospectif)")
-    st.dataframe(
-        _spec_table()[["test_id", "mode", "title", "what_is_tested", "metric_rule", "source_ref"]],
-        use_container_width=True,
-    )
+    render_spec_table_collapsible(_spec_table())
 
     annual = load_annual_metrics()
     if annual.empty:
@@ -153,16 +152,19 @@ def render() -> None:
 
     bundle = payload["bundle"]
     render_status_banner(bundle.checks)
+    render_status_interpretation(bundle.checks)
+
     st.markdown("## Tests empiriques")
     render_test_ledger(bundle.test_ledger)
+    render_test_ledger_styled(bundle.test_ledger)
 
     st.markdown("## Resultats synthese")
     out_hist = bundle.hist_result.tables.get("Q3_status", pd.DataFrame())
-    show_kpi_cards(
+    render_kpi_cards_styled(
         [
-            ("Pays hist", int(out_hist["country"].nunique()) if not out_hist.empty else 0, "Pays avec statut historique."),
-            ("Scenarios executes", len(bundle.scen_results), "Nombre de scenarios prospectifs executes."),
-            ("Run ID", bundle.run_id, "Identifiant run unifie."),
+            {"label": "Pays hist", "value": int(out_hist["country"].nunique()) if not out_hist.empty else 0, "help": "Pays avec statut historique."},
+            {"label": "Scenarios executes", "value": len(bundle.scen_results), "help": "Nombre de scenarios prospectifs executes."},
+            {"label": "Run ID", "value": bundle.run_id, "help": "Identifiant run unifie."},
         ]
     )
 
@@ -171,10 +173,11 @@ def render() -> None:
     )
 
     with tab_syn:
-        st.markdown(bundle.narrative_md)
+        render_narrative_styled(bundle.narrative_md)
         render_robustness_panel(bundle.test_ledger)
         if not out_hist.empty:
             st.dataframe(out_hist, use_container_width=True)
+        render_interpretation("La sortie de phase 2 est un diagnostic multi-leviers. Un seul contre-factuel ne suffit pas a conclure.")
 
     with tab_hist:
         out = bundle.hist_result.tables.get("Q3_status", pd.DataFrame())
@@ -182,26 +185,32 @@ def render() -> None:
             st.info("Aucun resultat historique Q3.")
         else:
             st.dataframe(out, use_container_width=True)
-            st.plotly_chart(
-                px.scatter(
-                    out,
-                    x="inversion_k_demand",
-                    y="inversion_r_mustrun",
-                    color="status",
-                    hover_name="country",
-                    title="Historique: demande vs reduction must-run pour inversion",
-                ),
-                use_container_width=True,
+            fig1 = px.scatter(
+                out,
+                x="inversion_k_demand",
+                y="inversion_r_mustrun",
+                color="status",
+                hover_name="country",
+                title="Historique: demande vs reduction must-run pour inversion",
             )
-            st.plotly_chart(
-                px.bar(
-                    out.sort_values("additional_absorbed_needed_TWh_year", ascending=False),
-                    x="country",
-                    y="additional_absorbed_needed_TWh_year",
-                    color="status",
-                    title="Historique: flex additionnelle requise (TWh/an)",
-                ),
-                use_container_width=True,
+            fig1.update_layout(xaxis_title="k demande (multiplicateur)", yaxis_title="r must-run (reduction)")
+            render_plotly_styled(
+                fig1,
+                "Les pays eloignes de l'origine necessitent des leviers importants. Un pays en haut a droite a besoin de plus de demande ET moins de rigidite.",
+                key="q3_hist_inversion",
+            )
+            fig2 = px.bar(
+                out.sort_values("additional_absorbed_needed_TWh_year", ascending=False),
+                x="country",
+                y="additional_absorbed_needed_TWh_year",
+                color="status",
+                title="Historique: flex additionnelle requise (TWh/an)",
+            )
+            fig2.update_layout(xaxis_title="Pays", yaxis_title="TWh/an supplementaires")
+            render_plotly_styled(
+                fig2,
+                "Ampleur de la flexibilite supplementaire necessaire. Les pays en degradation ont les besoins les plus eleves.",
+                key="q3_hist_flex",
             )
 
     with tab_scen:
@@ -211,12 +220,14 @@ def render() -> None:
             scen_sel = st.selectbox("Scenario", sorted(bundle.scen_results.keys()), key="q3_bundle_scenario")
             scen_res = bundle.scen_results[scen_sel]
             st.dataframe(scen_res.tables.get("Q3_status", pd.DataFrame()), use_container_width=True)
+            render_interpretation("Les leviers prospectifs doivent etre compares aux leviers historiques pour evaluer la trajectoire.")
 
     with tab_comp:
         render_hist_scen_comparison(bundle.comparison_table)
+        render_interpretation("Des deltas importants entre HIST et SCEN signalent des evolutions structurelles. Les lignes FRAGILE/NON_TESTABLE invitent a la prudence.")
 
     with tab_tech:
-        st.markdown("### Checks")
+        st.markdown("## Checks & exports")
         show_checks_summary(bundle.checks)
         if bundle.warnings:
             st.warning(" | ".join(bundle.warnings))
@@ -231,7 +242,3 @@ def render() -> None:
             "Les tests NON_TESTABLE sont explicites et traceables.",
         ]
     )
-
-    st.markdown("## Checks & exports")
-    show_checks_summary(bundle.checks)
-    st.code(payload["out_dir"])

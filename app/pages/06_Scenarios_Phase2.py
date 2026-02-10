@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 
@@ -29,7 +29,15 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
     load_scenario_validation_findings_ui = _page_utils_unavailable  # type: ignore[assignment]
     phase2_assumptions_editor = _page_utils_unavailable  # type: ignore[assignment]
     run_phase2_scenario_ui = _page_utils_unavailable  # type: ignore[assignment]
-from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
+from app.ui_components import (
+    guided_header,
+    inject_theme,
+    render_interpretation,
+    render_kpi_cards_styled,
+    render_plotly_styled,
+    render_question_box,
+    show_definitions_cards,
+)
 
 
 def _safe_list(series: pd.Series) -> list[str]:
@@ -85,9 +93,9 @@ def render() -> None:
     )
 
     st.markdown("## Question business")
-    st.markdown("Que deviennent SR/FAR/IR, regimes, capture ratios et stress prix sous hypotheses 2030/2040 ?")
+    render_question_box("Que deviennent SR/FAR/IR, regimes, capture ratios et stress prix sous hypotheses 2030/2040 ?")
 
-    show_definitions(
+    show_definitions_cards(
         [
             ("Mode SCEN", "Calcul prospectif mecaniste, sans optimisation d'equilibre de marche."),
             ("Scenario ID", "Identifiant unique d'un jeu d'hypotheses scenario x pays x annee."),
@@ -141,13 +149,12 @@ def render() -> None:
     n_neg = int((pd.to_numeric(annual.get("h_negative"), errors="coerce") > 0).sum())
     n_a = int((pd.to_numeric(annual.get("h_regime_a"), errors="coerce") > 0).sum()) if "h_regime_a" in annual.columns else 0
 
-    show_kpi_cards(
+    render_kpi_cards_styled(
         [
-            ("Lignes annuelles", int(len(annual)), "Nombre de combinaisons pays-annee scenario."),
-            ("WARN", n_warn, "Warnings reality checks sur le scenario."),
-            ("ERROR", n_err, "Erreurs hard checks sur le scenario."),
-            ("Pays-annees avec h_negative>0", n_neg, "Presence de prix negatifs projetes."),
-            ("Pays-annees avec regime A", n_a, "Surplus non absorbe detecte."),
+            {"label": "Lignes annuelles", "value": int(len(annual)), "help": "Nombre de combinaisons pays-annee scenario."},
+            {"label": "WARN", "value": n_warn, "help": "Warnings reality checks sur le scenario.", "delta": str(n_warn), "delta_direction": "down" if n_warn > 0 else "neutral"},
+            {"label": "ERROR", "value": n_err, "help": "Erreurs hard checks sur le scenario.", "delta": str(n_err), "delta_direction": "down" if n_err > 0 else "neutral"},
+            {"label": "h_negative > 0", "value": n_neg, "help": "Presence de prix negatifs projetes."},
         ]
     )
 
@@ -155,16 +162,33 @@ def render() -> None:
 
     st.markdown("### 1) Resultats annuels scenario")
     st.dataframe(annual, use_container_width=True)
+    render_interpretation("Chaque ligne est une combinaison pays-annee sous les hypotheses du scenario selectionne.")
 
     calib_cols = [c for c in annual.columns if c.startswith("calib_")]
     if calib_cols:
         st.markdown("### 2) Parametres de calibration effectivement utilises")
         st.dataframe(annual[["country", "year"] + calib_cols], use_container_width=True)
+        render_interpretation("Les parametres de calibration sont derives de l'historique et injectes dans le moteur prospectif.")
 
     stress_readout = _scenario_stress_readout(annual)
     if not stress_readout.empty:
         st.markdown("### 3) Lecture business du stress prospectif")
-        st.dataframe(stress_readout, use_container_width=True)
+
+        def _color_stress(row: pd.Series) -> list[str]:
+            lecture = str(row.get("lecture", ""))
+            if "Tension" in lecture:
+                return ["background-color: #fef2f2"] * len(row)
+            elif "rationnelle" in lecture or "absorbe" in lecture:
+                return ["background-color: #f0fdf4"] * len(row)
+            else:
+                return ["background-color: #fffbeb"] * len(row)
+
+        st.dataframe(stress_readout.style.apply(_color_stress, axis=1), use_container_width=True, hide_index=True)
+        render_interpretation(
+            "Rouge = tension visible (surplus non absorbe ou prix negatifs). "
+            "Vert = situation rationnelle. "
+            "Jaune = a verifier."
+        )
 
     if {"country", "year", "capture_ratio_pv_vs_ttl"}.issubset(annual.columns):
         fig = px.line(
@@ -175,7 +199,12 @@ def render() -> None:
             title=f"Capture ratio PV vs TTL ({scenario_id})",
             markers=True,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(xaxis_title="Annee", yaxis_title="Capture ratio PV/TTL")
+        render_plotly_styled(
+            fig,
+            "Un capture ratio en baisse signale une cannibalisation croissante. Les pays en dessous de 1.0 subissent une perte de valeur.",
+            key="scen_capture_ratio",
+        )
 
     if {"country", "year", "h_negative"}.issubset(annual.columns):
         fig2 = px.bar(
@@ -186,7 +215,12 @@ def render() -> None:
             barmode="group",
             title=f"Heures negatives projetees ({scenario_id})",
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        fig2.update_layout(xaxis_title="Pays", yaxis_title="Heures negatives")
+        render_plotly_styled(
+            fig2,
+            "Plus les heures negatives sont elevees, plus le stress de cannibalisation est intense sous ce scenario.",
+            key="scen_h_negative",
+        )
 
     if {"country", "year", "h_regime_a"}.issubset(annual.columns):
         fig3 = px.bar(
@@ -197,7 +231,12 @@ def render() -> None:
             barmode="group",
             title=f"Heures regime A (surplus non absorbe) ({scenario_id})",
         )
-        st.plotly_chart(fig3, use_container_width=True)
+        fig3.update_layout(xaxis_title="Pays", yaxis_title="Heures regime A")
+        render_plotly_styled(
+            fig3,
+            "Le regime A represente les heures de surplus non absorbe. Plus elles sont nombreuses, plus le systeme manque de flexibilite.",
+            key="scen_h_regime_a",
+        )
 
     st.markdown("## Limites")
     st.markdown(

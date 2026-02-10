@@ -26,12 +26,15 @@ labels = [x[0] for x in PAGES]
 choice = st.sidebar.radio("Page", labels)
 idx = labels.index(choice)
 
-st.sidebar.caption(f"Etape {idx + 1}/{len(PAGES)}")
+st.sidebar.progress((idx + 1) / len(PAGES), text=f"Etape {idx + 1}/{len(PAGES)}")
 st.sidebar.info(PAGES[idx][2])
 
 st.sidebar.markdown("### Parcours")
 for i, (label, _, _) in enumerate(PAGES, start=1):
-    st.sidebar.markdown(f"{i}. {label}")
+    if i == idx + 1:
+        st.sidebar.markdown(f"**{i}. {label}** ←")
+    else:
+        st.sidebar.markdown(f"{i}. {label}")
 
 page_path = dict((label, path) for label, path, _ in PAGES)[choice]
 namespace = runpy.run_path(str(Path(page_path)))

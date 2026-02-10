@@ -30,24 +30,26 @@ from app.ui_components import (
     guided_header,
     inject_theme,
     render_hist_scen_comparison,
+    render_interpretation,
+    render_kpi_cards_styled,
+    render_narrative_styled,
+    render_plotly_styled,
+    render_question_box,
     render_robustness_panel,
+    render_spec_table_collapsible,
     render_status_banner,
+    render_status_interpretation,
     render_test_ledger,
+    render_test_ledger_styled,
     show_checks_summary,
-    show_definitions,
-    show_kpi_cards,
+    show_definitions_cards,
     show_limitations,
+    show_metric_explainers_tabbed,
 )
 from src.config_loader import load_countries
 from src.modules.bundle_result import export_question_bundle
 from src.modules.q5_thermal_anchor import Q5_PARAMS
 from src.modules.test_registry import get_default_scenarios, get_question_tests
-
-try:
-    from app.ui_components import show_metric_explainers
-except ImportError:  # pragma: no cover
-    def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
-        return None
 
 
 RESULT_KEY = "q5_bundle_result"
@@ -73,16 +75,16 @@ def render() -> None:
     )
 
     st.markdown("## Question business")
-    st.markdown("Comment CO2 et gaz deplacent-ils l'ancre thermique, et quel CO2 est requis pour relever le haut de courbe ?")
+    render_question_box("Comment CO2 et gaz deplacent-ils l'ancre thermique, et quel CO2 est requis pour relever le haut de courbe ?")
 
-    show_definitions(
+    show_definitions_cards(
         [
-            ("TCA", "Ancre cout thermique simplifiee."),
+            ("TCA", "Ancre cout thermique simplifiee (gas/eff + CO2*EF/eff + VOM)."),
             ("TTL", "Q95 des prix hors surplus (regimes C/D)."),
             ("alpha", "Ecart entre TTL observe et TCA Q95."),
         ]
     )
-    show_metric_explainers(
+    show_metric_explainers_tabbed(
         [
             {
                 "metric": "dTCA/dCO2 et dTCA/dGas",
@@ -96,7 +98,7 @@ def render() -> None:
             {
                 "metric": "CO2 requis",
                 "definition": "Prix CO2 implicite pour atteindre un TTL cible.",
-                "formula": "resolution ttl_target ≈ alpha + Q95(TCA_scenario)",
+                "formula": "resolution ttl_target = alpha + Q95(TCA_scenario)",
                 "intuition": "Ordre de grandeur policy/commodites.",
                 "interpretation": "Valeur elevee = cible difficile sans autres leviers.",
                 "limits": "Suppose alpha relativement stable.",
@@ -107,10 +109,7 @@ def render() -> None:
     )
 
     st.markdown("## Ce que cette execution teste (historique + prospectif)")
-    st.dataframe(
-        _spec_table()[["test_id", "mode", "title", "what_is_tested", "metric_rule", "source_ref"]],
-        use_container_width=True,
-    )
+    render_spec_table_collapsible(_spec_table())
 
     annual = load_annual_metrics()
     if annual.empty:
@@ -162,16 +161,19 @@ def render() -> None:
 
     bundle = payload["bundle"]
     render_status_banner(bundle.checks)
+    render_status_interpretation(bundle.checks)
+
     st.markdown("## Tests empiriques")
     render_test_ledger(bundle.test_ledger)
+    render_test_ledger_styled(bundle.test_ledger)
 
     st.markdown("## Resultats synthese")
     hist_summary = bundle.hist_result.tables.get("Q5_summary", pd.DataFrame())
-    show_kpi_cards(
+    render_kpi_cards_styled(
         [
-            ("Scenarios executes", len(bundle.scen_results), "Nombre de scenarios prospectifs executes."),
-            ("Run ID", bundle.run_id, "Identifiant run unifie."),
-            ("Pays", bundle.selection.get("country", ""), "Pays de l'analyse Q5."),
+            {"label": "Scenarios executes", "value": len(bundle.scen_results), "help": "Nombre de scenarios prospectifs executes."},
+            {"label": "Run ID", "value": bundle.run_id, "help": "Identifiant run unifie."},
+            {"label": "Pays", "value": bundle.selection.get("country", ""), "help": "Pays de l'analyse Q5."},
         ]
     )
 
@@ -180,10 +182,11 @@ def render() -> None:
     )
 
     with tab_syn:
-        st.markdown(bundle.narrative_md)
+        render_narrative_styled(bundle.narrative_md)
         render_robustness_panel(bundle.test_ledger)
         if not hist_summary.empty:
             st.dataframe(hist_summary, use_container_width=True)
+        render_interpretation("Les sensibilites sont exploitables si alpha est stable. Verifier la variation de alpha avant de conclure.")
 
     with tab_hist:
         out = bundle.hist_result.tables.get("Q5_summary", pd.DataFrame())
@@ -202,7 +205,13 @@ def render() -> None:
                     "value": [float(row.get("ttl_obs", float("nan"))), float(row.get("tca_q95", float("nan"))), float(row.get("alpha", float("nan")))],
                 }
             )
-            st.plotly_chart(px.bar(fig_df, x="variable", y="value", title="Historique: TTL, TCA Q95, alpha"), use_container_width=True)
+            fig = px.bar(fig_df, x="variable", y="value", title="Historique: TTL, TCA Q95, alpha")
+            fig.update_layout(xaxis_title="Variable", yaxis_title="EUR/MWh")
+            render_plotly_styled(
+                fig,
+                "TTL = prix observe en queue haute. TCA = ancre theorique. Si alpha est stable, les sensibilites dTCA/dCO2 et dTCA/dGas sont exploitables.",
+                key="q5_hist_ttl",
+            )
 
     with tab_scen:
         if not bundle.scen_results:
@@ -211,12 +220,14 @@ def render() -> None:
             scen_sel = st.selectbox("Scenario", sorted(bundle.scen_results.keys()), key="q5_bundle_scenario")
             scen_res = bundle.scen_results[scen_sel]
             st.dataframe(scen_res.tables.get("Q5_summary", pd.DataFrame()), use_container_width=True)
+            render_interpretation("Les sensibilites prospectives doivent etre comparees aux historiques. Un changement de techno marginale modifie les coefficients.")
 
     with tab_comp:
         render_hist_scen_comparison(bundle.comparison_table)
+        render_interpretation("Les deltas importants entre HIST et SCEN sur alpha ou les sensibilites signalent une evolution du mix marginal.")
 
     with tab_tech:
-        st.markdown("### Checks")
+        st.markdown("## Checks & exports")
         show_checks_summary(bundle.checks)
         if bundle.warnings:
             st.warning(" | ".join(bundle.warnings))
@@ -231,7 +242,3 @@ def render() -> None:
             "Les tests NON_TESTABLE sont traces explicitement.",
         ]
     )
-
-    st.markdown("## Checks & exports")
-    show_checks_summary(bundle.checks)
-    st.code(payload["out_dir"])

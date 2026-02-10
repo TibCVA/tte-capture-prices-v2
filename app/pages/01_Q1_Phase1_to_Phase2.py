@@ -33,23 +33,25 @@ from app.ui_components import (
     guided_header,
     inject_theme,
     render_hist_scen_comparison,
+    render_interpretation,
+    render_kpi_cards_styled,
+    render_narrative_styled,
+    render_plotly_styled,
+    render_question_box,
     render_robustness_panel,
+    render_spec_table_collapsible,
     render_status_banner,
+    render_status_interpretation,
     render_test_ledger,
+    render_test_ledger_styled,
     show_checks_summary,
-    show_definitions,
-    show_kpi_cards,
+    show_definitions_cards,
     show_limitations,
+    show_metric_explainers_tabbed,
 )
 from src.modules.bundle_result import export_question_bundle
 from src.modules.q1_transition import Q1_PARAMS
 from src.modules.test_registry import get_default_scenarios, get_question_tests
-
-try:
-    from app.ui_components import show_metric_explainers
-except ImportError:  # pragma: no cover
-    def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
-        return None
 
 
 RESULT_KEY = "q1_bundle_result"
@@ -76,9 +78,9 @@ def render() -> None:
     )
 
     st.markdown("## Question business")
-    st.markdown("Quels parametres expliquent le passage de la phase 1 a la phase 2, historiquement et en projection ?")
+    render_question_box("Quels parametres expliquent le passage de la phase 1 a la phase 2, historiquement et en projection ?")
 
-    show_definitions(
+    show_definitions_cards(
         [
             ("SR", "Part d'energie en surplus sur l'annee."),
             ("FAR", "Part du surplus absorbee par la flexibilite."),
@@ -86,7 +88,7 @@ def render() -> None:
             ("Bascule", "Premiere annee ou les signaux phase 2 deviennent structurels."),
         ]
     )
-    show_metric_explainers(
+    show_metric_explainers_tabbed(
         [
             {
                 "metric": "Stage2 Market Score",
@@ -111,19 +113,7 @@ def render() -> None:
     )
 
     st.markdown("## Ce que cette execution teste (historique + prospectif)")
-    st.dataframe(
-        _spec_table()[
-            [
-                "test_id",
-                "mode",
-                "title",
-                "what_is_tested",
-                "metric_rule",
-                "source_ref",
-            ]
-        ],
-        use_container_width=True,
-    )
+    render_spec_table_collapsible(_spec_table())
 
     annual = load_annual_metrics()
     if annual.empty:
@@ -167,16 +157,19 @@ def render() -> None:
 
     bundle = payload["bundle"]
     render_status_banner(bundle.checks)
+    render_status_interpretation(bundle.checks)
+
     st.markdown("## Tests empiriques")
     render_test_ledger(bundle.test_ledger)
+    render_test_ledger_styled(bundle.test_ledger)
 
     st.markdown("## Resultats synthese")
     hist_summary = bundle.hist_result.tables.get("Q1_country_summary", pd.DataFrame())
-    show_kpi_cards(
+    render_kpi_cards_styled(
         [
-            ("Pays analyses (hist)", int(hist_summary["country"].nunique()) if not hist_summary.empty else 0, "Pays historiques analyses."),
-            ("Scenarios executes", len(bundle.scen_results), "Nombre de scenarios prospectifs executes."),
-            ("Run ID", bundle.run_id, "Identifiant run unifie."),
+            {"label": "Pays analyses (hist)", "value": int(hist_summary["country"].nunique()) if not hist_summary.empty else 0, "help": "Pays historiques analyses."},
+            {"label": "Scenarios executes", "value": len(bundle.scen_results), "help": "Nombre de scenarios prospectifs executes."},
+            {"label": "Run ID", "value": bundle.run_id, "help": "Identifiant run unifie."},
         ]
     )
 
@@ -185,10 +178,11 @@ def render() -> None:
     )
 
     with tab_syn:
-        st.markdown(bundle.narrative_md)
+        render_narrative_styled(bundle.narrative_md)
         render_robustness_panel(bundle.test_ledger)
         if not hist_summary.empty:
             st.dataframe(hist_summary, use_container_width=True)
+        render_interpretation("La bascule est un diagnostic multi-indicateurs. Un seul signal ne suffit pas a conclure.")
 
     with tab_hist:
         panel = bundle.hist_result.tables.get("Q1_year_panel", pd.DataFrame())
@@ -196,13 +190,19 @@ def render() -> None:
             st.info("Aucun resultat historique.")
         else:
             st.dataframe(panel, use_container_width=True)
-            st.plotly_chart(
-                px.scatter(panel, x="sr_energy", y="capture_ratio_pv_vs_ttl", color="country", title="Historique: capture ratio PV vs SR"),
-                use_container_width=True,
+            fig1 = px.scatter(panel, x="sr_energy", y="capture_ratio_pv_vs_ttl", color="country", title="Historique: capture ratio PV vs SR")
+            fig1.update_layout(xaxis_title="SR (energie)", yaxis_title="Capture ratio PV/TTL")
+            render_plotly_styled(
+                fig1,
+                "Plus le SR augmente, plus le capture ratio tend a se degrader. Les pays en bas a droite sont les plus avances en phase 2.",
+                key="q1_hist_sr_cr",
             )
-            st.plotly_chart(
-                px.scatter(panel, x="sr_hours", y="h_negative_obs", color="country", title="Historique: heures negatives vs SR heures"),
-                use_container_width=True,
+            fig2 = px.scatter(panel, x="sr_hours", y="h_negative_obs", color="country", title="Historique: heures negatives vs SR heures")
+            fig2.update_layout(xaxis_title="SR (heures)", yaxis_title="Heures negatives")
+            render_plotly_styled(
+                fig2,
+                "Un nombre eleve d'heures negatives combine a un SR eleve confirme une cannibalisation structurelle.",
+                key="q1_hist_sr_neg",
             )
 
     with tab_scen:
@@ -214,12 +214,14 @@ def render() -> None:
             st.markdown(f"**Scenario:** `{scen_sel}`")
             st.dataframe(scen_res.tables.get("Q1_country_summary", pd.DataFrame()), use_container_width=True)
             st.dataframe(scen_res.tables.get("Q1_year_panel", pd.DataFrame()), use_container_width=True)
+            render_interpretation("Les resultats prospectifs doivent etre lus en comparaison avec l'historique (onglet Comparaison).")
 
     with tab_comp:
         render_hist_scen_comparison(bundle.comparison_table)
+        render_interpretation("Les deltas importants entre HIST et SCEN signalent des evolutions structurelles. Les lignes FRAGILE/NON_TESTABLE invitent a la prudence.")
 
     with tab_tech:
-        st.markdown("### Checks")
+        st.markdown("## Checks & exports")
         show_checks_summary(bundle.checks)
         if bundle.warnings:
             st.warning(" | ".join(bundle.warnings))
@@ -234,7 +236,3 @@ def render() -> None:
             "Les tests NON_TESTABLE sont explicites et ne doivent pas etre ignores.",
         ]
     )
-
-    st.markdown("## Checks & exports")
-    show_checks_summary(bundle.checks)
-    st.code(payload["out_dir"])

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import calendar
 from typing import Any
@@ -25,13 +25,17 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
     load_validation_findings = _page_utils_unavailable  # type: ignore[assignment]
     run_pipeline_ui = _page_utils_unavailable  # type: ignore[assignment]
     to_plot_frame = _page_utils_unavailable  # type: ignore[assignment]
-from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
-
-try:
-    from app.ui_components import show_metric_explainers
-except ImportError:  # Backward-compatible fallback if cloud cache serves an older ui_components module.
-    def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
-        return None
+from app.ui_components import (
+    apply_tte_template,
+    guided_header,
+    inject_theme,
+    render_interpretation,
+    render_kpi_cards_styled,
+    render_plotly_styled,
+    render_question_box,
+    show_definitions_cards,
+    show_metric_explainers_tabbed,
+)
 
 
 CRITICAL_COLS = [
@@ -117,9 +121,9 @@ def render() -> None:
     )
 
     st.markdown("## Question business")
-    st.markdown("Les donnees sont-elles suffisamment completes, coherentes et auditables pour tirer des conclusions robustes ?")
+    render_question_box("Les donnees sont-elles suffisamment completes, coherentes et auditables pour tirer des conclusions robustes ?")
 
-    show_definitions(
+    show_definitions_cards(
         [
             ("Completeness", "Part d'heures sans manque critique (prix/load/generation)."),
             ("Hard checks", "Invariants physiques/comptables qui ne doivent jamais etre violes."),
@@ -128,7 +132,7 @@ def render() -> None:
             ("Load net mode", "Regle appliquee pour traiter le pompage PSH dans la charge."),
         ]
     )
-    show_metric_explainers(
+    show_metric_explainers_tabbed(
         [
             {
                 "metric": "Completeness",
@@ -151,6 +155,20 @@ def render() -> None:
         ],
         title="Comment lire les indicateurs qualite",
     )
+
+    st.markdown("### Ce que signifie chaque colonne critique")
+    col_explain = pd.DataFrame(
+        [
+            {"Colonne": "price_da_eur_mwh", "Description": "Prix day-ahead EPEX/marche en EUR/MWh", "Impact si manquant": "Capture prices incalculables"},
+            {"Colonne": "load_mw", "Description": "Charge nette du systeme (apres traitement PSH)", "Impact si manquant": "NRL faux, tous les calculs faux"},
+            {"Colonne": "gen_vre_mw", "Description": "Generation VRE totale (solaire + eolien)", "Impact si manquant": "Surplus non calculable"},
+            {"Colonne": "gen_must_run_mw", "Description": "Generation non-flexible (nucleaire, biomasse, hydro RoR...)", "Impact si manquant": "NRL biaise"},
+            {"Colonne": "nrl_mw", "Description": "Net Residual Load = Load - VRE - MustRun", "Impact si manquant": "Pas de classification regimes"},
+            {"Colonne": "surplus_mw", "Description": "Surplus physique = max(0, -NRL)", "Impact si manquant": "SR/FAR non calculables"},
+            {"Colonne": "regime_phys", "Description": "Regime horaire A/B/C/D (anti-circularite)", "Impact si manquant": "Pas de segmentation physique"},
+        ]
+    )
+    st.dataframe(col_explain, use_container_width=True, hide_index=True)
 
     country, year = country_year_selector()
 
@@ -201,16 +219,22 @@ def render() -> None:
         critical_missing_cols=missing_cols,
     )
 
-    show_kpi_cards(
+    compl_direction = "up" if completeness >= 0.98 else "down"
+    render_kpi_cards_styled(
         [
-            ("Completeness", f"{100*completeness:.2f}%", "Part d'heures sans manque critique."),
-            ("Heures observees", n_hours, "Nombre de lignes horaires presentes."),
-            ("Heures attendues", expected_hours, "8760 ou 8784 selon annee."),
-            ("Load net mode", load_mode, "Mode de calcul de la charge nette."),
+            {"label": "Completeness", "value": f"{100*completeness:.2f}%", "help": "Part d'heures sans manque critique.", "delta": ">= 98%" if completeness >= 0.98 else "< 98%", "delta_direction": compl_direction},
+            {"label": "Heures observees", "value": n_hours, "help": "Nombre de lignes horaires presentes."},
+            {"label": "Heures attendues", "value": expected_hours, "help": "8760 ou 8784 selon annee."},
+            {"label": "Load net mode", "value": load_mode, "help": "Mode de calcul de la charge nette."},
         ]
     )
 
     st.markdown("## Decision Go / No-Go")
+    verdict_class = {"PASS": "tte-exec-verdict-pass", "WARN": "tte-exec-verdict-warn", "FAIL": "tte-exec-verdict-fail"}.get(go_no_go, "")
+    st.markdown(
+        f'<div class="tte-exec-card {verdict_class}">',
+        unsafe_allow_html=True,
+    )
     if go_no_go == "PASS":
         st.success("PASS - Donnees suffisamment solides pour lancer les analyses Q1..Q5.")
     elif go_no_go == "WARN":
@@ -218,12 +242,21 @@ def render() -> None:
     else:
         st.error("FAIL - Ne pas conclure tant que les erreurs critiques ne sont pas corrigees.")
 
-    st.markdown("### Raisons")
+    st.markdown("**Raisons**")
     for r in reasons:
         st.markdown(f"- {r}")
-    st.markdown("### Actions correctives recommandees")
+    st.markdown("**Actions correctives recommandees**")
     for a in actions:
         st.markdown(f"- {a}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    render_interpretation(
+        f"Verdict: **{go_no_go}**. "
+        + ("Les donnees sont exploitables. " if go_no_go == "PASS" else "")
+        + ("Prudence requise sur les conclusions. " if go_no_go == "WARN" else "")
+        + ("Blocage: corriger les erreurs avant toute analyse. " if go_no_go == "FAIL" else "")
+        + f"Completeness: {100*completeness:.2f}%, heures: {n_hours}/{expected_hours}."
+    )
 
     st.markdown("## Resultats et interpretation")
 
@@ -249,15 +282,36 @@ def render() -> None:
                 }
             )
     quality_matrix = pd.DataFrame(quality_rows)
+
     st.markdown("### Matrice de qualite des colonnes critiques")
-    st.dataframe(quality_matrix, use_container_width=True, hide_index=True)
+
+    def _color_quality(row: pd.Series) -> list[str]:
+        status = str(row.get("statut", "")).upper()
+        color_map = {"OK": "#f0fdf4", "WARN": "#fffbeb", "FAIL": "#fef2f2"}
+        bg = color_map.get(status, "")
+        return [f"background-color: {bg}" if bg else "" for _ in row]
+
+    st.dataframe(quality_matrix.style.apply(_color_quality, axis=1), use_container_width=True, hide_index=True)
+    render_interpretation(
+        "OK = colonne presente avec moins de 2% de manques. WARN = taux de manques eleve. FAIL = colonne absente."
+    )
 
     plot_df = to_plot_frame(df)
     fig_price = px.line(plot_df, x="timestamp_utc", y="price_da_eur_mwh", title="Prix day-ahead (NaN visibles)")
-    st.plotly_chart(fig_price, use_container_width=True)
+    fig_price.update_layout(xaxis_title="Date/heure UTC", yaxis_title="EUR/MWh")
+    render_plotly_styled(
+        fig_price,
+        "Les trous (NaN) sont visibles directement sur le graphe. Des discontinuites importantes signalent un probleme de source.",
+        key="donnees_price",
+    )
 
     fig_nrl = px.line(plot_df, x="timestamp_utc", y=["nrl_mw", "surplus_mw"], title="NRL et surplus")
-    st.plotly_chart(fig_nrl, use_container_width=True)
+    fig_nrl.update_layout(xaxis_title="Date/heure UTC", yaxis_title="MW")
+    render_plotly_styled(
+        fig_nrl,
+        "NRL negatif = surplus. Les periodes ou surplus_mw est eleve correspondent aux heures de pression VRE maximale.",
+        key="donnees_nrl",
+    )
 
     st.markdown("### Findings automatiques")
     if findings.empty:

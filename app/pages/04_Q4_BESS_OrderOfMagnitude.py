@@ -30,23 +30,25 @@ from app.ui_components import (
     guided_header,
     inject_theme,
     render_hist_scen_comparison,
+    render_interpretation,
+    render_kpi_cards_styled,
+    render_narrative_styled,
+    render_plotly_styled,
+    render_question_box,
     render_robustness_panel,
+    render_spec_table_collapsible,
     render_status_banner,
+    render_status_interpretation,
     render_test_ledger,
+    render_test_ledger_styled,
     show_checks_summary,
-    show_definitions,
-    show_kpi_cards,
+    show_definitions_cards,
     show_limitations,
+    show_metric_explainers_tabbed,
 )
 from src.modules.bundle_result import export_question_bundle
 from src.modules.q4_bess import Q4_PARAMS
 from src.modules.test_registry import get_default_scenarios, get_question_tests
-
-try:
-    from app.ui_components import show_metric_explainers
-except ImportError:  # pragma: no cover
-    def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
-        return None
 
 
 RESULT_KEY = "q4_bundle_result"
@@ -74,9 +76,9 @@ def render() -> None:
     )
 
     st.markdown("## Question business")
-    st.markdown("Quel niveau de batteries permet de reduire le stress surplus et d'ameliorer la valeur captee ?")
+    render_question_box("Quel niveau de batteries permet de reduire le stress surplus et d'ameliorer la valeur captee ?")
 
-    show_definitions(
+    show_definitions_cards(
         [
             ("Puissance BESS", "Debut maximal charge/decharge en MW."),
             ("Energie BESS", "Capacite stockable en MWh."),
@@ -84,7 +86,7 @@ def render() -> None:
             ("Price-taker", "Le module Q4 ne reboucle pas le prix sur le dispatch."),
         ]
     )
-    show_metric_explainers(
+    show_metric_explainers_tabbed(
         [
             {
                 "metric": "FAR avant/apres",
@@ -109,10 +111,7 @@ def render() -> None:
     )
 
     st.markdown("## Ce que cette execution teste (historique + prospectif)")
-    st.dataframe(
-        _spec_table()[["test_id", "mode", "title", "what_is_tested", "metric_rule", "source_ref"]],
-        use_container_width=True,
-    )
+    render_spec_table_collapsible(_spec_table())
 
     country, year = country_year_selector()
 
@@ -158,16 +157,19 @@ def render() -> None:
 
     bundle = payload["bundle"]
     render_status_banner(bundle.checks)
+    render_status_interpretation(bundle.checks)
+
     st.markdown("## Tests empiriques")
     render_test_ledger(bundle.test_ledger)
+    render_test_ledger_styled(bundle.test_ledger)
 
     st.markdown("## Resultats synthese")
     hist_summary = bundle.hist_result.tables.get("Q4_sizing_summary", pd.DataFrame())
-    show_kpi_cards(
+    render_kpi_cards_styled(
         [
-            ("Scenario hist", "SURPLUS_FIRST + 2 modes", "Le run historique inclut aussi PRICE_ARBITRAGE_SIMPLE et PV_COLOCATED."),
-            ("Scenarios executes", len(bundle.scen_results), "Nombre de scenarios prospectifs executes."),
-            ("Run ID", bundle.run_id, "Identifiant run unifie."),
+            {"label": "Scenario hist", "value": "SURPLUS_FIRST + 2 modes", "help": "Le run historique inclut aussi PRICE_ARBITRAGE_SIMPLE et PV_COLOCATED."},
+            {"label": "Scenarios executes", "value": len(bundle.scen_results), "help": "Nombre de scenarios prospectifs executes."},
+            {"label": "Run ID", "value": bundle.run_id, "help": "Identifiant run unifie."},
         ]
     )
 
@@ -176,10 +178,11 @@ def render() -> None:
     )
 
     with tab_syn:
-        st.markdown(bundle.narrative_md)
+        render_narrative_styled(bundle.narrative_md)
         render_robustness_panel(bundle.test_ledger)
         if not hist_summary.empty:
             st.dataframe(hist_summary, use_container_width=True)
+        render_interpretation("Le sizing optimal depend du profil de surplus. Un resultat identique pour plusieurs durees signale un plateau d'efficacite.")
 
     with tab_hist:
         frontier = bundle.hist_result.tables.get("Q4_bess_frontier", pd.DataFrame())
@@ -190,13 +193,19 @@ def render() -> None:
             st.dataframe(summary, use_container_width=True)
         if not frontier.empty:
             st.dataframe(frontier, use_container_width=True)
-            st.plotly_chart(
-                px.line(frontier.sort_values("required_bess_power_mw"), x="required_bess_power_mw", y="far_after", color="required_bess_duration_h", title="Historique: FAR apres vs puissance"),
-                use_container_width=True,
+            fig1 = px.line(frontier.sort_values("required_bess_power_mw"), x="required_bess_power_mw", y="far_after", color="required_bess_duration_h", title="Historique: FAR apres vs puissance")
+            fig1.update_layout(xaxis_title="Puissance BESS (MW)", yaxis_title="FAR apres BESS")
+            render_plotly_styled(
+                fig1,
+                "Chaque courbe = une duree de stockage. Le plateau indique le seuil au-dela duquel ajouter de la puissance n'ameliore plus FAR.",
+                key="q4_hist_far",
             )
-            st.plotly_chart(
-                px.line(frontier.sort_values("required_bess_energy_mwh"), x="required_bess_energy_mwh", y="surplus_unabs_energy_after", color="required_bess_duration_h", title="Historique: surplus non absorbe apres vs energie"),
-                use_container_width=True,
+            fig2 = px.line(frontier.sort_values("required_bess_energy_mwh"), x="required_bess_energy_mwh", y="surplus_unabs_energy_after", color="required_bess_duration_h", title="Historique: surplus non absorbe apres vs energie")
+            fig2.update_layout(xaxis_title="Energie BESS (MWh)", yaxis_title="Surplus non absorbe (MWh)")
+            render_plotly_styled(
+                fig2,
+                "Capacite en MWh necessaire pour absorber le surplus residuel. Au-dela d'un seuil, le gain marginal diminue.",
+                key="q4_hist_surplus",
             )
 
     with tab_scen:
@@ -207,12 +216,14 @@ def render() -> None:
             scen_res = bundle.scen_results[scen_sel]
             st.dataframe(scen_res.tables.get("Q4_sizing_summary", pd.DataFrame()), use_container_width=True)
             st.dataframe(scen_res.tables.get("Q4_bess_frontier", pd.DataFrame()), use_container_width=True)
+            render_interpretation("Les besoins prospectifs sont generalement superieurs aux besoins historiques du fait de la penetration VRE accrue.")
 
     with tab_comp:
         render_hist_scen_comparison(bundle.comparison_table)
+        render_interpretation("Les deltas importants entre HIST et SCEN signalent des evolutions structurelles.")
 
     with tab_tech:
-        st.markdown("### Checks")
+        st.markdown("## Checks & exports")
         show_checks_summary(bundle.checks)
         if bundle.warnings:
             st.warning(" | ".join(bundle.warnings))
@@ -227,7 +238,3 @@ def render() -> None:
             "Les tests NON_TESTABLE sont signales explicitement.",
         ]
     )
-
-    st.markdown("## Checks & exports")
-    show_checks_summary(bundle.checks)
-    st.code(payload["out_dir"])

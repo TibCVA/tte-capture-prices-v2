@@ -7,7 +7,12 @@ import re
 import pandas as pd
 import streamlit as st
 
-from app.ui_components import guided_header, inject_theme
+from app.ui_components import (
+    guided_header,
+    inject_theme,
+    render_interpretation,
+    render_kpi_cards_styled,
+)
 from src.reporting.evidence_loader import (
     REQUIRED_QUESTIONS,
     assemble_complete_run_from_fragments,
@@ -67,26 +72,68 @@ def _discover_report_run_ids(reports_dir: Path = Path("reports")) -> list[str]:
     return sorted(run_ids, reverse=True)
 
 
+def _split_report_sections(md: str) -> list[tuple[str, str]]:
+    """Split a markdown report into sections by H2 headers."""
+    if not md:
+        return []
+    parts = re.split(r"(?=^## )", md, flags=re.MULTILINE)
+    sections: list[tuple[str, str]] = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        lines = part.split("\n", 1)
+        title = lines[0].lstrip("#").strip() if lines else "Section"
+        body = lines[1].strip() if len(lines) > 1 else ""
+        sections.append((title, body))
+    return sections
+
+
 def _render_report_artifacts(paths: dict[str, Path]) -> None:
+    # --- Executive summary in styled card ---
     st.markdown("## Resume executif")
     exec_md = _safe_read_text(paths["executive"])
     if exec_md:
+        st.markdown('<div class="tte-exec-card">', unsafe_allow_html=True)
         st.markdown(exec_md)
+        st.markdown("</div>", unsafe_allow_html=True)
     else:
         st.info("Aucun resume executif genere pour ce run.")
 
+    # --- QC verdict banner ---
+    qc = _safe_read_json(paths["qc"])
+    if qc:
+        verdict = str(qc.get("verdict", "UNKNOWN"))
+        n_checks = len(qc.get("checks", []))
+        n_pass = sum(1 for c in qc.get("checks", []) if str(c.get("status", "")).upper() == "PASS")
+        if verdict == "PASS":
+            st.success(f"Verdict qualite: PASS ({n_pass}/{n_checks} checks reussis)")
+        else:
+            st.warning(f"Verdict qualite: {verdict} ({n_pass}/{n_checks} checks reussis)")
+        render_interpretation(
+            f"Le rapport a ete verifie par {n_checks} quality gates automatiques. "
+            + ("Tous les checks sont passes." if verdict == "PASS" else "Certains checks ne sont pas passes, verifier les details dans les annexes.")
+        )
+
+    # --- Detailed report in navigable expanders ---
     st.markdown("## Rapport detaille")
     detailed_md = _safe_read_text(paths["detailed"])
     if detailed_md:
-        st.markdown(detailed_md)
+        sections = _split_report_sections(detailed_md)
+        if sections:
+            for i, (title, body) in enumerate(sections):
+                with st.expander(title, expanded=(i == 0)):
+                    st.markdown(body)
+        else:
+            st.markdown(detailed_md)
     else:
         st.warning("Rapport detaille non trouve. Clique sur le bouton de generation ci-dessus.")
 
+    # --- Annexes ---
     st.markdown("## Annexes de preuve")
     ev = _safe_read_csv(paths["evidence"])
     tt = _safe_read_csv(paths["traceability"])
     stx = _safe_read_csv(paths["slides_traceability"])
-    qc = _safe_read_json(paths["qc"])
 
     tab1, tab2, tab3, tab4 = st.tabs(
         ["Evidence catalog", "Test traceability", "Slides coverage", "Quality gates"]
@@ -96,16 +143,32 @@ def _render_report_artifacts(paths: dict[str, Path]) -> None:
             st.info("Evidence catalog indisponible.")
         else:
             st.dataframe(ev, use_container_width=True)
+            render_interpretation("Chaque ligne lie un test a une preuve (table, chart, valeur). Permet de remonter de la conclusion a la donnee.")
+
     with tab2:
         if tt.empty:
             st.info("Test traceability indisponible.")
         else:
             st.dataframe(tt, use_container_width=True)
+            render_interpretation("Trace chaque test jusqu'a sa reference slides TTE. Verifie que toutes les exigences sont couvertes.")
+
     with tab3:
         if stx.empty:
             st.info("Slides traceability indisponible.")
         else:
-            st.dataframe(stx, use_container_width=True)
+            # Slides coverage with color
+            if "covered" in stx.columns:
+                def _color_coverage(row: pd.Series) -> list[str]:
+                    covered = str(row.get("covered", "")).lower()
+                    if covered in ("yes", "true", "1"):
+                        return ["background-color: #f0fdf4"] * len(row)
+                    else:
+                        return ["background-color: #fef2f2"] * len(row)
+
+                st.dataframe(stx.style.apply(_color_coverage, axis=1), use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(stx, use_container_width=True)
+
             missing = stx[stx["covered"].astype(str).str.lower() == "no"] if "covered" in stx.columns else pd.DataFrame()
             st.markdown("### Ecarts de couverture")
             if missing.empty:
@@ -113,16 +176,12 @@ def _render_report_artifacts(paths: dict[str, Path]) -> None:
             else:
                 st.error(f"{len(missing)} exigence(s) slides non couverte(s).")
                 st.dataframe(missing, use_container_width=True)
+
     with tab4:
         if not qc:
             st.info("Fichier report_qc indisponible.")
         else:
             st.json(qc)
-            verdict = str(qc.get("verdict", "UNKNOWN"))
-            if verdict == "PASS":
-                st.success("Verdict qualite: PASS")
-            else:
-                st.warning(f"Verdict qualite: {verdict}")
 
 
 def _run_has_all_questions(run_dir: Path) -> bool:
@@ -145,7 +204,6 @@ def _generate_reports_for_run(run_id: str, strict: bool = True) -> tuple[bool, s
         )
         return True, f"Rapport genere. Verdict: {result.qc.get('verdict', 'UNKNOWN')}"
     except RuntimeError as exc:
-        # Strict mode can fail quality gates while still producing report artifacts.
         paths = _report_paths(run_id)
         if paths["detailed"].exists() or paths["executive"].exists():
             return True, f"Rapport genere avec ecarts quality-gate: {exc}"
@@ -163,12 +221,22 @@ def render() -> None:
         step_next="Fin du parcours",
     )
 
-    st.markdown("## Run combine complet")
+    # --- KPI dashboard executif ---
+    prebuilt_runs = _discover_report_run_ids(Path("reports"))
     complete_runs = discover_complete_runs(Path("outputs/combined"))
+
+    render_kpi_cards_styled(
+        [
+            {"label": "Runs combines", "value": len(complete_runs), "help": "Nombre de runs Q1-Q5 complets disponibles."},
+            {"label": "Rapports pre-generes", "value": len(prebuilt_runs), "help": "Rapports deja generes dans reports/."},
+            {"label": "Questions requises", "value": len(REQUIRED_QUESTIONS), "help": "Q1-Q5 doivent toutes etre executees."},
+        ]
+    )
+
+    st.markdown("## Run combine complet")
     if not complete_runs:
         st.warning("Aucun run combine complet (Q1..Q5) n'est disponible dans `outputs/combined`.")
 
-        prebuilt_runs = _discover_report_run_ids(Path("reports"))
         if prebuilt_runs:
             st.info("Des rapports pre-generes sont disponibles meme sans run combine local.")
             selected_prebuilt = st.selectbox("Selection du rapport pre-genere", prebuilt_runs, index=0)
