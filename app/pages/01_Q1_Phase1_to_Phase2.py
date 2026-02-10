@@ -13,7 +13,15 @@ from app.page_utils import (
     load_phase2_assumptions_table,
     load_scenario_annual_metrics_ui,
 )
-from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
+from app.ui_components import (
+    guided_header,
+    inject_theme,
+    show_checks_summary,
+    show_definitions,
+    show_kpi_cards,
+    show_limitations,
+    show_metric_explainers,
+)
 from src.modules.q1_transition import Q1_PARAMS, run_q1
 from src.modules.result import export_module_result
 
@@ -40,6 +48,29 @@ def render() -> None:
             ("IR", "Rigidite du systeme en creux de charge."),
             ("Capture ratio PV vs TTL", "Valeur captee par le PV relative a l'ancre hors surplus."),
         ]
+    )
+    show_metric_explainers(
+        [
+            {
+                "metric": "Stage2 Market Score",
+                "definition": "Score de symptomes de phase 2 cote marche.",
+                "formula": "Somme de points sur h_negative, h_below_5, capture_ratio_pv_vs_ttl, days_spread_gt50",
+                "intuition": "Plus le score est eleve, plus les signatures de cannibalisation sont visibles.",
+                "interpretation": "Score >= seuil => bascule marche probable.",
+                "limits": "Seuils parametres, pas preuve causale.",
+                "dependencies": "qualite prix, seuils phase1_assumptions, mode HIST/SCEN.",
+            },
+            {
+                "metric": "Stress physique",
+                "definition": "Etat du systeme selon surplus/absorption/rigidite.",
+                "formula": "Combinaison de SR, FAR et IR",
+                "intuition": "Distingue surplus present, absorbe ou non absorbe.",
+                "interpretation": "Stress eleve + score marche eleve = bascule plus robuste.",
+                "limits": "Depend du perimetre must-run/flex.",
+                "dependencies": "nrl, surplus, exports, psh, must-run config.",
+            },
+        ],
+        title="Comment lire les KPI Q1",
     )
 
     annual = load_annual_metrics()

@@ -16,7 +16,15 @@ from app.page_utils import (
     load_scenario_annual_metrics_ui,
     load_scenario_hourly_safe,
 )
-from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
+from app.ui_components import (
+    guided_header,
+    inject_theme,
+    show_checks_summary,
+    show_definitions,
+    show_kpi_cards,
+    show_limitations,
+    show_metric_explainers,
+)
 from src.modules.q4_bess import Q4_PARAMS, run_q4
 from src.modules.result import export_module_result
 
@@ -53,6 +61,29 @@ def render() -> None:
             ("Duree (h)", "Energie / puissance, indicateur de stockage court vs long."),
             ("Price-taker", "La batterie ne modifie pas les prix de marche dans ce module."),
         ]
+    )
+    show_metric_explainers(
+        [
+            {
+                "metric": "FAR avant/apres",
+                "definition": "Part du surplus absorbee avant et apres ajout BESS.",
+                "formula": "FAR = surplus_absorbed_energy / surplus_energy",
+                "intuition": "Mesure l'efficacite systeme du stockage sur l'absorption.",
+                "interpretation": "FAR en hausse = stress surplus mieux gere.",
+                "limits": "Ne modelise pas l'effet prix endogene.",
+                "dependencies": "surplus profile, puissance/energie BESS, mode dispatch.",
+            },
+            {
+                "metric": "required_bess_power_mw / required_bess_duration_h",
+                "definition": "Dimensionnement minimal pour atteindre l'objectif.",
+                "formula": "Recherche sur grille (power x duration) avec critere objectif",
+                "intuition": "Donne un ordre de grandeur actionnable.",
+                "interpretation": "Besoin long (>8h) => stockage courte duree possiblement insuffisant.",
+                "limits": "Resolution limitee a la grille testee.",
+                "dependencies": "objective, grille saisie, dispatch mode, annee selectionnee.",
+            },
+        ],
+        title="Comment lire les KPI Q4",
     )
 
     mode_label = st.selectbox("Mode d'analyse", ["Historique", "Prospectif (Phase 2)"], index=0)

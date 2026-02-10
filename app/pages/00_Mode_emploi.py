@@ -2,7 +2,7 @@
 
 import streamlit as st
 
-from app.ui_components import guided_header, inject_theme, show_definitions, show_limitations
+from app.ui_components import guided_header, inject_theme, show_definitions, show_limitations, show_metric_explainers
 
 
 def render() -> None:
@@ -32,6 +32,56 @@ def render() -> None:
             ("TTL", "Q95 des prix sur regimes C/D (hors surplus)."),
             ("Capture price", "Prix moyen pondere par la production d'une techno."),
         ]
+    )
+    show_metric_explainers(
+        [
+            {
+                "metric": "SR",
+                "definition": "Part structurelle du surplus dans l'annee.",
+                "formula": "SR = surplus_twh / gen_primary_twh (ou /load_net_twh en variante explicite)",
+                "intuition": "Plus SR est eleve, plus la pression de sur-injection est forte.",
+                "interpretation": "SR en hausse = risque accru d'heures tres basses/negatives.",
+                "limits": "Depend de la definition must-run et de la qualite generation totale.",
+                "dependencies": "load_mw, gen_vre_mw, gen_must_run_mw, mapping techno.",
+            },
+            {
+                "metric": "FAR",
+                "definition": "Part du surplus absorbee par la flex observee.",
+                "formula": "FAR = surplus_absorbed_energy / surplus_energy",
+                "intuition": "Mesure si le systeme sait absorber le surplus.",
+                "interpretation": "FAR proche de 1 = surplus majoritairement gere.",
+                "limits": "NaN si surplus nul; sensible a la disponibilite net_position/psh.",
+                "dependencies": "exports_mw, psh_pump_mw, surplus_mw, regles load_net.",
+            },
+            {
+                "metric": "IR",
+                "definition": "Rigidite structurelle en creux de charge.",
+                "formula": "IR = P10(must_run_mw) / P10(load_mw)",
+                "intuition": "Compare le plancher inflexible a la demande basse.",
+                "interpretation": "IR eleve = plus de risque de surplus en heures creuses.",
+                "limits": "Percentiles sensibles aux donnees manquantes.",
+                "dependencies": "must_run config pays, load net mode, qualite horaires.",
+            },
+            {
+                "metric": "TTL",
+                "definition": "Niveau de queue haute des prix hors surplus.",
+                "formula": "TTL = Q95(price_da_eur_mwh | regime in {C,D})",
+                "intuition": "Approxime la valeur des heures thermiques/tendues.",
+                "interpretation": "TTL eleve peut relever l'ancre de valeur hors surplus.",
+                "limits": "Ce n'est pas un cout marginal; demande un nombre minimal d'heures C/D.",
+                "dependencies": "regime_phys, prix observes, seuil regime D.",
+            },
+            {
+                "metric": "Capture ratio",
+                "definition": "Valeur captee par une techno vs reference annuelle.",
+                "formula": "capture_ratio = capture_price_tech / baseload_price (ou /TTL selon module)",
+                "intuition": "Mesure la cannibalisation de valeur.",
+                "interpretation": "Ratio en baisse = decrochage de valeur de la techno.",
+                "limits": "Ne prouve pas seul la causalite; depend du choix de reference.",
+                "dependencies": "price_da, production techno, filtre qualite.",
+            },
+        ],
+        title="Formules et interpretation des KPI pivots",
     )
 
     st.markdown("## Regimes physiques A/B/C/D")

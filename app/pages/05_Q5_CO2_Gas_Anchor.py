@@ -16,7 +16,15 @@ from app.page_utils import (
     load_scenario_annual_metrics_ui,
     load_scenario_hourly_safe,
 )
-from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
+from app.ui_components import (
+    guided_header,
+    inject_theme,
+    show_checks_summary,
+    show_definitions,
+    show_kpi_cards,
+    show_limitations,
+    show_metric_explainers,
+)
 from src.config_loader import load_countries
 from src.modules.q5_thermal_anchor import Q5_PARAMS, run_q5
 from src.modules.result import export_module_result
@@ -88,6 +96,29 @@ def render() -> None:
             ("TTL", "Q95 des prix sur regimes C/D (hors surplus)."),
             ("alpha", "Ecart TTL observe - TCA Q95."),
         ]
+    )
+    show_metric_explainers(
+        [
+            {
+                "metric": "TCA",
+                "definition": "Approximation cout variable marginal thermique.",
+                "formula": "TCA = fuel/eff + CO2*(EF/eff) + VOM",
+                "intuition": "Relie commodites et niveau de prix hors surplus.",
+                "interpretation": "Hausse gaz/CO2 deplace l'ancre vers le haut.",
+                "limits": "Choix techno marginale simplifie la realite.",
+                "dependencies": "gas_price, co2_price, efficiency, emission_factor, VOM.",
+            },
+            {
+                "metric": "CO2 requis pour TTL cible",
+                "definition": "Prix CO2 implicite necessaire pour atteindre un TTL cible.",
+                "formula": "Resolution numerique ttl_target ≈ alpha + Q95(TCA_scenario)",
+                "intuition": "Donne un ordre de grandeur policy/commodites.",
+                "interpretation": "Valeur elevee = cible difficile sans autre levier.",
+                "limits": "Suppose alpha relativement stable.",
+                "dependencies": "ttl_target, gas scenario, techno marginale, corr prix-TCA.",
+            },
+        ],
+        title="Comment lire les KPI Q5",
     )
 
     annual = load_annual_metrics()

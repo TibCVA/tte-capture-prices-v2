@@ -14,7 +14,15 @@ from app.page_utils import (
     load_phase2_assumptions_table,
     load_scenario_annual_metrics_ui,
 )
-from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
+from app.ui_components import (
+    guided_header,
+    inject_theme,
+    show_checks_summary,
+    show_definitions,
+    show_kpi_cards,
+    show_limitations,
+    show_metric_explainers,
+)
 from src.modules.q3_exit import Q3_PARAMS, run_q3
 from src.modules.result import export_module_result
 
@@ -49,6 +57,29 @@ def render() -> None:
             ("Amelioration", "Baisse des heures negatives avec stabilisation/hausse du capture ratio."),
             ("Contre-factuel", "Test statique pour evaluer un ordre de grandeur, pas un plan d'investissement."),
         ]
+    )
+    show_metric_explainers(
+        [
+            {
+                "metric": "trend_h_negative",
+                "definition": "Pente des heures negatives sur la fenetre retenue.",
+                "formula": "OLS(h_negative ~ year) sur la fenetre",
+                "intuition": "Signal direct d'aggravation ou de stabilisation du stress prix.",
+                "interpretation": "Negatif = amelioration potentielle.",
+                "limits": "Fenetre courte sensible aux annee atypiques.",
+                "dependencies": "qualite prix, longueur fenetre, filtre stage2.",
+            },
+            {
+                "metric": "inversion_k_demand / inversion_r_mustrun / flex additionnelle",
+                "definition": "Ordres de grandeur minimaux pour inverser le stress.",
+                "formula": "Recherche binaire sur k/r + besoin absorbe supplementaire pour FAR cible",
+                "intuition": "Quantifie la difficulte relative de chaque levier.",
+                "interpretation": "Valeurs elevees = inversion difficile avec ce seul levier.",
+                "limits": "Contre-factuel statique, sans dynamique d'investissement.",
+                "dependencies": "annee reference, cible SR/FAR, structure horaire.",
+            },
+        ],
+        title="Comment lire les KPI Q3",
     )
 
     annual = load_annual_metrics()

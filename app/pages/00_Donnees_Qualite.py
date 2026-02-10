@@ -4,7 +4,7 @@ import plotly.express as px
 import streamlit as st
 
 from app.page_utils import country_year_selector, load_hourly_safe, load_validation_findings, run_pipeline_ui, to_plot_frame
-from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
+from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards, show_metric_explainers
 
 
 def render() -> None:
@@ -25,6 +25,29 @@ def render() -> None:
             ("Validation findings", "Resultats des checks automatiques PASS/WARN/ERROR."),
             ("Load net mode", "Regle appliquee pour traiter le pompage PSH dans la charge."),
         ]
+    )
+    show_metric_explainers(
+        [
+            {
+                "metric": "Completeness",
+                "definition": "Part des heures sans manque critique.",
+                "formula": "1 - mean(q_missing_price OR q_missing_load OR q_missing_generation)",
+                "intuition": "Mesure la fiabilite brute des donnees d'entree.",
+                "interpretation": "Sous le seuil qualite, conclusions fragiles.",
+                "limits": "N'indique pas a lui seul la coherence economique.",
+                "dependencies": "disponibilite prix/load/gen et pipeline de normalisation.",
+            },
+            {
+                "metric": "Validation findings",
+                "definition": "Liste des checks automatiques (PASS/WARN/ERROR).",
+                "formula": "Evaluation des invariants et reality checks du socle",
+                "intuition": "Evite les conclusions sur donnees incoherentes.",
+                "interpretation": "ERROR = correction obligatoire avant analyse.",
+                "limits": "Un WARN peut etre explicable mais doit etre argumente.",
+                "dependencies": "validation_report et quality flags.",
+            },
+        ],
+        title="Comment lire les indicateurs qualite",
     )
 
     country, year = country_year_selector()

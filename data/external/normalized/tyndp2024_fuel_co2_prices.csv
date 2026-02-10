@@ -1,0 +1,13 @@
+scenario_id,year,co2_eur_per_t,gas_eur_per_mwh_th,source_label,coal_eur_per_mwh_th
+BASE,2030,90.0,42.0,internal_assumption,
+BASE,2040,110.0,48.0,internal_assumption,
+DEMAND_UP,2030,90.0,42.0,internal_assumption,
+DEMAND_UP,2040,110.0,48.0,internal_assumption,
+FLEX_UP,2030,90.0,42.0,internal_assumption,
+FLEX_UP,2040,110.0,48.0,internal_assumption,
+HIGH_CO2,2030,135.0,42.0,internal_assumption,
+HIGH_CO2,2040,165.0,48.0,internal_assumption,
+HIGH_GAS,2030,90.0,63.0,internal_assumption,
+HIGH_GAS,2040,110.0,72.0,internal_assumption,
+LOW_RIGIDITY,2030,90.0,42.0,internal_assumption,
+LOW_RIGIDITY,2040,110.0,48.0,internal_assumption,

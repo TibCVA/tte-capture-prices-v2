@@ -1,0 +1,105 @@
+requirement_id,source_spec,module_area,status,evidence_type,evidence_ref,severity,requirement_text
+S0-001,SPEC_0,time,OK,code,src/time_utils.py:22,critical,Index interne UTC timezone-aware et granularite horaire.
+S0-002,SPEC_0,time,OK,code,src/time_utils.py:25,high,Pas de temps unique 1H.
+S0-003,SPEC_0,anti_circularity,OK,code,src/processing.py:108,critical,Classification regime A/B/C/D sans variable prix.
+S0-004,SPEC_0,definitions,OK,code,src/processing.py:227,critical,NRL = load - VRE - must-run.
+S0-005,SPEC_0,definitions,OK,code,src/processing.py:228,critical,"Surplus = max(0, -NRL)."
+S0-006,SPEC_0,definitions,OK,code,src/processing.py:239,critical,Surplus non absorbe borne et non negatif.
+S0-007,SPEC_0,security,OK,code,src/data_fetcher.py:54,critical,"Cle ENTSOE lue via variable environnement/.env, jamais hardcodee."
+S0-008,SPEC_0,auditability,OK,code,src/pipeline.py:14,high,Run context (run_id hash + snapshot config) disponible en utilitaire.
+S0-009,SPEC_0,auditability,OK,runtime,"outputs/runs/*/{run_config_snapshot.json,data_manifest.csv}",critical,Run trail complet outputs/runs/<run_id>/run_config_snapshot.json + data_manifest.csv dans flux principal.
+S0-010,SPEC_0,metrics,OK,code,src/metrics.py:151,high,FAR = NaN si surplus nul.
+S0-011,SPEC_0,metrics,OK,code,src/metrics.py:155,high,IR base sur P10(must-run)/P10(load).
+S0-012,SPEC_0,metrics,OK,code,src/metrics.py:134,high,TTL calcule en Q95 sur regimes C/D.
+S0-013,SPEC_0,tests,OK,test,python -m pytest -q :: -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html,critical,Batterie de tests unitaires/integration/reality executee.
+S0-014,SPEC_0,ux,OK,ui,app/ui_components.py:75,medium,Explicabilite KPI complete (definition + formule + intuition + limites + dependances) partout.
+S0-015,SPEC_0,modes,OK,code,app/pages/01_Q1_Phase1_to_Phase2.py:82,high,Separation explicite mode HIST vs SCEN dans pages Q1..Q5.
+S1-001,SPEC_1,raw_cache,OK,runtime,data/raw/entsoe/*/{country}/{year}.parquet,critical,Cache freeze-first ENTSOE present (prices/load/generation/net_position/psh).
+S1-002,SPEC_1,raw_cache,OK,runtime,data/raw/entsoe/*/{country}/{year}.meta.json,high,Metadonnees .meta.json par dataset/pays/annee.
+S1-003,SPEC_1,schema,OK,runtime,data/processed/hourly/FR/2024.parquet,critical,Schema horaire canonique present.
+S1-004,SPEC_1,schema,OK,runtime,data/processed/hourly/FR/2024.parquet,high,Alias obligatoires canonique + alias exposes.
+S1-005,SPEC_1,logic,OK,code,src/processing.py:213,high,Regle load/pompage (minus_psh_pump vs includes_pumping) implementee.
+S1-006,SPEC_1,logic,OK,code,src/processing.py:86,high,Must-run configurable par pays via config/countries.yaml.
+S1-007,SPEC_1,logic,OK,code,src/processing.py:111,critical,Regimes A/B/C/D conformes et testables.
+S1-008,SPEC_1,metrics,OK,runtime,data/metrics/annual_metrics.parquet,critical,Table annuelle consolidee disponible.
+S1-009,SPEC_1,metrics,OK,runtime,data/metrics/daily_metrics.parquet,high,Table journaliere disponible.
+S1-010,SPEC_1,quality,OK,runtime,data/metrics/validation_findings.parquet,critical,Validation findings hard+reality disponibles.
+S1-011,SPEC_1,metrics,OK,runtime,data/metrics/annual_metrics.parquet,critical,KPIs annuels de base presents (SR/FAR/IR/TTL/capture/prix stress/quality).
+S1-012,SPEC_1,tests,OK,test,tests/test_time_normalization.py; tests/test_physical_formulas.py; tests/test_schema_stability.py,high,Tests socle imposes presents.
+S1-013,SPEC_1,ui,OK,ui,app/pages/00_Donnees_Qualite.py:19,medium,Page Donnees & Qualite disponible.
+S1-014,SPEC_1,ui,OK,ui,app/pages/00_Socle_Physique.py:7,medium,Page Socle Physique disponible.
+S1-015,SPEC_1,runtime,OK,runtime,hourly files: 49/49,critical,Execution historique complete 7 pays x 2018-2024.
+S1-016,SPEC_1,runtime,OK,runtime,data/metrics/annual_metrics.parquet rows for 7x2018-2024,critical,Panel annuel complet pour fenetre historique verrouillee.
+S1-017,SPEC_1,external_data,OK,runtime,data/external/raw/tyndp2024/* ; data/external/normalized/tyndp2024_*.csv,critical,Jeux TYNDP 2024 raw+normalized integres.
+S1-018,SPEC_1,external_data,OK,runtime,data/external/raw/nrel_atb/* ; data/external/normalized/tech_cost_benchmarks_atb.csv,high,Benchmarks NREL ATB integres.
+S1-019,SPEC_1,external_data,OK,runtime,data/external/raw/irena/IRENAInsights_RPGC2023.pdf ; data/external/normalized/tech_cost_benchmarks_irena.csv,high,Benchmark IRENA integre.
+S1-020,SPEC_1,assumptions,OK,runtime,assumptions/policy_distortion.csv,high,Table policy distortion versionnee presente.
+S1-021,SPEC_1,assumptions,OK,runtime,data/external/normalized/interconnection_proxy_phase1.csv,medium,Proxy interconnexions phase1 present.
+S1-022,SPEC_1,assumptions,OK,runtime,data/external/normalized/surplus_coincidence_matrix_phase1.csv,medium,Matrice coincidence surplus phase1 presente.
+S2-001,SPEC_2,contract,OK,code,src/modules/result.py:13,critical,Contrat ModuleResult present avec champs standard.
+S2-002,SPEC_2,contract,OK,code,src/modules/result.py:45,high,Exports pack standard phase1/phase2.
+S2-003,SPEC_2,q_modules,OK,code,src/modules/q1_transition.py; src/modules/q2_slope.py; src/modules/q3_exit.py; src/modules/q4_bess.py; src/modules/q5_thermal_anchor.py,critical,5 modules Q1..Q5 presentes.
+S2-004,SPEC_2,q_pages,OK,ui,app/pages/01_Q1...py .. 05_Q5...py,critical,5 pages Streamlit Q1..Q5 presentes.
+S2-005,SPEC_2,q_pages,OK,test,tests/test_ui_pages_contract.py,high,Sections fixes obligatoires sur pages Q1..Q5.
+S2-006,SPEC_2,q_pages,OK,test,tests/test_ui_pages_contract.py::test_q_pages_use_form_submit_for_heavy_runs,high,Calculs lourds declenches via form submit.
+S2-007,SPEC_2,quality_gate,OK,code,app/pages/01_Q1_Phase1_to_Phase2.py:115,high,Blocage conclusions si quality_flag=FAIL (Q1).
+S2-008,SPEC_2,quality_gate,OK,code,app/pages/02_Q2_Phase2_Slope.py:125,high,Blocage conclusions si quality_flag=FAIL (Q2).
+S2-009,SPEC_2,quality_gate,OK,code,app/pages/03_Q3_Exit_Phase2.py:122,high,Blocage conclusions si quality_flag=FAIL (Q3).
+S2-010,SPEC_2,quality_gate,OK,code,app/pages/04_Q4_BESS_OrderOfMagnitude.py:115,high,Blocage conclusions si quality_flag=FAIL (Q4).
+S2-011,SPEC_2,quality_gate,OK,code,app/pages/05_Q5_CO2_Gas_Anchor.py:174,high,Blocage conclusions si quality_flag=FAIL (Q5).
+S2-012,SPEC_2,q1,OK,code,src/modules/q1_transition.py:78,high,Q1 score marche + stress physique + annee de bascule.
+S2-013,SPEC_2,q2,OK,code,src/modules/q2_slope.py:10,high,Q2 pente OLS + robustesse n>=3 + ranking drivers.
+S2-014,SPEC_2,q3,OK,code,src/modules/q3_exit.py:26,high,Q3 tendances + contre-factuels demande/must-run/flex.
+S2-015,SPEC_2,q4,OK,code,src/modules/q4_bess.py:105,critical,Q4 dispatch BESS 3 modes (SURPLUS_FIRST/ARBITRAGE/PV_COLOCATED).
+S2-016,SPEC_2,q5,OK,code,src/modules/q5_thermal_anchor.py:55,high,Q5 TCA/TTL + sensibilites + CO2 requis.
+S2-017,SPEC_2,phase2,OK,runtime,data/assumptions/phase2/phase2_scenario_country_year.csv,critical,Table hypotheses Phase2 scenario x pays x annee.
+S2-018,SPEC_2,phase2,OK,code,src/scenario/phase2_engine.py:237,critical,Moteur scenario phase2 implemente.
+S2-019,SPEC_2,phase2,OK,runtime,scenario hourly files: 84/84,critical,Couverture scenario complete sur scenarios x 7 pays x 2030/2040.
+S2-020,SPEC_2,phase2,OK,runtime,data/processed/scenario/*/annual_metrics.parquet,high,Execution scenario minimum 2 scenarios x 3 pays x 2 horizons.
+S2-021,SPEC_2,tests,OK,test,tests/test_q1_transition.py; test_q2_slope.py; test_q3_exit.py; test_q4_bess.py; test_q5_thermal_anchor.py; test_phase1_modules_integration.py,high,Suite tests modules Q1..Q5 + integration.
+S2-022,SPEC_2,phase2_tests,OK,test,tests/test_phase2_engine.py; tests/test_phase2_validators.py,high,Tests moteur scenario et validations hypotheses Phase2.
+V21-001,V2.1,performance,OK,code,app/page_utils.py:26,high,Cache streamlit applique sur chargements lourds.
+V21-002,V2.1,performance,OK,code,app/page_utils.py:62,high,Forms submit pour eviter reruns lourds.
+V21-003,V2.1,q4_perf,OK,code,src/modules/q4_bess.py:26,critical,Cache persistant Q4 par hash hypotheses/grille/mode.
+V21-004,V2.1,q4_perf,OK,code,src/modules/q4_bess.py:359,high,Diagnostics Q4: compute_time_sec/cache_hit/engine_version.
+V21-005,V2.1,q4_perf,OK,runtime,Q4 cold wall=1.667s,high,SLO Q4 cold <35s.
+V21-006,V2.1,q4_perf,OK,runtime,Q4 warm wall=0.048s,high,SLO Q4 warm <3s.
+V21-007,V2.1,q4_perf,OK,runtime,cold_cache_hit=False warm_cache_hit=True,high,Cache hit/miss verifiable entre run1 et run2.
+V21-008,V2.1,ux,OK,ui,streamlit_app.py:10,medium,Navigation guidee accueil->mode emploi->donnees->socle->Q1..Q5->conclusions.
+V21-009,V2.1,ux,OK,ui,app/ui_components.py:55,medium,Header etape actuelle/etape suivante sur pages.
+V21-010,V2.1,ux,OK,ui,app/ui_components.py:75,medium,UX neophyte completement didactique et non-obscurci sur toutes pages.
+REP-001,REPORTING,conclusions,OK,runtime,reports/conclusions_v2_detailed_*.md,high,Rapport final detaille present en markdown versionne.
+REP-002,REPORTING,conclusions,OK,ui,app/pages/99_Conclusions.py:52,high,Page Conclusions charge rapport et resume executif.
+SLIDE-01,SLIDES,CONTEXTE,OK,ui,app/pages/00_Accueil.py,medium,Couverture explicite slide 1.
+SLIDE-02,SLIDES,Q1,OK,ui,src/modules/q1_transition.py:66,medium,Couverture explicite slide 2.
+SLIDE-03,SLIDES,Q1,OK,ui,src/modules/q1_transition.py:66,medium,Couverture explicite slide 3.
+SLIDE-04,SLIDES,Q1,OK,ui,src/modules/q1_transition.py:66,medium,Couverture explicite slide 4.
+SLIDE-05,SLIDES,Q1,OK,ui,src/modules/q1_transition.py:66,medium,Couverture explicite slide 5.
+SLIDE-06,SLIDES,Q1,OK,ui,src/modules/q1_transition.py:66,medium,Couverture explicite slide 6.
+SLIDE-07,SLIDES,Q1,OK,ui,src/modules/q1_transition.py:66,medium,Couverture explicite slide 7.
+SLIDE-08,SLIDES,Q2,OK,ui,src/modules/q2_slope.py:58,medium,Couverture explicite slide 8.
+SLIDE-09,SLIDES,Q2,OK,ui,src/modules/q2_slope.py:58,medium,Couverture explicite slide 9.
+SLIDE-10,SLIDES,Q2,OK,ui,src/modules/q2_slope.py:58,medium,Couverture explicite slide 10.
+SLIDE-11,SLIDES,Q2,OK,ui,src/modules/q2_slope.py:58,medium,Couverture explicite slide 11.
+SLIDE-12,SLIDES,Q2,OK,ui,src/modules/q2_slope.py:58,medium,Couverture explicite slide 12.
+SLIDE-13,SLIDES,Q2,OK,ui,src/modules/q2_slope.py:58,medium,Couverture explicite slide 13.
+SLIDE-14,SLIDES,Q3,OK,ui,src/modules/q3_exit.py:44,medium,Couverture explicite slide 14.
+SLIDE-15,SLIDES,Q3,OK,ui,src/modules/q3_exit.py:44,medium,Couverture explicite slide 15.
+SLIDE-16,SLIDES,Q3,OK,ui,src/modules/q3_exit.py:44,medium,Couverture explicite slide 16.
+SLIDE-17,SLIDES,Q3,OK,ui,src/modules/q3_exit.py:44,medium,Couverture explicite slide 17.
+SLIDE-18,SLIDES,Q3,OK,ui,src/modules/q3_exit.py:44,medium,Couverture explicite slide 18.
+SLIDE-19,SLIDES,Q3,OK,ui,src/modules/q3_exit.py:44,medium,Couverture explicite slide 19.
+SLIDE-20,SLIDES,Q4,OK,ui,src/modules/q4_bess.py:304,medium,Couverture explicite slide 20.
+SLIDE-21,SLIDES,Q4,OK,ui,src/modules/q4_bess.py:304,medium,Couverture explicite slide 21.
+SLIDE-22,SLIDES,Q4,OK,ui,src/modules/q4_bess.py:304,medium,Couverture explicite slide 22.
+SLIDE-23,SLIDES,Q4,OK,ui,src/modules/q4_bess.py:304,medium,Couverture explicite slide 23.
+SLIDE-24,SLIDES,Q4,OK,ui,src/modules/q4_bess.py:304,medium,Couverture explicite slide 24.
+SLIDE-25,SLIDES,Q4,OK,ui,src/modules/q4_bess.py:304,medium,Couverture explicite slide 25.
+SLIDE-26,SLIDES,Q5,OK,ui,src/modules/q5_thermal_anchor.py:66,medium,Couverture explicite slide 26.
+SLIDE-27,SLIDES,Q5,OK,ui,src/modules/q5_thermal_anchor.py:66,medium,Couverture explicite slide 27.
+SLIDE-28,SLIDES,Q5,OK,ui,src/modules/q5_thermal_anchor.py:66,medium,Couverture explicite slide 28.
+SLIDE-29,SLIDES,Q5,OK,ui,src/modules/q5_thermal_anchor.py:66,medium,Couverture explicite slide 29.
+SLIDE-30,SLIDES,Q5,OK,ui,src/modules/q5_thermal_anchor.py:66,medium,Couverture explicite slide 30.
+SLIDE-31,SLIDES,Q5,OK,ui,src/modules/q5_thermal_anchor.py:66,medium,Couverture explicite slide 31.
+SLIDE-32,SLIDES,ARCHI,OK,ui,streamlit_app.py:10,medium,Couverture explicite slide 32.
+SLIDE-33,SLIDES,PERIMETRE,OK,runtime,config/countries.yaml:1,low,Couverture explicite slide 33.

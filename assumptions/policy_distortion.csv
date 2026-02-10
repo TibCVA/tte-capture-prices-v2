@@ -1,0 +1,8 @@
+country,start_year,end_year,scheme_name,supported_share_of_vre_generation,negative_price_rule_type,negative_price_rule_threshold_hours,does_support_pay_when_negative,notes,source_label
+BE,2018,2040,default_template,0.35,unknown,,,Template row to be refined with regulator evidence per country.,internal_template
+CZ,2018,2040,default_template,0.35,unknown,,,Template row to be refined with regulator evidence per country.,internal_template
+DE,2018,2040,default_template,0.35,unknown,,,Template row to be refined with regulator evidence per country.,internal_template
+ES,2018,2040,default_template,0.35,unknown,,,Template row to be refined with regulator evidence per country.,internal_template
+FR,2018,2040,default_template,0.35,unknown,,,Template row to be refined with regulator evidence per country.,internal_template
+IT_NORD,2018,2040,default_template,0.35,unknown,,,Template row to be refined with regulator evidence per country.,internal_template
+NL,2018,2040,default_template,0.35,unknown,,,Template row to be refined with regulator evidence per country.,internal_template

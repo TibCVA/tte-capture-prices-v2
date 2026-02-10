@@ -1,0 +1,8 @@
+country,p95_exports_mw,mean_exports_mw,max_exports_mw,interconnection_export_gw_proxy,source_label,notes
+BE,1983.0,400.397940059647,4779.5,1.983,ENTSOE_phase1_empirical,Derived from processed hourly exports (2018-2024).
+CZ,2375.7399999999993,929.831396278114,4598.5,2.3757399999999995,ENTSOE_phase1_empirical,Derived from processed hourly exports (2018-2024).
+DE,9716.7,2775.495508547774,17947.2,9.716700000000001,ENTSOE_phase1_empirical,Derived from processed hourly exports (2018-2024).
+ES,4337.8,1006.523662715816,7380.0,4.3378000000000005,ENTSOE_phase1_empirical,Derived from processed hourly exports (2018-2024).
+FR,10140.7,3971.3840794641546,15055.2,10.1407,ENTSOE_phase1_empirical,Derived from processed hourly exports (2018-2024).
+IT_NORD,0.0,37.92849715694461,5109.33,0.0,ENTSOE_phase1_empirical,Derived from processed hourly exports (2018-2024).
+NL,3344.8,776.2896628151432,7737.2,3.3448,ENTSOE_phase1_empirical,Derived from processed hourly exports (2018-2024).

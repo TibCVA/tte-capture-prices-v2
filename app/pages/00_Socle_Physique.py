@@ -4,7 +4,7 @@ import plotly.express as px
 import streamlit as st
 
 from app.page_utils import country_year_selector, load_hourly_safe, to_plot_frame
-from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
+from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards, show_metric_explainers
 
 
 def render() -> None:
@@ -26,6 +26,29 @@ def render() -> None:
             ("Flex effective", "Absorption via exports, pompage et BESS si active."),
             ("Regimes A/B/C/D", "Classification physique anti-circularite."),
         ]
+    )
+    show_metric_explainers(
+        [
+            {
+                "metric": "NRL",
+                "definition": "Besoin residuel net du systeme apres VRE et must-run.",
+                "formula": "NRL = load_mw - gen_vre_mw - gen_must_run_mw",
+                "intuition": "NRL negatif signale un excedent a absorber.",
+                "interpretation": "NRL plus negatif = pression accrue vers prix bas.",
+                "limits": "Depend du perimetre must-run.",
+                "dependencies": "load net mode, mapping generation, hypotheses must-run.",
+            },
+            {
+                "metric": "Regimes A/B/C/D",
+                "definition": "Classification physique horaire sans prix.",
+                "formula": "A: surplus_unabsorbed>0; B: surplus>0 et unabsorbed=0; D: NRL>=seuil; C sinon",
+                "intuition": "Structure le raisonnement piecewise sans circularite prix.",
+                "interpretation": "A/B = heures de surplus, D = heures tendues.",
+                "limits": "Seuil regime D parametrique.",
+                "dependencies": "surplus, flex_effective, threshold nrl positif.",
+            },
+        ],
+        title="Comment lire le socle physique",
     )
 
     country, year = country_year_selector()

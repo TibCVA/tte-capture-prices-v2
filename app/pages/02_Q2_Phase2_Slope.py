@@ -14,7 +14,15 @@ from app.page_utils import (
     load_phase2_assumptions_table,
     load_scenario_annual_metrics_ui,
 )
-from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
+from app.ui_components import (
+    guided_header,
+    inject_theme,
+    show_checks_summary,
+    show_definitions,
+    show_kpi_cards,
+    show_limitations,
+    show_metric_explainers,
+)
 from src.modules.q2_slope import Q2_PARAMS, run_q2
 from src.modules.result import export_module_result
 
@@ -56,6 +64,29 @@ def render() -> None:
             ("ROBUST", "Regression avec nombre de points suffisant (n >= seuil)."),
             ("Driver", "Variable corrigee a la pente (SR, FAR, IR, corr load-VRE, TTL)."),
         ]
+    )
+    show_metric_explainers(
+        [
+            {
+                "metric": "Slope (b)",
+                "definition": "Vitesse de variation du capture ratio avec la penetration.",
+                "formula": "OLS: y = a + b*x",
+                "intuition": "b negatif = degradation du capture ratio quand penetration augmente.",
+                "interpretation": "Plus b est negatif, plus la cannibalisation est rapide.",
+                "limits": "Lineaire et descriptif; depend du nombre de points.",
+                "dependencies": "bascule Q1, qualite donnees, choix axe X.",
+            },
+            {
+                "metric": "R2 et p-value",
+                "definition": "Qualite d'ajustement et significativite statistique de la droite.",
+                "formula": "R2 = variance expliquee; p-value test sur b",
+                "intuition": "Aide a distinguer signal robuste vs bruit.",
+                "interpretation": "R2 faible ou p eleve => conclusion prudente.",
+                "limits": "Ne capture pas relations non-lineaires.",
+                "dependencies": "n points, dispersion, outliers.",
+            },
+        ],
+        title="Comment lire les KPI Q2",
     )
 
     annual = load_annual_metrics()

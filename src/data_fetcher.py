@@ -87,6 +87,35 @@ def _meta_path(dataset: str, country: str, year: int) -> Path:
     return RAW_BASE / dataset / country / f"{year}.meta.json"
 
 
+def _cached_manifest_entries(country: str, year: int) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for dataset in ["load_total", "generation_by_type", "prices_da", "net_position", "psh_pump"]:
+        raw_path = _raw_path(dataset, country, year)
+        meta_path = _meta_path(dataset, country, year)
+        meta: dict[str, Any] = {}
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+        entsoe_codes_used = meta.get("entsoe_codes_used", "")
+        if isinstance(entsoe_codes_used, list):
+            entsoe_codes_used = ",".join(str(x) for x in entsoe_codes_used)
+        entries.append(
+            {
+                "dataset_name": dataset,
+                "country": country,
+                "year": year,
+                "file_path": str(raw_path),
+                "meta_path": str(meta_path),
+                "source": meta.get("source", "ENTSO-E API"),
+                "download_timestamp_utc": meta.get("download_timestamp_utc", ""),
+                "entsoe_codes_used": entsoe_codes_used,
+            }
+        )
+    return entries
+
+
 def _normalize_index_and_frequency(series_or_df: pd.Series | pd.DataFrame, index_utc: pd.DatetimeIndex) -> tuple[pd.Series | pd.DataFrame, dict[str, Any]]:
     if isinstance(series_or_df, pd.Series):
         s = series_or_df.copy()
@@ -420,7 +449,7 @@ def build_raw_panel(country: str, year: int, use_cache_only: bool = True, countr
     """Return merged raw panel and manifest entries for one country-year."""
     if use_cache_only:
         raw = load_frozen_raw(country, year)
-        manifest = []
+        manifest = _cached_manifest_entries(country, year)
     else:
         if countries_cfg is None:
             raise ValueError("countries_cfg required when use_cache_only=False")

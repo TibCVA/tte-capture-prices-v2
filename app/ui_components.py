@@ -72,6 +72,29 @@ def show_definitions(items: list[tuple[str, str]]) -> None:
         st.markdown(f"- **{k}**: {v}")
 
 
+def show_metric_explainers(items: list[dict[str, str]], title: str = "Definitions detaillees") -> None:
+    """Display full KPI explicability: definition, formula, intuition, interpretation, limits, dependencies."""
+    if not items:
+        return
+    st.markdown(f"### {title}")
+    with st.expander("Voir formule, intuition, interpretation, limites et dependances", expanded=False):
+        for item in items:
+            metric = item.get("metric", "Metrique")
+            definition = item.get("definition", "n/a")
+            formula = item.get("formula", "n/a")
+            intuition = item.get("intuition", "n/a")
+            interpretation = item.get("interpretation", "n/a")
+            limits = item.get("limits", "n/a")
+            dependencies = item.get("dependencies", "n/a")
+            st.markdown(f"**{metric}**")
+            st.markdown(f"- Definition: {definition}")
+            st.markdown(f"- Formule: `{formula}`")
+            st.markdown(f"- Intuition: {intuition}")
+            st.markdown(f"- Interpretation: {interpretation}")
+            st.markdown(f"- Limites: {limits}")
+            st.markdown(f"- Dependances: {dependencies}")
+
+
 def show_kpi_cards(cards: list[tuple[str, Any, str]]) -> None:
     if not cards:
         return
@@ -103,4 +126,3 @@ def show_limitations(lines: list[str]) -> None:
     st.markdown("## Limites")
     for line in lines:
         st.markdown(f"- {line}")
-

@@ -1,0 +1,4 @@
+source_label,technology,year,capex_eur_per_kw,fixed_opex_eur_per_kw_yr,variable_opex_eur_per_mwh,lifetime_yr,wacc_real,page_reference,notes,pdf_checksum_sha256
+IRENA_RPGC2023_manual,PV,2023,,,,,,IRENAInsights_RPGC2023 p.12,Manual audit placeholder; fill values after manual extraction from PDF anchor.,986b93530ba778e0e272d0c3bcd3e6b2df4df795a49ea1a70c4b725e8d739d5a
+IRENA_RPGC2023_manual,WindOn,2023,,,,,,IRENAInsights_RPGC2023 p.14,Manual audit placeholder; fill values after manual extraction from PDF anchor.,986b93530ba778e0e272d0c3bcd3e6b2df4df795a49ea1a70c4b725e8d739d5a
+IRENA_RPGC2023_manual,WindOff,2023,,,,,,IRENAInsights_RPGC2023 p.15,Manual audit placeholder; fill values after manual extraction from PDF anchor.,986b93530ba778e0e272d0c3bcd3e6b2df4df795a49ea1a70c4b725e8d739d5a

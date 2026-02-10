@@ -1,0 +1,5 @@
+source_label,technology,year,capex_eur_per_kw,fixed_opex_eur_per_kw_yr,variable_opex_eur_per_mwh,lifetime_yr,wacc_real,notes
+NREL_ATB_2024_v3,BESS_4h,2023,1525.47881248,,,,,"Utility battery 60MW 240MWh, derived capex €/kW from €/kWh and duration=4.0h."
+NREL_ATB_2024_v3,PV,2023,1430.76973172,20.441298254,,,,UtilityPV Base scenario from ATB model parameters (USD->EUR factor 0.92).
+NREL_ATB_2024_v3,WindOff,2022,4972.14,,,,,OffShoreWind Base scenario from ATB model parameters (USD->EUR factor 0.92).
+NREL_ATB_2024_v3,WindOn,2022,1260.4,40.480000000000004,,,,LandbasedWind Base scenario from ATB model parameters (USD->EUR factor 0.92).

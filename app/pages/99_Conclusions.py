@@ -17,9 +17,18 @@ def _extract_run_id(path: Path) -> str:
 
 
 def _extract_summary_block(content: str) -> str:
-    start = content.find("## 8. Reponses directes aux 5 questions")
+    anchors = [
+        "## 8. Reponses directes aux 5 questions",
+        "## 8. Synthese finale",
+        "## 8.",
+    ]
+    start = -1
+    for a in anchors:
+        start = content.find(a)
+        if start >= 0:
+            break
     if start < 0:
-        return ""
+        return content[:1800]
     tail = content[start:]
     end = tail.find("## 9.")
     return tail if end < 0 else tail[:end]

@@ -1,0 +1,50 @@
+country,neighbor_country,corr_surplus_hour,export_coincidence_factor,source_label,notes
+BE,BE,1.0,1.0,ENTSOE_phase1_empirical,Self-correlation.
+BE,CZ,0.0997236910592086,0.0997236910592086,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+BE,DE,0.38825373275011615,0.38825373275011615,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+BE,ES,0.19463781893570625,0.19463781893570625,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+BE,FR,0.14509902908269937,0.14509902908269937,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+BE,IT_NORD,0.030253361896091086,0.030253361896091086,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+BE,NL,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+CZ,BE,0.0997236910592086,0.0997236910592086,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+CZ,CZ,1.0,1.0,ENTSOE_phase1_empirical,Self-correlation.
+CZ,DE,0.09552247299423239,0.09552247299423239,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+CZ,ES,0.021339484699422505,0.021339484699422505,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+CZ,FR,0.12412384872497756,0.12412384872497756,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+CZ,IT_NORD,0.005637676730658099,0.005637676730658099,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+CZ,NL,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+DE,BE,0.38825373275011615,0.38825373275011615,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+DE,CZ,0.09552247299423239,0.09552247299423239,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+DE,DE,1.0,1.0,ENTSOE_phase1_empirical,Self-correlation.
+DE,ES,0.2090961642412814,0.2090961642412814,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+DE,FR,0.13502715859721545,0.13502715859721545,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+DE,IT_NORD,0.0747651385113382,0.0747651385113382,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+DE,NL,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+ES,BE,0.19463781893570625,0.19463781893570625,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+ES,CZ,0.021339484699422505,0.021339484699422505,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+ES,DE,0.2090961642412814,0.2090961642412814,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+ES,ES,1.0,1.0,ENTSOE_phase1_empirical,Self-correlation.
+ES,FR,0.153274287180061,0.153274287180061,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+ES,IT_NORD,0.06372917604192053,0.06372917604192053,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+ES,NL,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+FR,BE,0.14509902908269937,0.14509902908269937,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+FR,CZ,0.12412384872497756,0.12412384872497756,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+FR,DE,0.13502715859721545,0.13502715859721545,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+FR,ES,0.153274287180061,0.153274287180061,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+FR,FR,1.0,1.0,ENTSOE_phase1_empirical,Self-correlation.
+FR,IT_NORD,0.018574431385059483,0.018574431385059483,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+FR,NL,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+IT_NORD,BE,0.030253361896091086,0.030253361896091086,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+IT_NORD,CZ,0.005637676730658099,0.005637676730658099,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+IT_NORD,DE,0.0747651385113382,0.0747651385113382,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+IT_NORD,ES,0.06372917604192053,0.06372917604192053,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+IT_NORD,FR,0.018574431385059483,0.018574431385059483,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+IT_NORD,IT_NORD,1.0,1.0,ENTSOE_phase1_empirical,Self-correlation.
+IT_NORD,NL,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+NL,BE,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+NL,CZ,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+NL,DE,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+NL,ES,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+NL,FR,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+NL,IT_NORD,,,ENTSOE_phase1_empirical,Pairwise correlation of surplus-hour indicator (2018-2024).
+NL,NL,1.0,1.0,ENTSOE_phase1_empirical,Self-correlation.

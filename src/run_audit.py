@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Any
-
-import pandas as pd
 
 from src.hash_utils import hash_object, sha256_file
 
@@ -25,8 +24,9 @@ def create_run_context(config_snapshot: dict[str, Any], base_dir: str = "outputs
     run_dir = Path(base_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    pd.Series(config_snapshot, dtype=object).to_json(
-        run_dir / "run_config_snapshot.json", orient="index", indent=2, force_ascii=False
+    (run_dir / "run_config_snapshot.json").write_text(
+        json.dumps(config_snapshot, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
     )
     return RunContext(run_id=run_id, run_dir=run_dir)
 
@@ -39,8 +39,11 @@ def write_data_manifest(run_ctx: RunContext, entries: list[dict[str, Any]]) -> P
         if file_path and Path(file_path).exists():
             item["checksum_sha256"] = sha256_file(file_path)
         rows.append(item)
-    df = pd.DataFrame(rows)
     path = run_ctx.run_dir / "data_manifest.csv"
-    df.to_csv(path, index=False)
+    if not rows:
+        path.write_text("dataset_name,country,year,file_path,source,download_timestamp_utc,checksum_sha256\n", encoding="utf-8")
+        return path
+    import pandas as pd
+    pd.DataFrame(rows).to_csv(path, index=False)
     return path
 
