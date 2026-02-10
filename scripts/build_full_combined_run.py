@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
-import sys
 from pathlib import Path
+import sys
 
 import pandas as pd
 
@@ -18,80 +19,105 @@ from src.pipeline import load_assumptions_table
 from src.storage import load_hourly
 
 
-def main() -> None:
-    countries = ["FR", "DE", "ES", "NL", "BE", "CZ", "IT_NORD"]
-    years = list(range(2018, 2025))
-    scenario_years = [2030, 2040]
+DEFAULT_COUNTRIES = ["FR", "DE", "ES", "NL", "BE", "CZ", "IT_NORD"]
 
-    annual_hist = pd.read_parquet("data/metrics/annual_metrics.parquet")
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build a full combined run for Q1..Q5.")
+    parser.add_argument("--run-id", default="", help="Optional fixed run id (default: FULL_<utc timestamp>)")
+    parser.add_argument("--countries", default=",".join(DEFAULT_COUNTRIES))
+    parser.add_argument("--hist-year-start", type=int, default=2018)
+    parser.add_argument("--hist-year-end", type=int, default=2024)
+    parser.add_argument("--scenario-years", default="2030,2040")
+    parser.add_argument("--q4-country", default="FR")
+    parser.add_argument("--q5-country", default="FR")
+    parser.add_argument("--q5-marginal-tech", default="CCGT")
+    parser.add_argument("--q5-ttl-target", type=float, default=160.0)
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+    countries = [c.strip() for c in str(args.countries).split(",") if c.strip()]
+    hist_years = list(range(int(args.hist_year_start), int(args.hist_year_end) + 1))
+    scenario_years = [int(y.strip()) for y in str(args.scenario_years).split(",") if y.strip()]
+
+    annual_path = Path("data/metrics/annual_metrics.parquet")
+    if not annual_path.exists():
+        raise FileNotFoundError(f"Missing historical annual metrics: {annual_path}")
+    annual_hist = pd.read_parquet(annual_path)
     assumptions_phase1 = load_assumptions_table()
     assumptions_phase2 = load_phase2_assumptions()
 
-    hourly_map: dict[tuple[str, int], pd.DataFrame] = {}
-    for c in countries:
-        for y in years:
+    hourly_hist_map: dict[tuple[str, int], pd.DataFrame] = {}
+    for country in countries:
+        for year in hist_years:
             try:
-                hourly_map[(c, y)] = load_hourly(c, y)
+                hourly_hist_map[(country, year)] = load_hourly(country, year)
             except Exception:
                 continue
 
-    run_id = "FULL_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_id = args.run_id.strip() or f"FULL_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+
     selections = {
         "Q1": {
             "countries": countries,
-            "years": years,
+            "years": hist_years,
             "scenario_ids": get_default_scenarios("Q1"),
             "scenario_years": scenario_years,
         },
         "Q2": {
             "countries": countries,
-            "years": years,
+            "years": hist_years,
             "scenario_ids": get_default_scenarios("Q2"),
             "scenario_years": scenario_years,
         },
         "Q3": {
             "countries": countries,
-            "years": years,
+            "years": hist_years,
             "scenario_ids": get_default_scenarios("Q3"),
             "scenario_years": scenario_years,
         },
         "Q4": {
-            "country": "FR",
-            "year": 2024,
-            "countries": countries,
-            "years": [2024],
-            "scenario_ids": get_default_scenarios("Q4"),
-            "scenario_years": [2040],
-            "horizon_year": 2040,
+            "country": str(args.q4_country),
+            "countries": [str(args.q4_country)],
+            "year": int(args.hist_year_end),
+            "years": [int(args.hist_year_end)],
+            "horizon_year": max(scenario_years),
             "objective": "FAR_TARGET",
+            "power_grid": [0.0, 250.0, 500.0, 750.0, 1000.0, 1500.0],
+            "duration_grid": [2.0, 4.0, 6.0, 8.0],
+            "scenario_ids": get_default_scenarios("Q4"),
+            "scenario_years": scenario_years,
         },
         "Q5": {
-            "country": "FR",
-            "countries": countries,
-            "years": years,
+            "country": str(args.q5_country),
+            "countries": [str(args.q5_country)],
+            "years": hist_years,
+            "marginal_tech": str(args.q5_marginal_tech),
+            "ttl_target_eur_mwh": float(args.q5_ttl_target),
             "scenario_ids": get_default_scenarios("Q5"),
             "scenario_years": scenario_years,
-            "marginal_tech": "CCGT",
-            "ttl_target_eur_mwh": 120.0,
         },
     }
 
-    for q in ["Q1", "Q2", "Q3", "Q4", "Q5"]:
-        print(f"RUN {q}")
-        result = run_question_bundle(
-            question_id=q,
+    for qid in ["Q1", "Q2", "Q3", "Q4", "Q5"]:
+        bundle = run_question_bundle(
+            question_id=qid,
             annual_hist=annual_hist,
-            hourly_hist_map=hourly_map,
+            hourly_hist_map=hourly_hist_map,
             assumptions_phase1=assumptions_phase1,
             assumptions_phase2=assumptions_phase2,
-            selection=selections[q],
+            selection=selections[qid],
             run_id=run_id,
         )
-        out_dir = export_question_bundle(result)
-        print(f"EXPORTED {out_dir}")
+        export_question_bundle(bundle)
+        status_counts = bundle.test_ledger["status"].astype(str).value_counts().to_dict() if not bundle.test_ledger.empty else {}
+        print(f"{qid}: {status_counts}")
 
     print(f"RUN_ID {run_id}")
 
 
 if __name__ == "__main__":
     main()
+

@@ -9,7 +9,11 @@ import zipfile
 import pandas as pd
 
 
-_SLIDE_MARKER_RE = re.compile(r"\bSlide\s+(\d+)\s*(?:-|:|--)\s*", flags=re.IGNORECASE)
+_DASH_CLASS = r"\-\u2011\u2013\u2014\u2212"  # -, non-breaking hyphen, en dash, em dash, minus
+_SLIDE_MARKER_RE = re.compile(
+    rf"\bSlide\s+(\d+)\s*(?:[{_DASH_CLASS}]|:|--)\s*",
+    flags=re.IGNORECASE,
+)
 
 
 def _read_docx_text(docx_path: Path) -> str:
@@ -93,8 +97,9 @@ def extract_requirements(docx_paths: list[Path]) -> pd.DataFrame:
 def _extract_slide_ids_from_source_ref(source_ref: str) -> set[int]:
     ref = str(source_ref)
     out: set[int] = set()
+    range_sep = rf"[{_DASH_CLASS}]"
 
-    for m in re.finditer(r"[Ss]lides?\s+(\d+)\s*-\s*(\d+)", ref):
+    for m in re.finditer(rf"[Ss]lides?\s+(\d+)\s*{range_sep}\s*(\d+)", ref):
         a = int(m.group(1))
         b = int(m.group(2))
         lo, hi = (a, b) if a <= b else (b, a)

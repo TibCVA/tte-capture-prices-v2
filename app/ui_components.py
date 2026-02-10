@@ -163,6 +163,19 @@ def render_hist_scen_comparison(comparison_table: pd.DataFrame) -> None:
     if comparison_table is None or comparison_table.empty:
         st.info("Aucune comparaison disponible pour cette selection.")
         return
+    if "interpretability_status" in comparison_table.columns:
+        counts = comparison_table["interpretability_status"].astype(str).value_counts().to_dict()
+        st.markdown(
+            "<div>"
+            f"<span class='tte-pill tte-pass'>INFORMATIVE: {counts.get('INFORMATIVE', 0)}</span>"
+            f"<span class='tte-pill tte-warn'>FRAGILE: {counts.get('FRAGILE', 0)}</span>"
+            f"<span class='tte-pill tte-warn'>NON_TESTABLE: {counts.get('NON_TESTABLE', 0)}</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        non_interp = comparison_table[comparison_table["interpretability_status"].astype(str) != "INFORMATIVE"]
+        if not non_interp.empty:
+            st.caption("Les lignes FRAGILE/NON_TESTABLE restent visibles pour eviter toute conclusion silencieuse.")
     st.dataframe(comparison_table, use_container_width=True)
 
 

@@ -147,13 +147,15 @@ def _appendix_section(
     return "\n".join(lines)
 
 
-def _executive_summary(run_id: str, narrative_qc: dict[str, dict[str, Any]], slides_traceability: pd.DataFrame, verdict: str) -> str:
-    missing_slides = int((slides_traceability["covered"].astype(str) == "no").sum()) if not slides_traceability.empty else 0
+def _executive_summary(run_id: str, narrative_qc: dict[str, dict[str, Any]], qc: dict[str, Any]) -> str:
     lines = [
         f"# Executive Summary - Run `{run_id}`",
         "",
-        f"Verdict qualite global: **{verdict}**.",
-        f"Exigences slides non couvertes: **{missing_slides}**.",
+        f"Verdict qualite global: **{qc.get('verdict', 'NON_COMPLET')}**.",
+        f"Slides - docx fournis/existants: **{qc.get('slides_docx_provided_count', 0)}/{qc.get('slides_docx_existing_count', 0)}**.",
+        f"Slides - exigences extraites: **{qc.get('slides_requirements_count', 0)}**.",
+        f"Slides - lignes de tracabilite: **{qc.get('slides_trace_rows', 0)}**.",
+        f"Slides - couvertes oui/non: **{qc.get('slides_covered_yes', 0)}/{qc.get('slides_covered_no', 0)}**.",
         "",
         "## Controles narratifs par question",
     ]
@@ -170,7 +172,14 @@ def _executive_summary(run_id: str, narrative_qc: dict[str, dict[str, Any]], sli
     return "\n".join(lines)
 
 
-def _quality_checks(blocks: dict[str, Any], narrative_qc: dict[str, dict[str, Any]], slides_traceability: pd.DataFrame) -> dict[str, Any]:
+def _quality_checks(
+    blocks: dict[str, Any],
+    narrative_qc: dict[str, dict[str, Any]],
+    slides_traceability: pd.DataFrame,
+    requirements_count: int,
+    slides_docx_provided_count: int,
+    slides_docx_existing_count: int,
+) -> dict[str, Any]:
     numeric_issues: list[dict[str, Any]] = []
     for q in REQUIRED_QUESTIONS:
         cmp_df = blocks[q].comparison
@@ -217,14 +226,69 @@ def _quality_checks(blocks: dict[str, Any], narrative_qc: dict[str, dict[str, An
         if not qqc.get("all_test_ids_referenced", False):
             narrative_issues.append({"question_id": q, "issue": "tests non references", **qqc})
 
-    slide_missing = int((slides_traceability["covered"].astype(str) == "no").sum()) if not slides_traceability.empty else 0
-    all_pass = not numeric_issues and not logic_issues and not narrative_issues and slide_missing == 0
+    slides_trace_rows = int(len(slides_traceability))
+    slides_covered_no = int((slides_traceability["covered"].astype(str) == "no").sum()) if not slides_traceability.empty else 0
+    slides_covered_yes = int((slides_traceability["covered"].astype(str) == "yes").sum()) if not slides_traceability.empty else 0
+
+    slides_extraction_empty_with_docs = bool(slides_docx_existing_count > 0 and int(requirements_count) == 0)
+    slides_trace_empty = bool(int(requirements_count) > 0 and slides_trace_rows == 0)
+
+    if slides_docx_provided_count > 0 and slides_docx_existing_count == 0:
+        logic_issues.append(
+            {
+                "question_id": "GLOBAL",
+                "issue": "aucun docx de slides fourni n'existe sur disque",
+                "slides_docx_provided_count": slides_docx_provided_count,
+            }
+        )
+    if slides_extraction_empty_with_docs:
+        logic_issues.append(
+            {
+                "question_id": "GLOBAL",
+                "issue": "extraction slides vide alors que des docx valides existent",
+                "slides_docx_existing_count": slides_docx_existing_count,
+            }
+        )
+    if slides_trace_empty:
+        logic_issues.append(
+            {
+                "question_id": "GLOBAL",
+                "issue": "slides_traceability vide alors que des exigences slides existent",
+                "slides_requirements_count": int(requirements_count),
+            }
+        )
+    if int(requirements_count) > 0 and slides_trace_rows != int(requirements_count):
+        logic_issues.append(
+            {
+                "question_id": "GLOBAL",
+                "issue": "nombre de lignes slides_traceability different du nombre d'exigences extraites",
+                "slides_requirements_count": int(requirements_count),
+                "slides_trace_rows": slides_trace_rows,
+            }
+        )
+
+    all_pass = (
+        not numeric_issues
+        and not logic_issues
+        and not narrative_issues
+        and slides_covered_no == 0
+        and not slides_extraction_empty_with_docs
+        and not slides_trace_empty
+    )
     return {
         "verdict": "PASS" if all_pass else "NON_COMPLET",
         "numeric_issues": numeric_issues,
         "logic_issues": logic_issues,
         "narrative_issues": narrative_issues,
-        "slides_missing_count": slide_missing,
+        "slides_missing_count": slides_covered_no,
+        "slides_docx_provided_count": int(slides_docx_provided_count),
+        "slides_docx_existing_count": int(slides_docx_existing_count),
+        "slides_requirements_count": int(requirements_count),
+        "slides_trace_rows": slides_trace_rows,
+        "slides_covered_yes": slides_covered_yes,
+        "slides_covered_no": slides_covered_no,
+        "slides_extraction_empty_with_docs": slides_extraction_empty_with_docs,
+        "slides_trace_empty": slides_trace_empty,
         "all_pass": all_pass,
     }
 
@@ -240,14 +304,23 @@ def generate_report(run_id: str | None, strict: bool, country_scope: list[str], 
     test_traceability = build_test_traceability(run_dir, blocks)
     checks_catalog = build_checks_catalog(run_dir, blocks)
 
-    requirements = extract_requirements(docx_paths)
+    docx_paths = [Path(p) for p in docx_paths]
+    existing_docx = [p for p in docx_paths if p.exists()]
+    requirements = extract_requirements(existing_docx)
     slides_traceability = map_requirements_to_evidence(requirements, evidence_catalog)
 
     cover = _cover_page(resolved_run_id, run_dir, country_scope, blocks)
     method = _methodology_section()
     question_sections, narrative_qc = _question_sections(blocks, country_scope)
     appendix = _appendix_section(blocks, evidence_catalog, checks_catalog, test_traceability, slides_traceability)
-    qc = _quality_checks(blocks, narrative_qc, slides_traceability)
+    qc = _quality_checks(
+        blocks,
+        narrative_qc,
+        slides_traceability,
+        requirements_count=int(len(requirements)),
+        slides_docx_provided_count=int(len(docx_paths)),
+        slides_docx_existing_count=int(len(existing_docx)),
+    )
 
     if qc["verdict"] != "PASS":
         gap_lines = ["## 5. Ecarts restants (obligatoire)", ""]
@@ -264,7 +337,7 @@ def generate_report(run_id: str | None, strict: bool, country_scope: list[str], 
         gaps = "## 5. Ecarts restants (obligatoire)\n\nAucun ecart critique detecte par les quality gates.\n"
 
     detailed_text = "\n\n".join([cover, method, question_sections, appendix, gaps]).strip() + "\n"
-    executive_text = _executive_summary(resolved_run_id, narrative_qc, slides_traceability, qc["verdict"])
+    executive_text = _executive_summary(resolved_run_id, narrative_qc, qc)
 
     detailed_path = output_dir / f"conclusions_v2_detailed_{resolved_run_id}.md"
     executive_path = output_dir / f"conclusions_v2_executive_{resolved_run_id}.md"

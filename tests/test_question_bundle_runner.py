@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from src.config_loader import load_phase2_assumptions
-from src.modules.question_bundle_runner import run_question_bundle
+from src.modules.question_bundle_runner import _annotate_comparison_interpretability, run_question_bundle
 from src.processing import build_hourly_table
 
 
@@ -102,3 +102,42 @@ def test_run_question_bundle_q4_executes_hist_modes(
     assert bundle.hist_result.module_id == "Q4"
     assert not bundle.test_ledger.empty
     assert "Q4-H-01" in bundle.test_ledger["test_id"].tolist()
+
+
+def test_q3_comparison_annotation_flags_non_testable_and_fragile() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "country": "FR",
+                "scenario_id": "BASE",
+                "metric": "inversion_k_demand",
+                "hist_value": 0.10,
+                "scen_value": 0.15,
+                "delta": 0.05,
+                "scen_status": "hors_scope_stage2",
+            },
+            {
+                "country": "DE",
+                "scenario_id": "BASE",
+                "metric": "inversion_k_demand",
+                "hist_value": 0.20,
+                "scen_value": 0.20,
+                "delta": 0.0,
+                "scen_status": "stabilisation",
+            },
+            {
+                "country": "ES",
+                "scenario_id": "BASE",
+                "metric": "inversion_k_demand",
+                "hist_value": 0.10,
+                "scen_value": 0.25,
+                "delta": 0.15,
+                "scen_status": "amelioration",
+            },
+        ]
+    )
+    out = _annotate_comparison_interpretability("Q3", raw)
+    assert {"interpretability_status", "interpretability_reason"}.issubset(out.columns)
+    assert out.loc[out["country"] == "FR", "interpretability_status"].iloc[0] == "NON_TESTABLE"
+    assert out.loc[out["country"] == "DE", "interpretability_status"].iloc[0] == "FRAGILE"
+    assert out.loc[out["country"] == "ES", "interpretability_status"].iloc[0] == "INFORMATIVE"

@@ -39,3 +39,23 @@ def test_slides_extraction_and_mapping(tmp_path: Path) -> None:
     # At least one uncovered requirement is explicit when evidence is partial.
     assert (mapped["covered"].astype(str) == "no").any()
 
+
+def test_slides_extraction_supports_unicode_dash_markers(tmp_path: Path) -> None:
+    import zipfile
+
+    path = tmp_path / "slides_unicode.docx"
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        "<w:p><w:r><w:t>Slide 1 — Introduction</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Slide 2 – Q1 test attendu</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Slide 3 : Q2 test attendu</w:t></w:r></w:p>"
+        "</w:body></w:document>"
+    )
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("word/document.xml", xml)
+
+    requirements = extract_requirements([path])
+    assert not requirements.empty
+    assert set(requirements["slide_id"].dropna().astype(int).tolist()) == {1, 2, 3}

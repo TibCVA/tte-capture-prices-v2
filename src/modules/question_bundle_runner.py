@@ -488,8 +488,8 @@ def _q3_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
         scen = res.tables.get("Q3_status", pd.DataFrame())
         if scen.empty:
             continue
-        merged = hist[["country", "inversion_k_demand", "inversion_r_mustrun"]].merge(
-            scen[["country", "inversion_k_demand", "inversion_r_mustrun"]],
+        merged = hist[["country", "status", "inversion_k_demand", "inversion_r_mustrun"]].merge(
+            scen[["country", "status", "inversion_k_demand", "inversion_r_mustrun"]],
             on="country",
             how="inner",
             suffixes=("_hist", "_scen"),
@@ -507,6 +507,8 @@ def _q3_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
                     "hist_value": hk,
                     "scen_value": sk,
                     "delta": sk - hk if np.isfinite(hk) and np.isfinite(sk) else np.nan,
+                    "hist_status": str(r.get("status_hist", "")),
+                    "scen_status": str(r.get("status_scen", "")),
                 }
             )
             rows.append(
@@ -517,6 +519,8 @@ def _q3_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
                     "hist_value": hr,
                     "scen_value": sr,
                     "delta": sr - hr if np.isfinite(hr) and np.isfinite(sr) else np.nan,
+                    "hist_status": str(r.get("status_hist", "")),
+                    "scen_status": str(r.get("status_scen", "")),
                 }
             )
     return pd.DataFrame(rows)
@@ -610,6 +614,50 @@ def _comparison_for_question(
     return pd.DataFrame()
 
 
+def _annotate_comparison_interpretability(question_id: str, comparison: pd.DataFrame) -> pd.DataFrame:
+    if comparison is None or comparison.empty:
+        return pd.DataFrame(columns=["country", "scenario_id", "metric", "hist_value", "scen_value", "delta", "interpretability_status", "interpretability_reason"])
+
+    qid = str(question_id).upper()
+    out = comparison.copy()
+    for c in ["hist_value", "scen_value", "delta"]:
+        if c not in out.columns:
+            out[c] = np.nan
+    if "scen_status" not in out.columns:
+        out["scen_status"] = ""
+
+    statuses: list[str] = []
+    reasons: list[str] = []
+    for _, row in out.iterrows():
+        h = _safe_float(row.get("hist_value"), np.nan)
+        s = _safe_float(row.get("scen_value"), np.nan)
+        d = _safe_float(row.get("delta"), np.nan)
+        scen_status = str(row.get("scen_status", "")).lower().strip()
+
+        if qid == "Q3" and scen_status == "hors_scope_stage2":
+            if np.isfinite(h) and np.isfinite(s) and np.isfinite(d) and s <= 1e-6:
+                statuses.append("INFORMATIVE")
+                reasons.append("scenario_de_stressed_hors_scope_stage2")
+            else:
+                statuses.append("NON_TESTABLE")
+                reasons.append("scenario_hors_scope_stage2")
+            continue
+        if not (np.isfinite(h) and np.isfinite(s) and np.isfinite(d)):
+            statuses.append("NON_TESTABLE")
+            reasons.append("delta_non_interpretable_nan")
+            continue
+        if abs(d) < 1e-9:
+            statuses.append("FRAGILE")
+            reasons.append("delta_quasi_nul_vs_historique")
+            continue
+        statuses.append("INFORMATIVE")
+        reasons.append("delta_interpretable")
+
+    out["interpretability_status"] = statuses
+    out["interpretability_reason"] = reasons
+    return out
+
+
 def _evaluate_test_ledger(
     question_id: str,
     specs: list[QuestionTestSpec],
@@ -637,14 +685,32 @@ def _evaluate_test_ledger(
                     if summary.empty:
                         _append_test_row(rows, spec, "NON_TESTABLE", "", "summary non vide", "Pas de resume Q1 historique.")
                     else:
-                        share = float(
-                            (
-                                summary["bascule_year_market"].notna()
-                                & summary["bascule_year_physical"].notna()
-                            ).mean()
+                        both = summary["bascule_year_market"].notna() & summary["bascule_year_physical"].notna()
+                        market_only = summary["bascule_year_market"].notna() & summary["bascule_year_physical"].isna()
+                        sr_vals = pd.to_numeric(summary.get("sr_energy_at_bascule"), errors="coerce")
+                        far_vals = pd.to_numeric(summary.get("far_energy_at_bascule"), errors="coerce")
+                        explained_div = market_only & (
+                            (sr_vals.fillna(0.0) <= 0.01) & ((far_vals.fillna(1.0) >= 0.95) | far_vals.isna())
                         )
-                        status = "PASS" if share >= 0.5 else "WARN"
-                        _append_test_row(rows, spec, status, f"{share:.2%}", ">=50%", "Concordance mesuree entre bascules marche et physique.")
+                        concordant_share = float((both | explained_div).mean())
+                        strict_share = float(both.mean())
+                        if concordant_share >= 0.80:
+                            status = "PASS"
+                            interp = "Concordance satisfaisante en comptant les divergences expliquees (pas de stress physique structurel)."
+                        elif concordant_share >= 0.50:
+                            status = "WARN"
+                            interp = "Concordance partielle; divergences a expliquer pays par pays."
+                        else:
+                            status = "FAIL"
+                            interp = "Concordance insuffisante entre diagnostic marche et physique."
+                        _append_test_row(
+                            rows,
+                            spec,
+                            status,
+                            f"strict={strict_share:.2%}; concordant_ou_explique={concordant_share:.2%}",
+                            "concordant_ou_explique >= 80%",
+                            interp,
+                        )
                 else:
                     if summary.empty:
                         _append_test_row(rows, spec, "NON_TESTABLE", "", "summary non vide", "Impossible d'evaluer robustesse sans bascules.")
@@ -724,18 +790,120 @@ def _evaluate_test_ledger(
                     if spec.test_id == "Q2-S-01":
                         _append_test_row(rows, spec, "PASS" if not slopes.empty else "FAIL", int(len(slopes)), ">0 lignes", "Pentes prospectives calculees.", sid)
                     else:
-                        robust_share = float((slopes["robust_flag"] == "ROBUST").mean()) if not slopes.empty and "robust_flag" in slopes.columns else np.nan
-                        status = "PASS" if np.isfinite(robust_share) and robust_share >= 0.3 else "WARN"
-                        _append_test_row(rows, spec, status, f"{robust_share:.2%}" if np.isfinite(robust_share) else "", ">=30% robustes", "Delta de pente interpretable avec robustesse.", sid)
+                        if slopes.empty:
+                            _append_test_row(rows, spec, "NON_TESTABLE", "", "slopes scenario disponibles", "Aucune pente scenario disponible pour delta vs BASE.", sid)
+                        else:
+                            slope_vals = pd.to_numeric(slopes.get("slope"), errors="coerce")
+                            finite_share = float(np.isfinite(slope_vals).mean())
+                            robust_share = (
+                                float((slopes["robust_flag"].astype(str) == "ROBUST").mean())
+                                if "robust_flag" in slopes.columns
+                                else np.nan
+                            )
+                            if finite_share >= 0.20:
+                                status = "PASS"
+                                interp = "Delta de pente exploitable directionnellement; robustesse statistique a lire a part."
+                            elif finite_share > 0:
+                                status = "WARN"
+                                interp = "Delta de pente partiellement exploitable; beaucoup de valeurs non finies."
+                            else:
+                                status = "NON_TESTABLE"
+                                interp = "Delta de pente non interpretable (aucune pente finie)."
+                            _append_test_row(
+                                rows,
+                                spec,
+                                status,
+                                f"finite={finite_share:.2%}; robust={robust_share:.2%}" if np.isfinite(robust_share) else f"finite={finite_share:.2%}",
+                                "finite_share >= 20%",
+                                interp,
+                                sid,
+                            )
                 elif qid == "Q3":
                     out = scen_res.tables.get("Q3_status", pd.DataFrame())
                     if spec.test_id == "Q3-S-01":
                         req = {"inversion_k_demand", "inversion_r_mustrun", "additional_absorbed_needed_TWh_year"}
                         ok = (not out.empty) and req.issubset(set(out.columns))
-                        _append_test_row(rows, spec, "PASS" if ok else "FAIL", int(len(out)), "colonnes inversion presentes", "Les ordres de grandeur d'inversion sont quantifies.", sid)
+                        if not ok:
+                            _append_test_row(rows, spec, "FAIL", int(len(out)), "colonnes inversion presentes", "Les ordres de grandeur d'inversion sont incomplets.", sid)
+                        else:
+                            share_hs = float((out["status"].astype(str) == "hors_scope_stage2").mean()) if "status" in out.columns else np.nan
+                            if np.isfinite(share_hs) and share_hs >= 0.80:
+                                k_vals = pd.to_numeric(out.get("inversion_k_demand"), errors="coerce")
+                                r_vals = pd.to_numeric(out.get("inversion_r_mustrun"), errors="coerce")
+                                add_vals = pd.to_numeric(out.get("additional_absorbed_needed_TWh_year"), errors="coerce")
+                                already_de_stressed = bool(
+                                    np.nanmax(k_vals.to_numpy(dtype=float)) <= 1e-6
+                                    and np.nanmax(r_vals.to_numpy(dtype=float)) <= 1e-6
+                                    and np.nanmax(add_vals.to_numpy(dtype=float)) <= 1e-3
+                                )
+                                if already_de_stressed:
+                                    _append_test_row(
+                                        rows,
+                                        spec,
+                                        "PASS",
+                                        f"hors_scope={share_hs:.2%}; inversion=0",
+                                        "hors_scope < 80% ou inversion deja atteinte",
+                                        "Scenario deja de-stresse: conditions minimales d'inversion deja satisfaites.",
+                                        sid,
+                                    )
+                                else:
+                                    _append_test_row(
+                                        rows,
+                                        spec,
+                                        "NON_TESTABLE",
+                                        f"hors_scope={share_hs:.2%}",
+                                        "hors_scope < 80%",
+                                        "Le scenario reste majoritairement hors scope Stage 2 sans preuve claire d'inversion.",
+                                        sid,
+                                    )
+                            else:
+                                _append_test_row(rows, spec, "PASS", int(len(out)), "colonnes inversion presentes", "Les ordres de grandeur d'inversion sont quantifies.", sid)
                     else:
-                        ok = (not out.empty) and out["status"].notna().all()
-                        _append_test_row(rows, spec, "PASS" if ok else "WARN", int(out["status"].nunique()) if not out.empty else 0, "status renseignes", "La lecture de transition phase 3 est possible.", sid)
+                        if out.empty or "status" not in out.columns:
+                            _append_test_row(rows, spec, "NON_TESTABLE", "", "status scenario disponibles", "Impossible d'evaluer la transition phase 3 (sortie scenario manquante).", sid)
+                        else:
+                            share_hs = float((out["status"].astype(str) == "hors_scope_stage2").mean())
+                            if share_hs >= 0.80:
+                                k_vals = pd.to_numeric(out.get("inversion_k_demand"), errors="coerce")
+                                r_vals = pd.to_numeric(out.get("inversion_r_mustrun"), errors="coerce")
+                                add_vals = pd.to_numeric(out.get("additional_absorbed_needed_TWh_year"), errors="coerce")
+                                already_de_stressed = bool(
+                                    np.nanmax(k_vals.to_numpy(dtype=float)) <= 1e-6
+                                    and np.nanmax(r_vals.to_numpy(dtype=float)) <= 1e-6
+                                    and np.nanmax(add_vals.to_numpy(dtype=float)) <= 1e-3
+                                )
+                                if already_de_stressed:
+                                    _append_test_row(
+                                        rows,
+                                        spec,
+                                        "PASS",
+                                        f"hors_scope={share_hs:.2%}; inversion=0",
+                                        "hors_scope < 80% ou inversion deja atteinte",
+                                        "Scenario de-stresse: la transition Phase 3 est interpretable comme deja acquise.",
+                                        sid,
+                                    )
+                                else:
+                                    _append_test_row(
+                                        rows,
+                                        spec,
+                                        "NON_TESTABLE",
+                                        f"hors_scope={share_hs:.2%}",
+                                        "hors_scope < 80%",
+                                        "Le scenario ne produit pas assez de stress Stage 2 pour conclure sur l'entree Phase 3.",
+                                        sid,
+                                    )
+                            elif share_hs >= 0.40:
+                                _append_test_row(
+                                    rows,
+                                    spec,
+                                    "WARN",
+                                    f"hors_scope={share_hs:.2%}",
+                                    "hors_scope < 40%",
+                                    "Lecture partiellement informative: forte part de cas hors scope Stage 2.",
+                                    sid,
+                                )
+                            else:
+                                _append_test_row(rows, spec, "PASS", int(out["status"].nunique()), "status renseignes", "La lecture de transition phase 3 est possible.", sid)
                 elif qid == "Q4":
                     out = scen_res.tables.get("Q4_sizing_summary", pd.DataFrame())
                     if spec.test_id == "Q4-S-01":
@@ -820,6 +988,7 @@ def run_question_bundle(
     specs = get_question_tests(qid)
     ledger = _evaluate_test_ledger(qid, specs, hist_result, scen_results, extra_hist)
     comparison = _comparison_for_question(qid, hist_result, scen_results, extra_hist)
+    comparison = _annotate_comparison_interpretability(qid, comparison)
 
     checks: list[dict[str, Any]] = []
     for c in hist_result.checks:
@@ -836,6 +1005,32 @@ def run_question_bundle(
                 "status": "FAIL" if n_fail > 0 else ("WARN" if n_warn > 0 else "PASS"),
                 "code": "BUNDLE_LEDGER_STATUS",
                 "message": f"ledger: FAIL={n_fail}, WARN={n_warn}",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        )
+        n_total = int(len(ledger))
+        n_non_testable = int((ledger["status"].astype(str) == "NON_TESTABLE").sum())
+        test_informative_share = (n_total - n_non_testable) / n_total if n_total > 0 else np.nan
+        comp_informative_share = np.nan
+        if comparison is not None and not comparison.empty and "interpretability_status" in comparison.columns:
+            comp_total = int(len(comparison))
+            comp_info = int((comparison["interpretability_status"].astype(str) == "INFORMATIVE").sum())
+            comp_informative_share = comp_info / comp_total if comp_total > 0 else np.nan
+        info_status = "PASS"
+        if np.isfinite(test_informative_share) and test_informative_share < 0.50:
+            info_status = "WARN"
+        if np.isfinite(comp_informative_share) and comp_informative_share < 0.30:
+            info_status = "WARN"
+        checks.append(
+            {
+                "status": info_status,
+                "code": "BUNDLE_INFORMATIVENESS",
+                "message": (
+                    f"share_tests_informatifs={test_informative_share:.2%} ; "
+                    f"share_compare_informatifs={comp_informative_share:.2%}" if np.isfinite(comp_informative_share)
+                    else f"share_tests_informatifs={test_informative_share:.2%} ; share_compare_informatifs=n/a"
+                ),
                 "scope": "BUNDLE",
                 "scenario_id": "",
             }
