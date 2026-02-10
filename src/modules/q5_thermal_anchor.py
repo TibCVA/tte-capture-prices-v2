@@ -112,6 +112,9 @@ def run_q5(
             narrative_md="Q5 ne peut pas s'executer sans series journaliere gaz/CO2.",
             checks=checks,
             warnings=["Missing commodity daily series."],
+            mode=str(selection.get("mode", "HIST")).upper(),
+            scenario_id=selection.get("scenario_id"),
+            horizon_year=selection.get("horizon_year"),
         )
 
     c = commodity_daily.copy()
@@ -209,4 +212,7 @@ def run_q5(
         narrative_md=narrative,
         checks=checks,
         warnings=[],
+        mode=str(selection.get("mode", "HIST")).upper(),
+        scenario_id=selection.get("scenario_id"),
+        horizon_year=selection.get("horizon_year"),
     )

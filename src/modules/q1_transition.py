@@ -222,4 +222,7 @@ def run_q1(annual_df: pd.DataFrame, assumptions_df: pd.DataFrame, selection: dic
         narrative_md=narrative,
         checks=checks,
         warnings=warnings,
+        mode=str(selection.get("mode", "HIST")).upper(),
+        scenario_id=selection.get("scenario_id"),
+        horizon_year=selection.get("horizon_year"),
     )

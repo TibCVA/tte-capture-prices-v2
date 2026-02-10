@@ -8,7 +8,7 @@ import streamlit as st
 from app.ui_components import guided_header, inject_theme
 
 
-_REPORT_PATTERN = re.compile(r"conclusions_v2_(\d{8}_\d{6})\.md$")
+_REPORT_PATTERN = re.compile(r"conclusions_v2(?:_detailed)?_(\d{8}_\d{6})\.md$")
 
 
 def _extract_run_id(path: Path) -> str:
@@ -34,13 +34,13 @@ def render() -> None:
         step_next="Fin du parcours",
     )
 
-    reports = sorted(Path("reports").glob("conclusions_v2_*.md"), reverse=True)
+    reports = sorted(Path("reports").glob("conclusions_v2*_*.md"), reverse=True)
     if not reports:
         st.info("Aucun rapport conclusions disponible pour le moment.")
         return
 
     labels = [f"{_extract_run_id(r)} | {r.name}" for r in reports]
-    selected_label = st.selectbox("Run de rapport", labels, index=0)
+    selected_label = st.selectbox("Run de rapport", labels, index=0, help="Le rapport detailed est recommande par defaut.")
     selected = reports[labels.index(selected_label)]
 
     content = selected.read_text(encoding="utf-8")

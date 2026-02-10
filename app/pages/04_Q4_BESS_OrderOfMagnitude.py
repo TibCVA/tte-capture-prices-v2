@@ -7,7 +7,15 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import assumptions_editor_for, country_year_selector, load_annual_metrics, load_hourly_safe
+from app.page_utils import (
+    assumptions_editor_for,
+    country_year_selector,
+    load_annual_metrics,
+    load_hourly_safe,
+    load_phase2_assumptions_table,
+    load_scenario_annual_metrics_ui,
+    load_scenario_hourly_safe,
+)
 from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
 from src.modules.q4_bess import Q4_PARAMS, run_q4
 from src.modules.result import export_module_result
@@ -47,15 +55,37 @@ def render() -> None:
         ]
     )
 
-    country, year = country_year_selector()
+    mode_label = st.selectbox("Mode d'analyse", ["Historique", "Prospectif (Phase 2)"], index=0)
+    mode = "SCEN" if mode_label.startswith("Prospectif") else "HIST"
+    scenario_id: str | None = None
+    if mode == "HIST":
+        country, year = country_year_selector()
+    else:
+        try:
+            p2 = load_phase2_assumptions_table()
+            scenario_ids = sorted(p2["scenario_id"].dropna().astype(str).unique().tolist())
+        except Exception:
+            scenario_ids = []
+        if not scenario_ids:
+            st.warning("Aucun scenario_id trouve dans les hypotheses Phase 2.")
+            return
+        scenario_id = st.selectbox("Scenario ID", scenario_ids)
+        annual_scen = load_scenario_annual_metrics_ui(scenario_id)
+        if annual_scen.empty:
+            st.info("Aucun resultat prospectif disponible. Lance d'abord la page Scenarios Phase 2.")
+            return
+        countries = sorted(annual_scen["country"].dropna().astype(str).unique().tolist())
+        country = st.selectbox("Pays", countries)
+        years = sorted(annual_scen[annual_scen["country"] == country]["year"].dropna().astype(int).unique().tolist())
+        year = st.selectbox("Annee", years)
 
-    annual = load_annual_metrics()
+    annual = load_scenario_annual_metrics_ui(scenario_id) if mode == "SCEN" else load_annual_metrics()
     annual_row = annual[(annual["country"] == country) & (annual["year"] == year)] if not annual.empty else pd.DataFrame()
     if not annual_row.empty and str(annual_row.iloc[0].get("quality_flag", "OK")) == "FAIL":
         st.error("quality_flag=FAIL pour ce pays/annee. Conclusions bloquees.")
         return
 
-    hourly = load_hourly_safe(country, year)
+    hourly = load_scenario_hourly_safe(scenario_id, country, year) if mode == "SCEN" else load_hourly_safe(country, year)
     if hourly is None or hourly.empty:
         st.info("Construis d'abord la table horaire dans Donnees & Qualite.")
         return
@@ -94,6 +124,9 @@ def render() -> None:
             "power_grid": power_grid or DEFAULT_POWER_GRID,
             "duration_grid": duration_grid or DEFAULT_DURATION_GRID,
             "force_recompute": force_recompute,
+            "mode": mode,
+            "scenario_id": scenario_id,
+            "horizon_year": int(year),
         }
 
         t0 = perf_counter()

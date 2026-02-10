@@ -7,9 +7,16 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src.config_loader import load_countries
+from src.config_loader import load_countries, load_phase2_assumptions
 from src.pipeline import build_country_year, load_assumptions_table
-from src.storage import hourly_output_path, load_hourly
+from src.scenario.phase2_engine import run_phase2_scenario
+from src.storage import (
+    hourly_output_path,
+    load_hourly,
+    load_scenario_annual_metrics,
+    load_scenario_hourly,
+    load_scenario_validation_findings,
+)
 
 
 def _mtime_ns(path: Path) -> int:
@@ -108,6 +115,120 @@ def load_commodity_daily_ui() -> pd.DataFrame | None:
         return None
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df.dropna(subset=["date"])
+
+
+def load_phase2_assumptions_table() -> pd.DataFrame:
+    return load_phase2_assumptions()
+
+
+def phase2_assumptions_editor(key_prefix: str = "phase2") -> pd.DataFrame:
+    try:
+        df = load_phase2_assumptions_table()
+    except Exception as exc:
+        st.error(f"Impossible de charger les hypotheses Phase 2: {exc}")
+        return pd.DataFrame()
+
+    st.subheader("Hypotheses Phase 2 (scenario x pays x annee)")
+    edited = st.data_editor(df, num_rows="dynamic", use_container_width=True, key=f"{key_prefix}_assumptions_editor")
+    if st.button("Sauvegarder hypotheses Phase 2", key=f"{key_prefix}_save_assumptions"):
+        out_path = Path("data/assumptions/phase2/phase2_scenario_country_year.csv")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        edited.to_csv(out_path, index=False)
+        st.cache_data.clear()
+        st.success("Hypotheses Phase 2 sauvegardees.")
+        return edited
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def _load_scenario_annual_cached(scenario_id: str, mtime_ns: int) -> pd.DataFrame:
+    _ = mtime_ns
+    return load_scenario_annual_metrics(scenario_id)
+
+
+def load_scenario_annual_metrics_ui(scenario_id: str) -> pd.DataFrame:
+    p = Path(f"data/processed/scenario/{scenario_id}/annual_metrics.parquet")
+    if not p.exists():
+        return pd.DataFrame()
+    return _load_scenario_annual_cached(scenario_id, _mtime_ns(p))
+
+
+@st.cache_data(show_spinner=False)
+def _load_scenario_findings_cached(scenario_id: str, mtime_ns: int) -> pd.DataFrame:
+    _ = mtime_ns
+    return load_scenario_validation_findings(scenario_id)
+
+
+def load_scenario_validation_findings_ui(scenario_id: str) -> pd.DataFrame:
+    p = Path(f"data/processed/scenario/{scenario_id}/validation_findings.parquet")
+    if not p.exists():
+        return pd.DataFrame()
+    return _load_scenario_findings_cached(scenario_id, _mtime_ns(p))
+
+
+@st.cache_data(show_spinner=False)
+def _load_scenario_hourly_cached(scenario_id: str, country: str, year: int, mtime_ns: int) -> pd.DataFrame:
+    _ = mtime_ns
+    return load_scenario_hourly(scenario_id, country, year)
+
+
+def load_scenario_hourly_safe(scenario_id: str, country: str, year: int) -> pd.DataFrame | None:
+    p = Path(f"data/processed/scenario/{scenario_id}/hourly/{country}/{year}.parquet")
+    if not p.exists():
+        return None
+    try:
+        return _load_scenario_hourly_cached(scenario_id, country, year, _mtime_ns(p))
+    except Exception:
+        return None
+
+
+def collect_hourly_map(countries: list[str], years: list[int], scenario_id: str | None = None) -> dict[tuple[str, int], pd.DataFrame]:
+    out: dict[tuple[str, int], pd.DataFrame] = {}
+    for country in countries:
+        for year in years:
+            if scenario_id:
+                h = load_scenario_hourly_safe(scenario_id, country, year)
+            else:
+                h = load_hourly_safe(country, year)
+            if h is not None and not h.empty:
+                out[(country, year)] = h
+    return out
+
+
+def run_phase2_scenario_ui(scenario_id: str, countries: list[str], years: list[int]) -> dict | None:
+    if not scenario_id:
+        st.warning("Selectionne un scenario_id.")
+        return None
+    if not countries or not years:
+        st.warning("Selectionne au moins un pays et une annee.")
+        return None
+
+    with st.form("phase2_run_form"):
+        st.caption("Ce calcul construit les tables prospectives (horaire + annuel + findings) pour la selection.")
+        submit = st.form_submit_button("Executer scenario Phase 2", type="primary")
+
+    if not submit:
+        return None
+
+    assumptions = load_phase2_assumptions_table()
+    annual_hist = load_annual_metrics()
+    if annual_hist.empty:
+        st.error("Impossible d'executer la Phase 2 sans annual_metrics historiques.")
+        return None
+
+    hist_map = collect_hourly_map(countries, list(range(2018, 2025)))
+    with st.spinner("Execution scenario Phase 2 en cours..."):
+        res = run_phase2_scenario(
+            scenario_id=scenario_id,
+            countries=countries,
+            years=years,
+            assumptions_phase2=assumptions,
+            annual_hist=annual_hist,
+            hourly_hist_map=hist_map,
+        )
+    st.success(f"Scenario {scenario_id} termine.")
+    st.cache_data.clear()
+    return res
 
 
 def to_plot_frame(df: pd.DataFrame, timestamp_col: str = "timestamp_utc") -> pd.DataFrame:

@@ -21,6 +21,9 @@ class ModuleResult:
     narrative_md: str
     checks: list[dict[str, Any]]
     warnings: list[str]
+    mode: str = "HIST"
+    scenario_id: str | None = None
+    horizon_year: int | None = None
 
     def to_summary(self) -> dict[str, Any]:
         return {
@@ -31,10 +34,15 @@ class ModuleResult:
             "kpis": self.kpis,
             "checks": self.checks,
             "warnings": self.warnings,
+            "mode": self.mode,
+            "scenario_id": self.scenario_id,
+            "horizon_year": self.horizon_year,
         }
 
 
-def export_module_result(result: ModuleResult, base_dir: str = "outputs/phase1") -> Path:
+def export_module_result(result: ModuleResult, base_dir: str | None = None) -> Path:
+    if base_dir is None:
+        base_dir = "outputs/phase2" if str(result.mode).upper() == "SCEN" else "outputs/phase1"
     out_dir = Path(base_dir) / result.run_id / result.module_id
     tables_dir = out_dir / "tables"
     figs_dir = out_dir / "figures"

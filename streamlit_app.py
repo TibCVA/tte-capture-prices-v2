@@ -17,6 +17,7 @@ PAGES = [
     ("Q3 Sortie Phase 2", "app/pages/03_Q3_Exit_Phase2.py", "Stabilisation et inversion"),
     ("Q4 BESS", "app/pages/04_Q4_BESS_OrderOfMagnitude.py", "Ordres de grandeur stockage"),
     ("Q5 CO2/Gaz", "app/pages/05_Q5_CO2_Gas_Anchor.py", "Sensibilite ancre thermique"),
+    ("Scenarios Phase 2", "app/pages/06_Scenarios_Phase2.py", "Projection mecaniste prospective"),
     ("Conclusions", "app/pages/99_Conclusions.py", "Rapport final trace"),
 ]
 

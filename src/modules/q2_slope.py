@@ -198,4 +198,7 @@ def run_q2(
         narrative_md=narrative,
         checks=checks,
         warnings=warnings,
+        mode=str(selection.get("mode", "HIST")).upper(),
+        scenario_id=selection.get("scenario_id"),
+        horizon_year=selection.get("horizon_year"),
     )

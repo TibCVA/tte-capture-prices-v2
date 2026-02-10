@@ -28,6 +28,8 @@ def robust_linreg(x: pd.Series, y: pd.Series) -> dict[str, Any]:
     n = len(tmp)
     if n < 2:
         return {"slope": np.nan, "intercept": np.nan, "r2": np.nan, "p_value": np.nan, "n": n}
+    if tmp["x"].nunique(dropna=True) <= 1:
+        return {"slope": np.nan, "intercept": np.nan, "r2": np.nan, "p_value": np.nan, "n": int(n)}
 
     reg = linregress(tmp["x"], tmp["y"])
     return {

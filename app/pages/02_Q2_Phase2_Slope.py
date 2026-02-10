@@ -7,7 +7,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import assumptions_editor_for, load_annual_metrics, load_hourly_safe
+from app.page_utils import (
+    assumptions_editor_for,
+    collect_hourly_map,
+    load_annual_metrics,
+    load_phase2_assumptions_table,
+    load_scenario_annual_metrics_ui,
+)
 from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
 from src.modules.q2_slope import Q2_PARAMS, run_q2
 from src.modules.result import export_module_result
@@ -57,7 +63,26 @@ def render() -> None:
         st.info("Aucune metrique annuelle disponible.")
         return
 
-    countries = sorted(annual["country"].dropna().unique().tolist())
+    mode_label = st.selectbox("Mode d'analyse", ["Historique", "Prospectif (Phase 2)"], index=0)
+    mode = "SCEN" if mode_label.startswith("Prospectif") else "HIST"
+    scenario_id: str | None = None
+    annual_source = annual
+    if mode == "SCEN":
+        try:
+            p2 = load_phase2_assumptions_table()
+            scenario_ids = sorted(p2["scenario_id"].dropna().astype(str).unique().tolist())
+        except Exception:
+            scenario_ids = []
+        if not scenario_ids:
+            st.warning("Aucun scenario_id trouve dans les hypotheses Phase 2.")
+            return
+        scenario_id = st.selectbox("Scenario ID", scenario_ids)
+        annual_source = load_scenario_annual_metrics_ui(scenario_id)
+        if annual_source.empty:
+            st.info("Aucun resultat prospectif disponible. Lance d'abord la page Scenarios Phase 2.")
+            return
+
+    countries = sorted(annual_source["country"].dropna().unique().tolist())
     with st.form("q2_form"):
         selected = st.multiselect("Pays", countries, default=countries)
         run_submit = st.form_submit_button("Executer Q2", type="primary")
@@ -65,7 +90,7 @@ def render() -> None:
     st.markdown("## Hypotheses utilisees")
     assumptions = assumptions_editor_for(Q2_PARAMS, "q2")
 
-    scoped = annual[annual["country"].isin(selected)].copy()
+    scoped = annual_source[annual_source["country"].isin(selected)].copy()
     fail_count = int((scoped["quality_flag"] == "FAIL").sum()) if not scoped.empty else 0
     if fail_count > 0:
         st.error(f"{fail_count} ligne(s) quality_flag=FAIL. Conclusions bloquees.")
@@ -74,15 +99,21 @@ def render() -> None:
         run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         t0 = perf_counter()
 
-        hourly_map: dict[tuple[str, int], pd.DataFrame] = {}
-        for _, row in scoped.iterrows():
-            c = str(row["country"])
-            y = int(row["year"])
-            h = load_hourly_safe(c, y)
-            if h is not None and not h.empty:
-                hourly_map[(c, y)] = h
+        years_list = sorted(scoped["year"].dropna().astype(int).unique().tolist())
+        hourly_map = collect_hourly_map(selected, years_list, scenario_id=scenario_id if mode == "SCEN" else None)
 
-        res = run_q2(annual, assumptions, {"countries": selected}, run_id, hourly_by_country_year=hourly_map)
+        res = run_q2(
+            annual_source,
+            assumptions,
+            {
+                "countries": selected,
+                "mode": mode,
+                "scenario_id": scenario_id,
+                "horizon_year": max(years_list) if years_list else None,
+            },
+            run_id,
+            hourly_by_country_year=hourly_map,
+        )
         out_dir = export_module_result(res)
         dt = perf_counter() - t0
         st.session_state[RESULT_KEY] = {"res": res, "runtime_sec": dt, "out_dir": str(out_dir)}

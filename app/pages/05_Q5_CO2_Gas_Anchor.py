@@ -7,7 +7,15 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import assumptions_editor_for, load_annual_metrics, load_commodity_daily_ui, load_hourly_safe
+from app.page_utils import (
+    assumptions_editor_for,
+    load_annual_metrics,
+    load_commodity_daily_ui,
+    load_hourly_safe,
+    load_phase2_assumptions_table,
+    load_scenario_annual_metrics_ui,
+    load_scenario_hourly_safe,
+)
 from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
 from src.config_loader import load_countries
 from src.modules.q5_thermal_anchor import Q5_PARAMS, run_q5
@@ -17,10 +25,10 @@ from src.modules.result import export_module_result
 RESULT_KEY = "q5_last_result"
 
 
-def _load_hourly_range(country: str, years: list[int]) -> pd.DataFrame:
+def _load_hourly_range(country: str, years: list[int], scenario_id: str | None = None) -> pd.DataFrame:
     chunks: list[pd.DataFrame] = []
     for y in years:
-        h = load_hourly_safe(country, y)
+        h = load_scenario_hourly_safe(scenario_id, country, y) if scenario_id else load_hourly_safe(country, y)
         if h is None or h.empty:
             continue
         hx = h.copy()
@@ -29,6 +37,37 @@ def _load_hourly_range(country: str, years: list[int]) -> pd.DataFrame:
     if not chunks:
         return pd.DataFrame()
     return pd.concat(chunks, axis=0).sort_index()
+
+
+def _commodity_from_phase2(scenario_id: str, country: str, years: list[int]) -> pd.DataFrame | None:
+    try:
+        p2 = load_phase2_assumptions_table()
+    except Exception:
+        return None
+    scoped = p2[
+        (p2["scenario_id"].astype(str) == str(scenario_id))
+        & (p2["country"].astype(str) == str(country))
+        & (pd.to_numeric(p2["year"], errors="coerce").isin(years))
+    ].copy()
+    if scoped.empty:
+        return None
+    rows: list[pd.DataFrame] = []
+    for _, row in scoped.iterrows():
+        y = int(row["year"])
+        idx = pd.date_range(f"{y}-01-01", f"{y}-12-31", freq="D")
+        rows.append(
+            pd.DataFrame(
+                {
+                    "date": idx,
+                    "gas_price_eur_mwh_th": float(row.get("gas_eur_per_mwh_th", float("nan"))),
+                    "co2_price_eur_t": float(row.get("co2_eur_per_t", float("nan"))),
+                }
+            )
+        )
+    if not rows:
+        return None
+    out = pd.concat(rows, ignore_index=True)
+    return out.dropna(subset=["gas_price_eur_mwh_th", "co2_price_eur_t"])
 
 
 def render() -> None:
@@ -56,11 +95,30 @@ def render() -> None:
         st.info("Aucune metrique annuelle disponible.")
         return
 
-    countries = sorted(annual["country"].dropna().unique().tolist())
+    mode_label = st.selectbox("Mode d'analyse", ["Historique", "Prospectif (Phase 2)"], index=0)
+    mode = "SCEN" if mode_label.startswith("Prospectif") else "HIST"
+    scenario_id: str | None = None
+    annual_source = annual
+    if mode == "SCEN":
+        try:
+            p2 = load_phase2_assumptions_table()
+            scenario_ids = sorted(p2["scenario_id"].dropna().astype(str).unique().tolist())
+        except Exception:
+            scenario_ids = []
+        if not scenario_ids:
+            st.warning("Aucun scenario_id trouve dans les hypotheses Phase 2.")
+            return
+        scenario_id = st.selectbox("Scenario ID", scenario_ids)
+        annual_source = load_scenario_annual_metrics_ui(scenario_id)
+        if annual_source.empty:
+            st.info("Aucun resultat prospectif disponible. Lance d'abord la page Scenarios Phase 2.")
+            return
+
+    countries = sorted(annual_source["country"].dropna().unique().tolist())
     countries_cfg = load_countries().get("countries", {})
 
-    y_min = int(annual["year"].min())
-    y_max = int(annual["year"].max())
+    y_min = int(annual_source["year"].min())
+    y_max = int(annual_source["year"].max())
 
     with st.form("q5_form"):
         country = st.selectbox("Pays", countries)
@@ -81,18 +139,18 @@ def render() -> None:
     assumptions = assumptions_editor_for(Q5_PARAMS, "q5")
 
     years = list(range(year_range[0], year_range[1] + 1))
-    scoped = annual[(annual["country"] == country) & (annual["year"].isin(years))]
+    scoped = annual_source[(annual_source["country"] == country) & (annual_source["year"].isin(years))]
     fail_count = int((scoped["quality_flag"] == "FAIL").sum()) if not scoped.empty else 0
     if fail_count > 0:
         st.error(f"{fail_count} ligne(s) quality_flag=FAIL. Conclusions bloquees.")
 
     if run_submit and fail_count == 0:
-        hourly = _load_hourly_range(country, years)
+        hourly = _load_hourly_range(country, years, scenario_id=scenario_id if mode == "SCEN" else None)
         if hourly.empty:
             st.info("Donnees horaires absentes pour la periode selectionnee.")
             return
 
-        commodities = load_commodity_daily_ui()
+        commodities = _commodity_from_phase2(scenario_id, country, years) if mode == "SCEN" else load_commodity_daily_ui()
         if commodities is None or commodities.empty:
             st.warning("Serie commodities absente ou invalide: Q5 fonctionne en mode desactive avec diagnostics seulement.")
 
@@ -101,7 +159,13 @@ def render() -> None:
         res = run_q5(
             hourly_df=hourly,
             assumptions_df=assumptions,
-            selection={"country": country, "marginal_tech": marginal},
+            selection={
+                "country": country,
+                "marginal_tech": marginal,
+                "mode": mode,
+                "scenario_id": scenario_id,
+                "horizon_year": years[-1] if years else None,
+            },
             run_id=run_id,
             commodity_daily=commodities,
             ttl_target_eur_mwh=float(ttl_target),

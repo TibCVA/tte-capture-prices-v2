@@ -56,6 +56,31 @@ def load_assumptions(path: str = "data/assumptions/phase1_assumptions.csv") -> p
     return df
 
 
+def load_phase2_assumptions(path: str = "data/assumptions/phase2/phase2_scenario_country_year.csv") -> pd.DataFrame:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Missing phase2 assumptions file: {p}")
+    df = pd.read_csv(p)
+    required = {
+        "scenario_id",
+        "country",
+        "year",
+        "demand_total_twh",
+        "cap_pv_gw",
+        "cap_wind_on_gw",
+        "interconnection_export_gw",
+        "export_coincidence_factor",
+        "bess_power_gw",
+        "bess_energy_gwh",
+        "co2_eur_per_t",
+        "gas_eur_per_mwh_th",
+    }
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Phase2 assumptions missing columns: {sorted(missing)}")
+    return df
+
+
 def assumptions_to_dict(df: pd.DataFrame) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for _, row in df.iterrows():
