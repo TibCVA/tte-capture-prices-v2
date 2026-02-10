@@ -140,79 +140,170 @@ It is auto-generated from the live codebase to guarantee synchronization with th
 
 Authoritative code paths:
 
-- `src/metrics.py`
-- `src/modules/q1_transition.py`
-- `src/modules/q2_slope.py`
-- `src/modules/q3_exit.py`
-- `src/modules/q4_bess.py`
-- `src/modules/q5_thermal_anchor.py`
-- `src/scenario/calibration.py`
-- `src/scenario/phase2_engine.py`
+- `src/metrics.py` — formules annuelles et qualite
+- `src/processing.py` — construction table horaire, NRL, regimes, nettoyage
+- `src/data_fetcher.py` — collecte ENTSO-E et cache
+- `src/validation_report.py` — invariants durs et checks de realite
+- `src/modules/q1_transition.py` .. `q5_thermal_anchor.py` — logique analytique Q1-Q5
+- `src/scenario/calibration.py` — calibration historique par pays
+- `src/scenario/phase2_engine.py` — projection prospective
 
 
-## 2. Data sources and storage
+## 2. Sources de donnees
 
-### 2.1 Historical (HIST)
+L'outil combine plusieurs sources publiques et institutionnelles. Aucune donnee proprietaire n'est utilisee.
 
-- ENTSO-E raw cache: `data/raw/entsoe/prices_da/{{country}}/{{year}}.parquet` (+ load_total, generation_by_type, net_position)
-- Canonical hourly: `data/processed/hourly/{{country}}/{{year}}.parquet`
-- Historical annual metrics: `data/metrics/annual_metrics.parquet`
-- Historical daily metrics: `data/metrics/daily_metrics.parquet`
-- Validation findings: `data/metrics/validation_findings.parquet`
+### 2.1 ENTSO-E Transparency Platform (source primaire historique)
 
-### 2.2 Prospective (SCEN)
+Collecte via l'API ENTSO-E (bibliotheque `entsoe-py`), cle API requise.
+Donnees horaires par pays-annee, stockees en cache local Parquet :
 
-- Scenario assumptions: `data/assumptions/phase2/phase2_scenario_country_year.csv`
-- Scenario hourly outputs: `data/processed/scenario/{{scenario_id}}/hourly/{{country}}/{{year}}.parquet`
-- Scenario annual metrics: `data/processed/scenario/{{scenario_id}}/annual_metrics.parquet`
+| Dataset | Contenu | Chemin cache |
+|---------|---------|--------------|
+| `prices_da` | Prix day-ahead (EUR/MWh) | `data/raw/entsoe/prices_da/{{country}}/{{year}}.parquet` |
+| `load_total` | Charge totale (MW) | `data/raw/entsoe/load_total/{{country}}/{{year}}.parquet` |
+| `generation_by_type` | Generation par filiere (MW) | `data/raw/entsoe/generation_by_type/{{country}}/{{year}}.parquet` |
+| `net_position` | Position nette / flux physiques (MW) | `data/raw/entsoe/net_position/{{country}}/{{year}}.parquet` |
+| `psh_pump` | Pompage STEP (MW) | `data/raw/entsoe/psh_pump/{{country}}/{{year}}.parquet` |
 
-### 2.3 Common assumptions
+Mapping des codes generation ENTSO-E (PSR) vers colonnes canoniques : `data/static/entsoe_psr_mapping.csv`.
 
-- Phase 1 assumptions: `data/assumptions/phase1_assumptions.csv`
-- Country config: `config/countries.yaml`
-- PSR mapping: `data/static/entsoe_psr_mapping.csv`
+### 2.2 ENTSO-E TYNDP 2024 (source prospective)
+
+Donnees du Ten-Year Network Development Plan 2024 pour les scenarios prospectifs :
+
+| Fichier normalise | Contenu | Source brute |
+|-------------------|---------|--------------|
+| `data/external/normalized/tyndp2024_demand_scenarios.csv` | Demande annuelle par pays/scenario/annee | TYNDP 2024 XLSX |
+| `data/external/normalized/tyndp2024_capacities.csv` | Capacites installees par pays/techno/scenario | TYNDP 2024 XLSX |
+| `data/external/normalized/tyndp2024_fuel_co2_prices.csv` | Prix gaz et CO2 par scenario | TYNDP 2024 XLSX |
+
+Ces donnees alimentent les hypotheses Phase 2 (`data/assumptions/phase2/phase2_scenario_country_year.csv`).
+
+### 2.3 NREL ATB et IRENA (couts technologiques)
+
+Benchmarks de couts utilises pour le cadrage des hypotheses :
+
+| Fichier normalise | Source | Contenu |
+|-------------------|--------|---------|
+| `data/external/normalized/tech_cost_benchmarks_atb.csv` | NREL Annual Technology Baseline 2024 v3 | LCOE, CAPEX, O&M par techno |
+| `data/external/normalized/tech_cost_benchmarks_irena.csv` | IRENA Renewable Power Generation Costs 2023 | LCOE renouvelable global |
+
+### 2.4 Donnees de calibration (pre-calculees)
+
+| Fichier | Contenu | Usage |
+|---------|---------|-------|
+| `data/external/normalized/interconnection_proxy_phase1.csv` | Capacite d'export estimee par pays (GW) | Calibration prospective |
+| `data/external/normalized/surplus_coincidence_matrix_phase1.csv` | Facteurs de coincidence export entre pays | Calibration prospective |
+
+### 2.5 Prix commodites journaliers (optionnel, Q5)
+
+- `data/external/commodity_prices_daily.csv` : prix gaz (EUR/MWh_th) et CO2 (EUR/t) journaliers
+- Utilise par Q5 pour la sensibilite ancre thermique aux commodites reelles
+- Si absent, Q5 utilise les valeurs des hypotheses Phase 2
+
+### 2.6 Configuration et hypotheses
+
+| Fichier | Contenu |
+|---------|---------|
+| `config/countries.yaml` | Definition pays : codes ENTSO-E, fuseaux, composition must-run, flex, techno marginale |
+| `config/thresholds.yaml` | Seuils modele : completude, regime D, coherence, checks |
+| `data/assumptions/phase1_assumptions.csv` | Hypotheses Phase 1 : seuils Q1-Q5, rendements thermiques, VOM |
+| `data/assumptions/phase2/phase2_scenario_country_year.csv` | Hypotheses Phase 2 par scenario/pays/annee : demande, capacites, prix commodites |
+
+### 2.7 Donnees intermediaires produites par le pipeline
+
+| Fichier | Contenu | Producteur |
+|---------|---------|------------|
+| `data/processed/hourly/{{country}}/{{year}}.parquet` | Table horaire canonique (prix, charge, VRE, NRL, surplus, regimes) | `src/processing.py` |
+| `data/metrics/annual_metrics.parquet` | Metriques annuelles historiques par pays-annee | `src/metrics.py` |
+| `data/metrics/daily_metrics.parquet` | Metriques journalieres | `src/metrics.py` |
+| `data/metrics/validation_findings.parquet` | Constats de validation (severite, code, message, evidence) | `src/validation_report.py` |
+| `data/processed/scenario/{{scen}}/hourly/{{country}}/{{year}}.parquet` | Table horaire prospective | `src/scenario/phase2_engine.py` |
+| `data/processed/scenario/{{scen}}/annual_metrics.parquet` | Metriques annuelles prospectives | `src/metrics.py` |
 
 
-## 3. Canonical physical and market formulas
+## 3. Formules canoniques et pipeline de qualite
 
-Implementation: `src/metrics.py` and preprocessing pipeline.
-
-### 3.1 Core hourly variables
+### 3.1 Variables horaires
 
 - `gen_vre_mw = gen_solar_mw + gen_wind_on_mw + gen_wind_off_mw`
-- `nrl_mw = load_mw - gen_vre_mw - gen_must_run_mw`
+- `nrl_mw = load_mw - gen_vre_mw - gen_must_run_mw` (Net Residual Load)
 - `surplus_mw = max(0, -nrl_mw)`
 - `exports_mw = max(net_position_mw, 0)`
 - `flex_sink_observed_mw = exports_mw + flex_sink_psh_pump_mw`
 - `surplus_absorbed_mw = min(surplus_mw, flex_effective_mw)`
 - `surplus_unabsorbed_mw = surplus_mw - surplus_absorbed_mw`
 
-### 3.2 Regime classification (anti-circular, no price input)
+Nettoyage des donnees brutes : les generations negatives < -0.1 MW sont mises a NaN ; les valeurs entre -0.1 et 0 sont arrondies a 0.
+La charge nette (load_mw) est calculee comme `load_total - psh_pump` si les donnees de pompage sont suffisantes (>= 95% de couverture), sinon `load_total` directement.
 
-- A: `surplus_unabsorbed_mw > 0`
-- B: `surplus_mw > 0` and `surplus_unabsorbed_mw == 0`
-- D: `surplus_mw == 0` and `nrl_mw >= threshold_peak_mw`
-- C: remaining hours
+### 3.2 Classification des regimes (anti-circulaire, sans prix)
 
-Threshold D default: `P90(nrl_mw on positive nrl)` with minimum positive-hour guard.
+Les regimes sont determines uniquement par les grandeurs physiques, sans utiliser le prix :
 
-### 3.3 Annual metrics
+- **A** (surplus non absorbe) : `surplus_unabsorbed_mw > 0`
+- **B** (surplus absorbe) : `surplus_mw > 0` et `surplus_unabsorbed_mw == 0`
+- **D** (stress thermique) : `surplus_mw == 0` et `nrl_mw >= P90(nrl positif)`, avec minimum 200 heures NRL positif
+- **C** (normal) : toutes les heures restantes
 
-- Baseload price: `mean(price_da)`
-- Capture price (tech X): `sum(price * gen_X) / sum(gen_X)`
-- Capture ratio vs baseload: `capture_X / baseload`
-- Capture ratio vs TTL: `capture_X / ttl`
-- TTL (price-based): `P95(price)` on regimes C + D
-- SR (energy share): `surplus_energy / gen_primary_energy`
-- FAR: `surplus_absorbed_energy / surplus_energy` (NaN if denominator = 0)
-- IR: `P10(gen_must_run_mw) / P10(load_mw)`
+Le seuil du regime D (quantile 0.90 du NRL positif) est configurable dans `config/thresholds.yaml`.
 
-### 3.4 Quality indicators
+### 3.3 Metriques annuelles
 
-- Completeness: share of hours without critical missing data
-- Quality flag: `OK` if completeness >= 0.98, `WARN` if >= 0.90, `FAIL` otherwise
-- Regime coherence: share of hours where price aligns with expected regime pattern
-- NRL-price correlation: Pearson correlation on non-missing hours
+- **Prix baseload** : `mean(price_da)` sur toutes les heures
+- **Prix peak/offpeak** : moyennes sur heures locales 8h-20h LJ / reste
+- **Capture price (techno X)** : `sum(price * gen_X) / sum(gen_X)` — moyenne ponderee par la production
+- **Capture ratio vs baseload** : `capture_X / baseload`
+- **Capture ratio vs TTL** : `capture_X / ttl`
+- **TTL** (Top Tail Level) : `P95(price)` sur les heures en regime C ou D uniquement
+- **SR** (Surplus Ratio) : `surplus_energy / gen_primary_energy` — part de l'energie en surplus
+- **FAR** (Flex Absorption Ratio) : `surplus_absorbed_energy / surplus_energy` — part du surplus absorbe (NaN si pas de surplus)
+- **IR** (Inflexibility Ratio) : `P10(gen_must_run_mw) / P10(load_mw)` — rapport must-run / charge en creux
+- **Penetration VRE** : `gen_vre_twh / gen_primary_twh`
+- **Heures negatives** : nombre d'heures avec `price < 0`
+- **Heures basses** : nombre d'heures avec `price <= 5 EUR/MWh`
+- **Jours spread > 50** : nombre de jours ou `max(price) - min(price) >= 50 EUR/MWh`
+
+### 3.4 Pipeline de qualite des donnees
+
+Le pipeline applique 3 niveaux de controle :
+
+**Niveau 1 — Completude et flags horaires** (dans `src/processing.py`) :
+- `q_missing_price` : prix day-ahead absent
+- `q_missing_load` : charge totale absente
+- `q_missing_generation` : generation VRE ET must-run absentes simultanement
+- `q_missing_net_position` : position nette absente
+- `q_any_critical_missing` : au moins un des trois premiers flags actif
+- Completude = part des heures sans donnee critique manquante
+
+**Niveau 2 — Invariants durs** (dans `src/validation_report.py`, severite ERROR) :
+- `INV_NRL` : identite NRL violee (`load - vre - must_run` != nrl, tolerance 1e-6)
+- `INV_SURPLUS` : identite surplus violee (`max(-nrl, 0)` != surplus)
+- `INV_UNABS_NEG` : surplus non absorbe negatif (impossible physiquement)
+- `INV_UNABS_GT_SURPLUS` : surplus non absorbe > surplus total
+- `INV_FAR_RANGE` : FAR hors [0, 1]
+- `INV_SR_RANGE` : SR hors [0, 1]
+
+**Niveau 3 — Checks de realite** (dans `src/modules/reality_checks.py`, severite WARN/FAIL) :
+- `RC_SR_RANGE` : SR hors [0, 1] → FAIL
+- `RC_FAR_RANGE` : FAR hors [0, 1] → FAIL
+- `RC_FAR_NAN_WHEN_NO_SURPLUS` : FAR fini alors que surplus = 0 → FAIL
+- `RC_IR_NEGATIVE` : IR negatif → FAIL
+- `RC_CAPTURE_RANGE` : capture price PV hors [-200, 500] EUR/MWh → WARN
+- `RC_TTL_LOW` : TTL < baseload - 20 EUR/MWh → WARN
+- `RC_IR_GT_1` : IR > 1 (must-run depasse la charge en creux) → WARN
+- `RC_LOW_REGIME_COHERENCE` : coherence regime < 0.55 → WARN
+- `RC_TTL_LOW_SAMPLE` : TTL calcule sur moins de 500 heures C+D → WARN
+- `RC_NEG_NOT_IN_AB` : moins de 50% des heures negatives en regime A/B → WARN
+- `RC_D_NOT_ABOVE_C` : mediane prix regime D <= mediane prix regime C → WARN
+
+**Quality flag** (decision globale par pays-annee) :
+- `OK` : completude >= 0.98
+- `WARN` : completude >= 0.90 mais < 0.98
+- `FAIL` : completude < 0.90 ou invariants durs violes
+
+Tous les constats sont traces dans `data/metrics/validation_findings.parquet` avec : severite, code, message, evidence quantitative, suggestion de correction.
 
 
 ## 4. Question-by-question analytical logic
