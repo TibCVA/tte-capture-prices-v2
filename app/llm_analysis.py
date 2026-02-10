@@ -96,16 +96,27 @@ REGLES :
 10. Ne fais AUCUNE reference aux autres questions (Q1-Q5) sauf si les donnees fournies y font explicitement reference.
 
 FORMAT DU RAPPORT :
-## 1. Resume executif (5-10 lignes)
-## 2. Reponse detaillee a chaque sous-question
+
+=== PARTIE 1 : REPONSE STRATEGIQUE (presentable a un CEO) ===
+
+## Reponse a la question business
+Redige une reponse argumentee de type conseil en strategie (500 mots maximum). \
+Le ton est direct, structure, actionnable. Chaque affirmation cle est appuyee par \
+1-2 chiffres issus des donnees. Cette section doit etre autonome : un decideur doit \
+pouvoir la lire seule et en tirer une conclusion operationnelle. Pas de jargon technique \
+inutile, pas de formules — uniquement la synthese strategique.
+
+=== PARTIE 2 : DETAILS, ANNEXES ET POINTS D'ATTENTION ===
+
+## Details : reponse a chaque sous-question
    (1 sous-section par sous-question, avec donnees chiffrees)
-## 3. Analyse de coherence et problemes detectes
+## Analyse de coherence et problemes detectes
    (incoherences donnees, tests en echec, valeurs aberrantes, logique douteuse, \
 ecarts par rapport aux hypotheses methodologiques)
-## 4. Tableau de synthese par pays
+## Tableau de synthese par pays
    (1 ligne par pays avec verdict et KPI cles)
-## 5. Recommandations et prochaines etapes
-## 6. Limites de cette analyse
+## Recommandations et prochaines etapes
+## Limites de cette analyse
    (incluant les limites mentionnees dans les slides de methode)
 """
 
