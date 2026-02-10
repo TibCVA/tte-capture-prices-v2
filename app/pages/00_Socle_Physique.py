@@ -4,7 +4,13 @@ import plotly.express as px
 import streamlit as st
 
 from app.page_utils import country_year_selector, load_hourly_safe, to_plot_frame
-from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards, show_metric_explainers
+from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
+
+try:
+    from app.ui_components import show_metric_explainers
+except ImportError:  # Backward-compatible fallback if cloud cache serves an older ui_components module.
+    def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
+        return None
 
 
 def render() -> None:

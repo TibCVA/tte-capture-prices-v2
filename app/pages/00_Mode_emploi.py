@@ -2,7 +2,13 @@
 
 import streamlit as st
 
-from app.ui_components import guided_header, inject_theme, show_definitions, show_limitations, show_metric_explainers
+from app.ui_components import guided_header, inject_theme, show_definitions, show_limitations
+
+try:
+    from app.ui_components import show_metric_explainers
+except ImportError:  # Backward-compatible fallback if cloud cache serves an older ui_components module.
+    def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
+        return None
 
 
 def render() -> None:

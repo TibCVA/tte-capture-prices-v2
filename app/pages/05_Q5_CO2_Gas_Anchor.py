@@ -23,8 +23,13 @@ from app.ui_components import (
     show_definitions,
     show_kpi_cards,
     show_limitations,
-    show_metric_explainers,
 )
+
+try:
+    from app.ui_components import show_metric_explainers
+except ImportError:  # Backward-compatible fallback if cloud cache serves an older ui_components module.
+    def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
+        return None
 from src.config_loader import load_countries
 from src.modules.q5_thermal_anchor import Q5_PARAMS, run_q5
 from src.modules.result import export_module_result
