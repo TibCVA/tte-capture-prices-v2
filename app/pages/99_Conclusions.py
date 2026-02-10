@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import re
 
 import pandas as pd
 import streamlit as st
@@ -54,6 +55,76 @@ def _report_paths(run_id: str) -> dict[str, Path]:
     }
 
 
+def _discover_report_run_ids(reports_dir: Path = Path("reports")) -> list[str]:
+    if not reports_dir.exists():
+        return []
+    run_ids: set[str] = set()
+    pat = re.compile(r"^conclusions_v2_(?:detailed|executive)_(.+)\.md$")
+    for f in reports_dir.glob("conclusions_v2_*_*.md"):
+        m = pat.match(f.name)
+        if m:
+            run_ids.add(m.group(1))
+    return sorted(run_ids, reverse=True)
+
+
+def _render_report_artifacts(paths: dict[str, Path]) -> None:
+    st.markdown("## Resume executif")
+    exec_md = _safe_read_text(paths["executive"])
+    if exec_md:
+        st.markdown(exec_md)
+    else:
+        st.info("Aucun resume executif genere pour ce run.")
+
+    st.markdown("## Rapport detaille")
+    detailed_md = _safe_read_text(paths["detailed"])
+    if detailed_md:
+        st.markdown(detailed_md)
+    else:
+        st.warning("Rapport detaille non trouve. Clique sur le bouton de generation ci-dessus.")
+
+    st.markdown("## Annexes de preuve")
+    ev = _safe_read_csv(paths["evidence"])
+    tt = _safe_read_csv(paths["traceability"])
+    stx = _safe_read_csv(paths["slides_traceability"])
+    qc = _safe_read_json(paths["qc"])
+
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["Evidence catalog", "Test traceability", "Slides coverage", "Quality gates"]
+    )
+    with tab1:
+        if ev.empty:
+            st.info("Evidence catalog indisponible.")
+        else:
+            st.dataframe(ev, use_container_width=True)
+    with tab2:
+        if tt.empty:
+            st.info("Test traceability indisponible.")
+        else:
+            st.dataframe(tt, use_container_width=True)
+    with tab3:
+        if stx.empty:
+            st.info("Slides traceability indisponible.")
+        else:
+            st.dataframe(stx, use_container_width=True)
+            missing = stx[stx["covered"].astype(str).str.lower() == "no"] if "covered" in stx.columns else pd.DataFrame()
+            st.markdown("### Ecarts de couverture")
+            if missing.empty:
+                st.success("Aucun ecart de couverture slides.")
+            else:
+                st.error(f"{len(missing)} exigence(s) slides non couverte(s).")
+                st.dataframe(missing, use_container_width=True)
+    with tab4:
+        if not qc:
+            st.info("Fichier report_qc indisponible.")
+        else:
+            st.json(qc)
+            verdict = str(qc.get("verdict", "UNKNOWN"))
+            if verdict == "PASS":
+                st.success("Verdict qualite: PASS")
+            else:
+                st.warning(f"Verdict qualite: {verdict}")
+
+
 def _run_has_all_questions(run_dir: Path) -> bool:
     for q in REQUIRED_QUESTIONS:
         if not (run_dir / q / "summary.json").exists():
@@ -96,6 +167,17 @@ def render() -> None:
     complete_runs = discover_complete_runs(Path("outputs/combined"))
     if not complete_runs:
         st.warning("Aucun run combine complet (Q1..Q5) n'est disponible dans `outputs/combined`.")
+
+        prebuilt_runs = _discover_report_run_ids(Path("reports"))
+        if prebuilt_runs:
+            st.info("Des rapports pre-generes sont disponibles meme sans run combine local.")
+            selected_prebuilt = st.selectbox("Selection du rapport pre-genere", prebuilt_runs, index=0)
+            st.caption(f"Run rapport selectionne: `{selected_prebuilt}`")
+            _render_report_artifacts(_report_paths(selected_prebuilt))
+            st.markdown("---")
+            st.markdown("### Optionnel: reconstruire un run combine local")
+            st.caption("Necessaire uniquement si vous voulez relancer les analyses Q1..Q5 depuis l'UI.")
+
         fragments = latest_fragment_per_question(Path("outputs/combined"))
         st.markdown("### Fragments detectes par question")
         frag_rows = []
@@ -157,58 +239,4 @@ def render() -> None:
             else:
                 st.error(msg)
 
-    st.markdown("## Resume executif")
-    exec_md = _safe_read_text(paths["executive"])
-    if exec_md:
-        st.markdown(exec_md)
-    else:
-        st.info("Aucun resume executif genere pour ce run.")
-
-    st.markdown("## Rapport detaille")
-    detailed_md = _safe_read_text(paths["detailed"])
-    if detailed_md:
-        st.markdown(detailed_md)
-    else:
-        st.warning("Rapport detaille non trouve. Clique sur le bouton de generation ci-dessus.")
-
-    st.markdown("## Annexes de preuve")
-    ev = _safe_read_csv(paths["evidence"])
-    tt = _safe_read_csv(paths["traceability"])
-    stx = _safe_read_csv(paths["slides_traceability"])
-    qc = _safe_read_json(paths["qc"])
-
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["Evidence catalog", "Test traceability", "Slides coverage", "Quality gates"]
-    )
-    with tab1:
-        if ev.empty:
-            st.info("Evidence catalog indisponible.")
-        else:
-            st.dataframe(ev, use_container_width=True)
-    with tab2:
-        if tt.empty:
-            st.info("Test traceability indisponible.")
-        else:
-            st.dataframe(tt, use_container_width=True)
-    with tab3:
-        if stx.empty:
-            st.info("Slides traceability indisponible.")
-        else:
-            st.dataframe(stx, use_container_width=True)
-            missing = stx[stx["covered"].astype(str).str.lower() == "no"] if "covered" in stx.columns else pd.DataFrame()
-            st.markdown("### Ecarts de couverture")
-            if missing.empty:
-                st.success("Aucun ecart de couverture slides.")
-            else:
-                st.error(f"{len(missing)} exigence(s) slides non couverte(s).")
-                st.dataframe(missing, use_container_width=True)
-    with tab4:
-        if not qc:
-            st.info("Fichier report_qc indisponible.")
-        else:
-            st.json(qc)
-            verdict = str(qc.get("verdict", "UNKNOWN"))
-            if verdict == "PASS":
-                st.success("Verdict qualite: PASS")
-            else:
-                st.warning(f"Verdict qualite: {verdict}")
+    _render_report_artifacts(paths)
