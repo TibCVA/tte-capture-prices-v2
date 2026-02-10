@@ -387,7 +387,7 @@ def run_llm_analysis(
             messages=messages,
             max_completion_tokens=MAX_COMPLETION_TOKENS,
             temperature=1,
-            reasoning={"effort": REASONING_EFFORT},
+            reasoning_effort=REASONING_EFFORT,
         )
     except Exception as exc:
         return {"error": f"Erreur API OpenAI: {exc}"}
