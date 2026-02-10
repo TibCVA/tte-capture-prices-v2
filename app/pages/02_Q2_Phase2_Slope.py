@@ -9,8 +9,10 @@ import streamlit as st
 _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
 try:
     from app.page_utils import (
+        available_phase2_years,
         assumptions_editor_for,
         build_bundle_hash,
+        default_analysis_scenario_years,
         load_annual_metrics,
         load_phase2_assumptions_table,
         run_question_bundle_cached,
@@ -23,6 +25,8 @@ except Exception as exc:  # pragma: no cover
 
     assumptions_editor_for = _page_utils_unavailable  # type: ignore[assignment]
     build_bundle_hash = _page_utils_unavailable  # type: ignore[assignment]
+    available_phase2_years = _page_utils_unavailable  # type: ignore[assignment]
+    default_analysis_scenario_years = _page_utils_unavailable  # type: ignore[assignment]
     load_annual_metrics = _page_utils_unavailable  # type: ignore[assignment]
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
@@ -123,10 +127,15 @@ def render() -> None:
     assumptions_phase2 = load_phase2_assumptions_table()
     scenario_options = sorted(set(assumptions_phase2["scenario_id"].dropna().astype(str).tolist()))
     default_scen = [s for s in get_default_scenarios("Q2") if s in scenario_options]
+    scenario_year_options = available_phase2_years(assumptions_phase2, scenario_ids=scenario_options, countries=countries)
+    default_scenario_years = default_analysis_scenario_years(scenario_year_options)
+    if not scenario_year_options:
+        scenario_year_options = default_scenario_years
 
     with st.form("q2_bundle_form"):
         selected = st.multiselect("Pays", countries, default=countries)
         scenario_ids = st.multiselect("Scenarios prospectifs", scenario_options, default=default_scen or scenario_options[:2])
+        scenario_years = st.multiselect("Annees prospectives", scenario_year_options, default=default_scenario_years)
         force_recompute = st.checkbox("Forcer recalcul complet (ignore cache bundle)", value=False)
         run_submit = st.form_submit_button("Lancer l'analyse complete Q2", type="primary")
 
@@ -135,7 +144,7 @@ def render() -> None:
             "countries": selected,
             "years": list(range(2018, 2025)),
             "scenario_ids": scenario_ids,
-            "scenario_years": [2030, 2040],
+            "scenario_years": scenario_years or default_scenario_years,
         }
         bundle_hash = build_bundle_hash("Q2", selection, assumptions_phase1, assumptions_phase2)
         cache_bust = datetime.utcnow().isoformat() if force_recompute else ""

@@ -124,6 +124,29 @@ def load_phase2_assumptions_table() -> pd.DataFrame:
     return load_phase2_assumptions()
 
 
+def available_phase2_years(
+    assumptions_phase2: pd.DataFrame,
+    scenario_ids: list[str] | None = None,
+    countries: list[str] | None = None,
+) -> list[int]:
+    if assumptions_phase2 is None or assumptions_phase2.empty:
+        return []
+    scoped = assumptions_phase2.copy()
+    if scenario_ids:
+        scoped = scoped[scoped["scenario_id"].astype(str).isin([str(s) for s in scenario_ids])]
+    if countries:
+        scoped = scoped[scoped["country"].astype(str).isin([str(c) for c in countries])]
+    years = pd.to_numeric(scoped.get("year", pd.Series(dtype=float)), errors="coerce").dropna().astype(int).unique().tolist()
+    return sorted(set(years))
+
+
+def default_analysis_scenario_years(available_years: list[int], start: int = 2025, end: int = 2035) -> list[int]:
+    if not available_years:
+        return list(range(start, end + 1))
+    preferred = [int(y) for y in available_years if start <= int(y) <= end]
+    return preferred if preferred else sorted(set([int(y) for y in available_years]))
+
+
 def phase2_assumptions_editor(key_prefix: str = "phase2") -> pd.DataFrame:
     try:
         df = load_phase2_assumptions_table()

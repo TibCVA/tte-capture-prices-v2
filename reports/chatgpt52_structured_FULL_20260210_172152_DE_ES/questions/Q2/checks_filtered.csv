@@ -1,0 +1,13 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q2_LOW_R2,DE-WIND: R2 faible (0.06).,HIST,,Q2,DE,False
+WARN,Q2_FRAGILE,ES-PV: n=2 < 3.,SCEN,BASE,Q2,ES,False
+WARN,Q2_FRAGILE,ES-WIND: n=2 < 3.,SCEN,BASE,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q2,,True
+WARN,Q2_FRAGILE,ES-PV: n=2 < 3.,SCEN,HIGH_CO2,Q2,ES,False
+WARN,Q2_FRAGILE,ES-WIND: n=2 < 3.,SCEN,HIGH_CO2,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_CO2,Q2,,True
+WARN,Q2_FRAGILE,ES-PV: n=2 < 3.,SCEN,HIGH_GAS,Q2,ES,False
+WARN,Q2_FRAGILE,ES-WIND: n=2 < 3.,SCEN,HIGH_GAS,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_GAS,Q2,,True
+WARN,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=3",BUNDLE,,Q2,,True
+WARN,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=14.29%,BUNDLE,,Q2,,True

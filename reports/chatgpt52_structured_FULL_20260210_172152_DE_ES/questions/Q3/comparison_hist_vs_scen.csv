@@ -1,0 +1,17 @@
+country,scenario_id,metric,hist_value,scen_value,delta,hist_status,scen_status,interpretability_status,interpretability_reason
+DE,BASE,inversion_k_demand,0.0583007812499999,0.0,-0.0583007812499999,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+DE,BASE,inversion_r_mustrun,0.285400390625,0.0,-0.285400390625,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+ES,BASE,inversion_k_demand,0.1746826171875,0.0,-0.1746826171875,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+ES,BASE,inversion_r_mustrun,0.533203125,0.0,-0.533203125,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+DE,DEMAND_UP,inversion_k_demand,0.0583007812499999,0.0,-0.0583007812499999,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+DE,DEMAND_UP,inversion_r_mustrun,0.285400390625,0.0,-0.285400390625,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+ES,DEMAND_UP,inversion_k_demand,0.1746826171875,0.0,-0.1746826171875,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+ES,DEMAND_UP,inversion_r_mustrun,0.533203125,0.0,-0.533203125,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+DE,FLEX_UP,inversion_k_demand,0.0583007812499999,0.0,-0.0583007812499999,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+DE,FLEX_UP,inversion_r_mustrun,0.285400390625,0.0,-0.285400390625,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+ES,FLEX_UP,inversion_k_demand,0.1746826171875,0.0,-0.1746826171875,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+ES,FLEX_UP,inversion_r_mustrun,0.533203125,0.0,-0.533203125,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+DE,LOW_RIGIDITY,inversion_k_demand,0.0583007812499999,0.0,-0.0583007812499999,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+DE,LOW_RIGIDITY,inversion_r_mustrun,0.285400390625,0.0,-0.285400390625,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+ES,LOW_RIGIDITY,inversion_k_demand,0.1746826171875,0.0,-0.1746826171875,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2
+ES,LOW_RIGIDITY,inversion_r_mustrun,0.533203125,0.0,-0.533203125,degradation,hors_scope_stage2,INFORMATIVE,scenario_de_stressed_hors_scope_stage2

@@ -24,6 +24,9 @@ from src.storage import (
 )
 
 
+DEFAULT_SCENARIO_YEARS = list(range(2025, 2036))
+
+
 def _safe_float(v: Any, default: float = np.nan) -> float:
     try:
         x = float(v)
@@ -95,14 +98,14 @@ def _selection_scenario_years(selection: dict[str, Any], assumptions_phase2: pd.
     if selected:
         return sorted(set([int(y) for y in selected]))
     if assumptions_phase2 is None or assumptions_phase2.empty:
-        return [2030, 2040]
+        return list(DEFAULT_SCENARIO_YEARS)
     p2 = assumptions_phase2.copy()
     p2["scenario_id"] = p2["scenario_id"].astype(str)
     p2["country"] = p2["country"].astype(str)
     p2["year"] = pd.to_numeric(p2["year"], errors="coerce")
     scoped = p2[p2["scenario_id"].isin(scenario_ids) & p2["country"].isin(countries)]
     if scoped.empty:
-        return [2030, 2040]
+        return list(DEFAULT_SCENARIO_YEARS)
     return sorted(scoped["year"].dropna().astype(int).unique().tolist())
 
 
@@ -146,6 +149,93 @@ def _concat_hourly(country: str, years: list[int], hourly_map: dict[tuple[str, i
     if not chunks:
         return pd.DataFrame()
     return pd.concat(chunks, axis=0).sort_index()
+
+
+def _pick_country_year(country: str, preferred_year: int, candidate_years: list[int], hourly_map: dict[tuple[str, int], pd.DataFrame]) -> int | None:
+    candidates = [int(preferred_year)] + [int(y) for y in candidate_years if int(y) != int(preferred_year)]
+    for y in candidates:
+        if (country, int(y)) in hourly_map:
+            return int(y)
+    return None
+
+
+def _merge_tables(results: list[ModuleResult]) -> dict[str, pd.DataFrame]:
+    table_names: set[str] = set()
+    for r in results:
+        table_names.update(r.tables.keys())
+    merged: dict[str, pd.DataFrame] = {}
+    for name in sorted(table_names):
+        parts = [r.tables[name] for r in results if name in r.tables and isinstance(r.tables[name], pd.DataFrame) and not r.tables[name].empty]
+        if parts:
+            merged[name] = pd.concat(parts, ignore_index=True)
+        else:
+            merged[name] = pd.DataFrame()
+    return merged
+
+
+def _merge_module_results(
+    results: list[ModuleResult],
+    module_id: str,
+    run_id: str,
+    selection: dict[str, Any],
+    mode: str,
+    scenario_id: str | None,
+    horizon_year: int | None,
+    narrative_title: str,
+) -> ModuleResult:
+    if not results:
+        return ModuleResult(
+            module_id=module_id,
+            run_id=run_id,
+            selection=selection,
+            assumptions_used=[],
+            kpis={"n_runs": 0, "n_countries": 0},
+            tables={},
+            figures=[],
+            narrative_md=f"{narrative_title}: aucune sortie disponible.",
+            checks=[{"status": "FAIL", "code": f"{module_id}_NO_RESULT", "message": "Aucune sortie module disponible."}],
+            warnings=["Aucun result mergeable."],
+            mode=mode,
+            scenario_id=scenario_id,
+            horizon_year=horizon_year,
+        )
+
+    assumptions_used = results[0].assumptions_used
+    tables = _merge_tables(results)
+    checks = [c for r in results for c in r.checks]
+    warnings = [w for r in results for w in r.warnings]
+    countries = sorted({str(r.selection.get("country", "")) for r in results if str(r.selection.get("country", ""))})
+    total_time = float(sum(_safe_float(r.kpis.get("compute_time_sec"), 0.0) for r in results))
+
+    kpis = {
+        "n_runs": int(len(results)),
+        "n_countries": int(len(countries)),
+        "countries": countries,
+        "compute_time_sec_total": total_time,
+    }
+    if module_id == "Q4":
+        kpis["cache_hit_share"] = float(np.mean([1.0 if bool(r.kpis.get("cache_hit", False)) else 0.0 for r in results]))
+
+    narrative = (
+        f"{narrative_title}: aggregation multi-pays ({len(countries)} pays). "
+        "Les tables detaillees conservent les lignes par pays."
+    )
+
+    return ModuleResult(
+        module_id=module_id,
+        run_id=run_id,
+        selection=selection,
+        assumptions_used=assumptions_used,
+        kpis=kpis,
+        tables=tables,
+        figures=[],
+        narrative_md=narrative,
+        checks=checks if checks else [{"status": "PASS", "code": f"{module_id}_MERGE_PASS", "message": "Merge multi-pays ok."}],
+        warnings=warnings,
+        mode=mode,
+        scenario_id=scenario_id,
+        horizon_year=horizon_year,
+    )
 
 
 def _phase2_commodity_daily(assumptions_phase2: pd.DataFrame, scenario_id: str, country: str, years: list[int]) -> pd.DataFrame:
@@ -259,7 +349,13 @@ def _run_hist_module(
     extra: dict[str, ModuleResult] = {}
 
     if qid == "Q1":
-        res = run_q1(annual_hist, assumptions_phase1, {**selection, "mode": "HIST"}, run_id)
+        res = run_q1(
+            annual_hist,
+            assumptions_phase1,
+            {**selection, "mode": "HIST"},
+            run_id,
+            hourly_by_country_year=hourly_hist_map,
+        )
         return res, extra
     if qid == "Q2":
         res = run_q2(annual_hist, assumptions_phase1, {**selection, "mode": "HIST"}, run_id, hourly_by_country_year=hourly_hist_map)
@@ -268,55 +364,119 @@ def _run_hist_module(
         res = run_q3(annual_hist, hourly_hist_map, assumptions_phase1, {**selection, "mode": "HIST"}, run_id)
         return res, extra
     if qid == "Q4":
-        country = str(selection.get("country", "FR"))
-        year = int(selection.get("year", max(_selection_years(selection, annual_hist))))
-        key = (country, year)
-        if key not in hourly_hist_map:
-            raise ValueError(f"Missing historical hourly data for {country}-{year}.")
-        hourly = hourly_hist_map[key]
-        common_sel = {
-            **selection,
-            "country": country,
-            "year": year,
-            "mode": "HIST",
-            "scenario_id": None,
-            "horizon_year": year,
-        }
-        res = run_q4(hourly, assumptions_phase1, common_sel, run_id, dispatch_mode="SURPLUS_FIRST")
-        extra["HIST_PRICE_ARBITRAGE_SIMPLE"] = run_q4(
-            hourly,
-            assumptions_phase1,
-            common_sel,
-            f"{run_id}_HIST_PRICE",
-            dispatch_mode="PRICE_ARBITRAGE_SIMPLE",
+        countries = _selection_countries(selection, annual_hist)
+        candidate_years = _selection_years(selection, annual_hist)
+        preferred_year = int(selection.get("year", max(candidate_years) if candidate_years else 2024))
+
+        hist_runs: list[ModuleResult] = []
+        mode_price_runs: list[ModuleResult] = []
+        mode_pv_runs: list[ModuleResult] = []
+        for country in countries:
+            year = _pick_country_year(country, preferred_year, candidate_years, hourly_hist_map)
+            if year is None:
+                continue
+            hourly = hourly_hist_map[(country, year)]
+            common_sel = {
+                **selection,
+                "country": country,
+                "year": int(year),
+                "mode": "HIST",
+                "scenario_id": None,
+                "horizon_year": int(year),
+            }
+            hist_runs.append(run_q4(hourly, assumptions_phase1, common_sel, f"{run_id}_{country}", dispatch_mode="SURPLUS_FIRST"))
+            mode_price_runs.append(
+                run_q4(
+                    hourly,
+                    assumptions_phase1,
+                    common_sel,
+                    f"{run_id}_{country}_HIST_PRICE",
+                    dispatch_mode="PRICE_ARBITRAGE_SIMPLE",
+                )
+            )
+            mode_pv_runs.append(
+                run_q4(
+                    hourly,
+                    assumptions_phase1,
+                    common_sel,
+                    f"{run_id}_{country}_HIST_PV",
+                    dispatch_mode="PV_COLOCATED",
+                )
+            )
+        if not hist_runs:
+            raise ValueError("Missing historical hourly data for selected countries in Q4.")
+        res = _merge_module_results(
+            hist_runs,
+            module_id="Q4",
+            run_id=run_id,
+            selection={**selection, "countries": countries},
+            mode="HIST",
+            scenario_id=None,
+            horizon_year=preferred_year,
+            narrative_title="Q4 historique",
         )
-        extra["HIST_PV_COLOCATED"] = run_q4(
-            hourly,
-            assumptions_phase1,
-            common_sel,
-            f"{run_id}_HIST_PV",
-            dispatch_mode="PV_COLOCATED",
+        extra["HIST_PRICE_ARBITRAGE_SIMPLE"] = _merge_module_results(
+            mode_price_runs,
+            module_id="Q4",
+            run_id=f"{run_id}_HIST_PRICE",
+            selection={**selection, "countries": countries, "dispatch_mode": "PRICE_ARBITRAGE_SIMPLE"},
+            mode="HIST",
+            scenario_id=None,
+            horizon_year=preferred_year,
+            narrative_title="Q4 historique mode PRICE_ARBITRAGE_SIMPLE",
+        )
+        extra["HIST_PV_COLOCATED"] = _merge_module_results(
+            mode_pv_runs,
+            module_id="Q4",
+            run_id=f"{run_id}_HIST_PV",
+            selection={**selection, "countries": countries, "dispatch_mode": "PV_COLOCATED"},
+            mode="HIST",
+            scenario_id=None,
+            horizon_year=preferred_year,
+            narrative_title="Q4 historique mode PV_COLOCATED",
         )
         return res, extra
     if qid == "Q5":
-        country = str(selection.get("country", "FR"))
+        countries = _selection_countries(selection, annual_hist)
         years = sorted(set([int(y) for y in selection.get("years", _selection_years(selection, annual_hist))]))
-        hourly = _concat_hourly(country, years, hourly_hist_map)
-        if hourly.empty:
-            raise ValueError(f"Missing historical hourly data for {country} and years={years}.")
-        res = run_q5(
-            hourly_df=hourly,
-            assumptions_df=assumptions_phase1,
-            selection={
-                "country": country,
-                "marginal_tech": selection.get("marginal_tech", "CCGT"),
-                "mode": "HIST",
-            },
+        runs: list[ModuleResult] = []
+        tech_map = selection.get("marginal_tech_by_country", {})
+        for country in countries:
+            hourly = _concat_hourly(country, years, hourly_hist_map)
+            if hourly.empty:
+                continue
+            marginal_tech = (
+                str(tech_map.get(country, selection.get("marginal_tech", "CCGT"))).upper()
+                if isinstance(tech_map, dict)
+                else str(selection.get("marginal_tech", "CCGT")).upper()
+            )
+            runs.append(
+                run_q5(
+                    hourly_df=hourly,
+                    assumptions_df=assumptions_phase1,
+                    selection={
+                        "country": country,
+                        "marginal_tech": marginal_tech,
+                        "mode": "HIST",
+                    },
+                    run_id=f"{run_id}_{country}",
+                    commodity_daily=selection.get("commodity_daily"),
+                    ttl_target_eur_mwh=_safe_float(selection.get("ttl_target_eur_mwh"), 120.0),
+                    gas_override_eur_mwh_th=selection.get("gas_override_eur_mwh_th"),
+                    co2_override_eur_t=selection.get("co2_override_eur_t"),
+                )
+            )
+        if not runs:
+            raise ValueError(f"Missing historical hourly data for countries={countries} and years={years}.")
+        res = _merge_module_results(
+            runs,
+            module_id="Q5",
             run_id=run_id,
-            commodity_daily=selection.get("commodity_daily"),
-            ttl_target_eur_mwh=_safe_float(selection.get("ttl_target_eur_mwh"), 120.0),
-            gas_override_eur_mwh_th=selection.get("gas_override_eur_mwh_th"),
-            co2_override_eur_t=selection.get("co2_override_eur_t"),
+            selection={**selection, "countries": countries},
+            mode="HIST",
+            scenario_id=None,
+            horizon_year=max(years) if years else None,
+            narrative_title="Q5 historique",
         )
         return res, extra
 
@@ -354,7 +514,8 @@ def _run_scen_module(
             "years": scenario_years,
         }
         if qid == "Q1":
-            return run_q1(annual_scen, assumptions_phase1, scen_sel, run_id)
+            hourly_map = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
+            return run_q1(annual_scen, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map)
         if qid == "Q2":
             hourly_map = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
             return run_q2(annual_scen, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map)
@@ -367,50 +528,85 @@ def _run_scen_module(
         return run_q3(annual_scen, hourly_map, assumptions_q3, scen_sel, run_id)
 
     if qid == "Q4":
-        country = str(selection.get("country", "FR"))
-        year = int(selection.get("horizon_year", max(scenario_years) if scenario_years else 2040))
-        try:
-            hourly = load_scenario_hourly(scenario_id, country, year)
-        except Exception:
+        year = int(selection.get("horizon_year", max(scenario_years) if scenario_years else max(DEFAULT_SCENARIO_YEARS)))
+        runs: list[ModuleResult] = []
+        for country in countries:
+            try:
+                hourly = load_scenario_hourly(scenario_id, country, year)
+            except Exception:
+                continue
+            scen_sel = {
+                **selection,
+                "country": country,
+                "year": year,
+                "mode": "SCEN",
+                "scenario_id": scenario_id,
+                "horizon_year": year,
+            }
+            runs.append(run_q4(hourly, assumptions_phase1, scen_sel, f"{run_id}_{country}", dispatch_mode="SURPLUS_FIRST"))
+        if not runs:
             return None
-        scen_sel = {
-            **selection,
-            "country": country,
-            "year": year,
-            "mode": "SCEN",
-            "scenario_id": scenario_id,
-            "horizon_year": year,
-        }
-        return run_q4(hourly, assumptions_phase1, scen_sel, run_id, dispatch_mode="SURPLUS_FIRST")
+        return _merge_module_results(
+            runs,
+            module_id="Q4",
+            run_id=run_id,
+            selection={**selection, "countries": countries},
+            mode="SCEN",
+            scenario_id=scenario_id,
+            horizon_year=year,
+            narrative_title=f"Q4 scenario {scenario_id}",
+        )
 
     if qid == "Q5":
-        country = str(selection.get("country", "FR"))
         years = sorted(set([int(y) for y in scenario_years]))
-        if scenario_id == "HIGH_BOTH":
-            base_sid = "BASE"
-            hourly_map = _load_scenario_hourly_map(base_sid, [country], years)
-            hourly = _concat_hourly(country, years, hourly_map)
-            commodity = _phase2_commodity_daily_high_both(assumptions_phase2, country, years)
-        else:
-            hourly_map = _load_scenario_hourly_map(scenario_id, [country], years)
-            hourly = _concat_hourly(country, years, hourly_map)
-            commodity = _phase2_commodity_daily(assumptions_phase2, scenario_id, country, years)
-        if hourly.empty:
+        runs: list[ModuleResult] = []
+        tech_map = selection.get("marginal_tech_by_country", {})
+        for country in countries:
+            if scenario_id == "HIGH_BOTH":
+                base_sid = "BASE"
+                hourly_map = _load_scenario_hourly_map(base_sid, [country], years)
+                hourly = _concat_hourly(country, years, hourly_map)
+                commodity = _phase2_commodity_daily_high_both(assumptions_phase2, country, years)
+            else:
+                hourly_map = _load_scenario_hourly_map(scenario_id, [country], years)
+                hourly = _concat_hourly(country, years, hourly_map)
+                commodity = _phase2_commodity_daily(assumptions_phase2, scenario_id, country, years)
+            if hourly.empty:
+                continue
+            marginal_tech = (
+                str(tech_map.get(country, selection.get("marginal_tech", "CCGT"))).upper()
+                if isinstance(tech_map, dict)
+                else str(selection.get("marginal_tech", "CCGT")).upper()
+            )
+            scen_sel = {
+                **selection,
+                "country": country,
+                "marginal_tech": marginal_tech,
+                "mode": "SCEN",
+                "scenario_id": scenario_id,
+                "horizon_year": max(years) if years else None,
+            }
+            runs.append(
+                run_q5(
+                    hourly_df=hourly,
+                    assumptions_df=assumptions_phase1,
+                    selection=scen_sel,
+                    run_id=f"{run_id}_{country}",
+                    commodity_daily=commodity,
+                    ttl_target_eur_mwh=_safe_float(selection.get("ttl_target_eur_mwh"), 120.0),
+                )
+            )
+        if not runs:
             return None
-        scen_sel = {
-            **selection,
-            "country": country,
-            "mode": "SCEN",
-            "scenario_id": scenario_id,
-            "horizon_year": max(years) if years else None,
-        }
-        return run_q5(
-            hourly_df=hourly,
-            assumptions_df=assumptions_phase1,
-            selection=scen_sel,
+        return _merge_module_results(
+            runs,
+            module_id="Q5",
             run_id=run_id,
-            commodity_daily=commodity,
-            ttl_target_eur_mwh=_safe_float(selection.get("ttl_target_eur_mwh"), 120.0),
+            selection={**selection, "countries": countries},
+            mode="SCEN",
+            scenario_id=scenario_id,
+            horizon_year=max(years) if years else None,
+            narrative_title=f"Q5 scenario {scenario_id}",
         )
 
     return None
@@ -530,40 +726,55 @@ def _q4_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
     rows: list[dict[str, Any]] = []
     hist = hist_result.tables.get("Q4_sizing_summary", pd.DataFrame())
     if not hist.empty:
-        hrow = hist.iloc[0]
+        req_cols = {"country", "far_after", "surplus_unabs_energy_after", "pv_capture_price_after"}
+        if not req_cols.issubset(set(hist.columns)):
+            return pd.DataFrame()
         for sid, res in scen_results.items():
             scen = res.tables.get("Q4_sizing_summary", pd.DataFrame())
             if scen.empty:
                 continue
-            srow = scen.iloc[0]
-            for metric in ["far_after", "surplus_unabs_energy_after", "pv_capture_price_after"]:
-                h = _safe_float(hrow.get(metric), np.nan)
-                s = _safe_float(srow.get(metric), np.nan)
+            if not req_cols.issubset(set(scen.columns)):
+                continue
+            merged = hist[["country", "far_after", "surplus_unabs_energy_after", "pv_capture_price_after"]].merge(
+                scen[["country", "far_after", "surplus_unabs_energy_after", "pv_capture_price_after"]],
+                on="country",
+                how="inner",
+                suffixes=("_hist", "_scen"),
+            )
+            for _, r in merged.iterrows():
+                for metric in ["far_after", "surplus_unabs_energy_after", "pv_capture_price_after"]:
+                    h = _safe_float(r.get(f"{metric}_hist"), np.nan)
+                    s = _safe_float(r.get(f"{metric}_scen"), np.nan)
+                    rows.append(
+                        {
+                            "country": str(r.get("country", "")),
+                            "scenario_id": sid,
+                            "metric": metric,
+                            "hist_value": h,
+                            "scen_value": s,
+                            "delta": s - h if np.isfinite(h) and np.isfinite(s) else np.nan,
+                        }
+                    )
+        for mode_key, mode_res in extra_hist.items():
+            mode_summary = mode_res.tables.get("Q4_sizing_summary", pd.DataFrame())
+            if mode_summary.empty:
+                continue
+            if not {"country", "far_after"}.issubset(set(mode_summary.columns)):
+                continue
+            merged_mode = hist[["country", "far_after"]].merge(mode_summary[["country", "far_after"]], on="country", how="inner", suffixes=("_hist", "_mode"))
+            for _, r in merged_mode.iterrows():
+                h = _safe_float(r.get("far_after_hist"), np.nan)
+                s = _safe_float(r.get("far_after_mode"), np.nan)
                 rows.append(
                     {
-                        "country": str(hrow.get("country", "")),
-                        "scenario_id": sid,
-                        "metric": metric,
+                        "country": str(r.get("country", "")),
+                        "scenario_id": mode_key,
+                        "metric": "far_after",
                         "hist_value": h,
                         "scen_value": s,
                         "delta": s - h if np.isfinite(h) and np.isfinite(s) else np.nan,
                     }
                 )
-        for mode_key, mode_res in extra_hist.items():
-            mode_summary = mode_res.tables.get("Q4_sizing_summary", pd.DataFrame())
-            if mode_summary.empty:
-                continue
-            mrow = mode_summary.iloc[0]
-            rows.append(
-                {
-                    "country": str(mrow.get("country", "")),
-                    "scenario_id": mode_key,
-                    "metric": "far_after",
-                    "hist_value": _safe_float(hrow.get("far_after"), np.nan),
-                    "scen_value": _safe_float(mrow.get("far_after"), np.nan),
-                    "delta": _safe_float(mrow.get("far_after"), np.nan) - _safe_float(hrow.get("far_after"), np.nan),
-                }
-            )
     return pd.DataFrame(rows)
 
 
@@ -572,25 +783,36 @@ def _q5_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
     hist = hist_result.tables.get("Q5_summary", pd.DataFrame())
     if hist.empty:
         return pd.DataFrame()
-    hrow = hist.iloc[0]
+    metric_col = "co2_required_base_non_negative" if "co2_required_base_non_negative" in hist.columns else "co2_required_base"
+    req_cols = {"country", "ttl_obs", "tca_q95", metric_col}
+    if not req_cols.issubset(set(hist.columns)):
+        return pd.DataFrame()
     for sid, res in scen_results.items():
         scen = res.tables.get("Q5_summary", pd.DataFrame())
         if scen.empty:
             continue
-        srow = scen.iloc[0]
-        for metric in ["ttl_obs", "tca_q95", "co2_required_base"]:
-            h = _safe_float(hrow.get(metric), np.nan)
-            s = _safe_float(srow.get(metric), np.nan)
-            rows.append(
-                {
-                    "country": str(hrow.get("country", "")),
-                    "scenario_id": sid,
-                    "metric": metric,
-                    "hist_value": h,
-                    "scen_value": s,
-                    "delta": s - h if np.isfinite(h) and np.isfinite(s) else np.nan,
-                }
-            )
+        if not req_cols.issubset(set(scen.columns)):
+            continue
+        merged = hist[["country", "ttl_obs", "tca_q95", metric_col]].merge(
+            scen[["country", "ttl_obs", "tca_q95", metric_col]],
+            on="country",
+            how="inner",
+            suffixes=("_hist", "_scen"),
+        )
+        for _, r in merged.iterrows():
+            for metric in ["ttl_obs", "tca_q95", metric_col]:
+                h = _safe_float(r.get(f"{metric}_hist"), np.nan)
+                s = _safe_float(r.get(f"{metric}_scen"), np.nan)
+                rows.append(
+                    {
+                        "country": str(r.get("country", "")),
+                        "scenario_id": sid,
+                        "metric": metric,
+                        "hist_value": h,
+                        "scen_value": s,
+                        "delta": s - h if np.isfinite(h) and np.isfinite(s) else np.nan,
+                    }
+                )
     return pd.DataFrame(rows)
 
 
@@ -755,16 +977,34 @@ def _evaluate_test_ledger(
                     if out.empty:
                         _append_test_row(rows, spec, "FAIL", "", "summary non vide", "Q5 historique absent.")
                     else:
-                        row = out.iloc[0]
-                        ok = np.isfinite(_safe_float(row.get("ttl_obs"))) and np.isfinite(_safe_float(row.get("tca_q95")))
-                        _append_test_row(rows, spec, "PASS" if ok else "WARN", f"ttl={row.get('ttl_obs')}, tca={row.get('tca_q95')}", "ttl/tca finis", "L'ancre thermique est quantifiable.")
+                        ttl = pd.to_numeric(out["ttl_obs"], errors="coerce") if "ttl_obs" in out.columns else pd.Series(dtype=float)
+                        tca = pd.to_numeric(out["tca_q95"], errors="coerce") if "tca_q95" in out.columns else pd.Series(dtype=float)
+                        share = float((np.isfinite(ttl) & np.isfinite(tca)).mean()) if len(out) else 0.0
+                        status = "PASS" if share >= 0.8 else ("WARN" if share > 0 else "FAIL")
+                        _append_test_row(
+                            rows,
+                            spec,
+                            status,
+                            f"share_fini={share:.2%}",
+                            ">=80% lignes ttl/tca finies",
+                            "L'ancre thermique est quantifiable sur la majorite des pays." if status == "PASS" else "Ancre thermique partielle sur le scope courant.",
+                        )
                 else:
                     if out.empty:
                         _append_test_row(rows, spec, "FAIL", "", "summary non vide", "Q5 historique absent.")
                     else:
-                        row = out.iloc[0]
-                        ok = _safe_float(row.get("dTCA_dCO2"), -1.0) > 0 and _safe_float(row.get("dTCA_dGas"), -1.0) > 0
-                        _append_test_row(rows, spec, "PASS" if ok else "FAIL", f"dCO2={row.get('dTCA_dCO2')}, dGas={row.get('dTCA_dGas')}", ">0", "Sensibilites analytiques coherentes.")
+                        dco2 = pd.to_numeric(out["dTCA_dCO2"], errors="coerce") if "dTCA_dCO2" in out.columns else pd.Series(dtype=float)
+                        dgas = pd.to_numeric(out["dTCA_dGas"], errors="coerce") if "dTCA_dGas" in out.columns else pd.Series(dtype=float)
+                        ok_share = float(((dco2 > 0) & (dgas > 0)).mean()) if len(out) else 0.0
+                        status = "PASS" if ok_share == 1.0 else ("WARN" if ok_share > 0 else "FAIL")
+                        _append_test_row(
+                            rows,
+                            spec,
+                            status,
+                            f"share_positive={ok_share:.2%}",
+                            "100% lignes >0",
+                            "Sensibilites analytiques globalement coherentes.",
+                        )
         else:
             if not scen_results:
                 _append_test_row(rows, spec, "NON_TESTABLE", "", "scenario runs disponibles", "Aucun scenario exploitable.")
@@ -776,8 +1016,80 @@ def _evaluate_test_ledger(
                         ok = not summary.empty
                         _append_test_row(rows, spec, "PASS" if ok else "FAIL", int(len(summary)), ">0 lignes", "La bascule projetee est produite.", sid)
                     elif spec.test_id == "Q1-S-02":
-                        val = int(summary["bascule_year_market"].notna().sum()) if not summary.empty else 0
-                        _append_test_row(rows, spec, "PASS" if val > 0 else "WARN", val, ">=1 bascule", "Le scenario fournit une variation exploitable.", sid)
+                        if sid == "BASE":
+                            _append_test_row(
+                                rows,
+                                spec,
+                                "NON_TESTABLE",
+                                "reference_scenario",
+                                "scenario non-BASE",
+                                "BASE sert de reference pour le calcul de sensibilite.",
+                                sid,
+                            )
+                            continue
+
+                        base_res = scen_results.get("BASE")
+                        base_summary = base_res.tables.get("Q1_country_summary", pd.DataFrame()) if base_res is not None else pd.DataFrame()
+                        if base_summary.empty or summary.empty:
+                            _append_test_row(
+                                rows,
+                                spec,
+                                "NON_TESTABLE",
+                                "",
+                                "delta vs BASE disponible",
+                                "Impossible d'evaluer la sensibilite sans BASE et scenario courant.",
+                                sid,
+                            )
+                            continue
+
+                        merged = base_summary[["country", "bascule_year_market"]].merge(
+                            summary[["country", "bascule_year_market"]],
+                            on="country",
+                            how="outer",
+                            suffixes=("_base", "_scen"),
+                        )
+                        n_countries = int(len(merged))
+                        if n_countries == 0:
+                            _append_test_row(
+                                rows,
+                                spec,
+                                "NON_TESTABLE",
+                                "n_countries=0",
+                                "n_countries>0",
+                                "Aucun pays commun pour calculer delta vs BASE.",
+                                sid,
+                            )
+                            continue
+
+                        base_vals = pd.to_numeric(merged["bascule_year_market_base"], errors="coerce")
+                        scen_vals = pd.to_numeric(merged["bascule_year_market_scen"], errors="coerce")
+                        finite_mask = np.isfinite(base_vals) & np.isfinite(scen_vals)
+                        finite_share = float(finite_mask.mean())
+                        deltas = (scen_vals - base_vals).where(finite_mask, np.nan)
+                        nonzero_share = float((deltas.abs().fillna(0.0) > 0.0).mean())
+
+                        if finite_share == 0.0:
+                            status = "NON_TESTABLE"
+                            interp = "Aucun delta defini vs BASE (finite_share=0)."
+                        elif nonzero_share == 0.0:
+                            status = "WARN"
+                            interp = "Delta vs BASE defini mais nul sur tous les pays."
+                        elif nonzero_share >= 0.20:
+                            status = "PASS"
+                            interp = "Sensibilite scenario observable vs BASE."
+                        else:
+                            status = "WARN"
+                            interp = "Sensibilite faible: deltas non nuls sur moins de 20% des pays."
+
+                        _append_test_row(
+                            rows,
+                            spec,
+                            status,
+                            f"finite_share={finite_share:.2%}; nonzero_share={nonzero_share:.2%}; n_countries={n_countries}",
+                            "nonzero_share >= 20% (scenarios non-BASE)",
+                            interp,
+                            sid,
+                        )
                     else:
                         panel = scen_res.tables.get("Q1_year_panel", pd.DataFrame())
                         if panel.empty or "regime_coherence" not in panel.columns:
@@ -912,9 +1224,18 @@ def _evaluate_test_ledger(
                         if out.empty:
                             _append_test_row(rows, spec, "NON_TESTABLE", "", "summary non vide", "Pas de sortie scenario.", sid)
                         else:
-                            row = out.iloc[0]
-                            val = _safe_float(row.get("pv_capture_price_after"), np.nan)
-                            _append_test_row(rows, spec, "PASS" if np.isfinite(val) else "WARN", val, "capture apres finite", "Sensibilite valeur exploitable.", sid)
+                            vals = pd.to_numeric(out["pv_capture_price_after"], errors="coerce") if "pv_capture_price_after" in out.columns else pd.Series(dtype=float)
+                            share_finite = float(np.isfinite(vals).mean())
+                            status = "PASS" if share_finite >= 0.8 else ("WARN" if share_finite > 0 else "NON_TESTABLE")
+                            _append_test_row(
+                                rows,
+                                spec,
+                                status,
+                                f"share_finite={share_finite:.2%}",
+                                ">=80% valeurs finies",
+                                "Sensibilite valeur exploitable sur le panel." if status == "PASS" else "Sensibilite valeur partielle/non disponible.",
+                                sid,
+                            )
                 elif qid == "Q5":
                     out = scen_res.tables.get("Q5_summary", pd.DataFrame())
                     if spec.test_id == "Q5-S-01":
@@ -923,9 +1244,23 @@ def _evaluate_test_ledger(
                         if out.empty:
                             _append_test_row(rows, spec, "NON_TESTABLE", "", "co2_required present", "Sortie scenario absente.", sid)
                         else:
-                            row = out.iloc[0]
-                            v = _safe_float(row.get("co2_required_base"), np.nan)
-                            _append_test_row(rows, spec, "PASS" if np.isfinite(v) else "WARN", v, "valeur finie", "CO2 requis interpretable.", sid)
+                            if "co2_required_base_non_negative" in out.columns:
+                                vals = pd.to_numeric(out["co2_required_base_non_negative"], errors="coerce")
+                            elif "co2_required_base" in out.columns:
+                                vals = pd.to_numeric(out["co2_required_base"], errors="coerce")
+                            else:
+                                vals = pd.Series(dtype=float)
+                            share_finite = float(np.isfinite(vals).mean())
+                            status = "PASS" if share_finite >= 0.8 else ("WARN" if share_finite > 0 else "NON_TESTABLE")
+                            _append_test_row(
+                                rows,
+                                spec,
+                                status,
+                                f"share_finite={share_finite:.2%}",
+                                ">=80% valeurs finies",
+                                "CO2 requis interpretable sur le panel." if status == "PASS" else "CO2 requis partiel/non interpretable.",
+                                sid,
+                            )
     return pd.DataFrame(rows)
 
 
@@ -1035,6 +1370,35 @@ def run_question_bundle(
                 "scenario_id": "",
             }
         )
+
+        if qid == "Q1":
+            s02 = ledger[
+                (ledger["test_id"].astype(str) == "Q1-S-02")
+                & (ledger["mode"].astype(str) == "SCEN")
+                & (ledger["scenario_id"].astype(str) != "BASE")
+            ].copy()
+            if not s02.empty:
+                statuses = set(s02["status"].astype(str))
+                if statuses.issubset({"WARN", "NON_TESTABLE"}):
+                    checks.append(
+                        {
+                            "status": "WARN",
+                            "code": "Q1_S02_NO_SENSITIVITY",
+                            "message": "Q1-S-02: aucune sensibilite scenario non-BASE clairement observable vs BASE.",
+                            "scope": "BUNDLE",
+                            "scenario_id": "",
+                        }
+                    )
+                else:
+                    checks.append(
+                        {
+                            "status": "PASS",
+                            "code": "Q1_S02_NO_SENSITIVITY",
+                            "message": "Q1-S-02: au moins un scenario non-BASE montre une sensibilite observable.",
+                            "scope": "BUNDLE",
+                            "scenario_id": "",
+                        }
+                    )
 
     warnings.extend(hist_result.warnings)
     for sid, scen_res in scen_results.items():

@@ -9,9 +9,11 @@ import streamlit as st
 _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
 try:
     from app.page_utils import (
+        available_phase2_years,
         assumptions_editor_for,
         build_bundle_hash,
         country_year_selector,
+        default_analysis_scenario_years,
         load_phase2_assumptions_table,
         run_question_bundle_cached,
     )
@@ -23,7 +25,9 @@ except Exception as exc:  # pragma: no cover
 
     assumptions_editor_for = _page_utils_unavailable  # type: ignore[assignment]
     build_bundle_hash = _page_utils_unavailable  # type: ignore[assignment]
+    available_phase2_years = _page_utils_unavailable  # type: ignore[assignment]
     country_year_selector = _page_utils_unavailable  # type: ignore[assignment]
+    default_analysis_scenario_years = _page_utils_unavailable  # type: ignore[assignment]
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
 from app.ui_components import (
@@ -124,12 +128,19 @@ def render() -> None:
     assumptions_phase2 = load_phase2_assumptions_table()
     scenario_options = sorted(set(assumptions_phase2["scenario_id"].dropna().astype(str).tolist()))
     default_scen = [s for s in get_default_scenarios("Q4") if s in scenario_options]
+    scenario_year_options = available_phase2_years(assumptions_phase2, scenario_ids=scenario_options, countries=country_options)
+    default_scenario_years = default_analysis_scenario_years(scenario_year_options)
+    default_horizon = max(default_scenario_years) if default_scenario_years else max(scenario_year_options) if scenario_year_options else 2035
 
     with st.form("q4_bundle_form"):
         selected_countries = st.multiselect("Pays", country_options, default=[default_country])
         year = st.selectbox("Annee historique de reference", year_options, index=len(year_options) - 1)
         objective = st.selectbox("Objectif sizing", ["FAR_TARGET", "SURPLUS_UNABS_TARGET"])
-        horizon_year = st.selectbox("Horizon prospectif", [2030, 2040], index=1)
+        horizon_year = st.selectbox(
+            "Horizon prospectif",
+            scenario_year_options or [default_horizon],
+            index=(scenario_year_options.index(default_horizon) if scenario_year_options and default_horizon in scenario_year_options else 0),
+        )
         scenario_ids = st.multiselect("Scenarios prospectifs", scenario_options, default=default_scen or scenario_options[:2])
         with st.expander("Parametres avances (grilles Q4)", expanded=False):
             power_grid = st.multiselect("Puissances (MW)", DEFAULT_POWER_GRID, default=DEFAULT_POWER_GRID)

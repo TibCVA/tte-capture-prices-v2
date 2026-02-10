@@ -9,8 +9,10 @@ import streamlit as st
 _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
 try:
     from app.page_utils import (
+        available_phase2_years,
         assumptions_editor_for,
         build_bundle_hash,
+        default_analysis_scenario_years,
         load_annual_metrics,
         load_phase2_assumptions_table,
         run_question_bundle_cached,
@@ -26,6 +28,8 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
 
     assumptions_editor_for = _page_utils_unavailable  # type: ignore[assignment]
     build_bundle_hash = _page_utils_unavailable  # type: ignore[assignment]
+    available_phase2_years = _page_utils_unavailable  # type: ignore[assignment]
+    default_analysis_scenario_years = _page_utils_unavailable  # type: ignore[assignment]
     load_annual_metrics = _page_utils_unavailable  # type: ignore[assignment]
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
@@ -130,11 +134,16 @@ def render() -> None:
     assumptions_phase2 = load_phase2_assumptions_table()
     scenario_options = sorted(set(assumptions_phase2["scenario_id"].dropna().astype(str).tolist()))
     default_scen = [s for s in get_default_scenarios("Q1") if s in scenario_options]
+    scenario_year_options = available_phase2_years(assumptions_phase2, scenario_ids=scenario_options, countries=countries)
+    default_scenario_years = default_analysis_scenario_years(scenario_year_options)
+    if not scenario_year_options:
+        scenario_year_options = default_scenario_years
 
     with st.form("q1_bundle_form"):
         selected_countries = st.multiselect("Pays", countries, default=countries)
         years = st.slider("Periode historique", min_value=year_min, max_value=year_max, value=(year_min, year_max))
         scenario_ids = st.multiselect("Scenarios prospectifs", scenario_options, default=default_scen or scenario_options[:2])
+        scenario_years = st.multiselect("Annees prospectives", scenario_year_options, default=default_scenario_years)
         force_recompute = st.checkbox("Forcer recalcul complet (ignore cache bundle)", value=False)
         run_submit = st.form_submit_button("Lancer l'analyse complete Q1", type="primary")
 
@@ -143,7 +152,7 @@ def render() -> None:
             "countries": selected_countries,
             "years": list(range(years[0], years[1] + 1)),
             "scenario_ids": scenario_ids,
-            "scenario_years": [2030, 2040],
+            "scenario_years": scenario_years or default_scenario_years,
         }
         bundle_hash = build_bundle_hash("Q1", selection, assumptions_phase1, assumptions_phase2)
         cache_bust = datetime.utcnow().isoformat() if force_recompute else ""
@@ -183,6 +192,14 @@ def render() -> None:
         render_robustness_panel(bundle.test_ledger)
         if not hist_summary.empty:
             st.dataframe(hist_summary, use_container_width=True)
+        rule_def = bundle.hist_result.tables.get("Q1_rule_definition", pd.DataFrame())
+        if not rule_def.empty:
+            st.markdown("### Regle de bascule (definition)")
+            st.dataframe(rule_def, use_container_width=True)
+        before_after = bundle.hist_result.tables.get("Q1_before_after_bascule", pd.DataFrame())
+        if not before_after.empty:
+            st.markdown("### Avant / apres bascule")
+            st.dataframe(before_after, use_container_width=True)
         render_interpretation("La bascule est un diagnostic multi-indicateurs. Un seul signal ne suffit pas a conclure.")
 
     with tab_hist:
@@ -224,6 +241,18 @@ def render() -> None:
     with tab_tech:
         st.markdown("## Checks & exports")
         show_checks_summary(bundle.checks)
+        rule_apply = bundle.hist_result.tables.get("Q1_rule_application", pd.DataFrame())
+        if not rule_apply.empty:
+            st.markdown("### Application de la regle par pays-annee")
+            st.dataframe(rule_apply, use_container_width=True)
+        scope_audit = bundle.hist_result.tables.get("Q1_scope_audit", pd.DataFrame())
+        if not scope_audit.empty:
+            st.markdown("### Audit de perimetre must-run / NRL")
+            st.dataframe(scope_audit, use_container_width=True)
+        ir_diag = bundle.hist_result.tables.get("Q1_ir_diagnostics", pd.DataFrame())
+        if not ir_diag.empty:
+            st.markdown("### Diagnostics IR")
+            st.dataframe(ir_diag, use_container_width=True)
         if bundle.warnings:
             st.warning(" | ".join(bundle.warnings))
         st.markdown("### Exports")

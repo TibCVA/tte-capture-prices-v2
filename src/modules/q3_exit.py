@@ -15,6 +15,8 @@ Q3_PARAMS = [
     "trend_window_years",
     "require_recent_stage2",
     "stage2_recent_h_negative_min",
+    "stage2_recent_h_negative_min_scen",
+    "stage2_recent_sr_energy_min_scen",
     "trend_h_negative_max",
     "trend_capture_ratio_min",
     "sr_energy_target",
@@ -54,7 +56,11 @@ def run_q3(
     }
     window = int(params.get("trend_window_years", 3))
     require_recent_stage2 = int(params.get("require_recent_stage2", 1)) == 1
-    recent_hneg_min = float(params.get("stage2_recent_h_negative_min", 200.0))
+    recent_hneg_min_hist = float(params.get("stage2_recent_h_negative_min", 200.0))
+    recent_hneg_min_scen = float(params.get("stage2_recent_h_negative_min_scen", 80.0))
+    recent_sr_min_scen = float(params.get("stage2_recent_sr_energy_min_scen", 0.02))
+    is_scen = str(selection.get("mode", "HIST")).upper() == "SCEN"
+    recent_hneg_min = recent_hneg_min_scen if is_scen else recent_hneg_min_hist
     trend_hneg_max = float(params.get("trend_h_negative_max", -10.0))
     trend_cap_min = float(params.get("trend_capture_ratio_min", 0.0))
     sr_target = float(params.get("sr_energy_target", 0.01))
@@ -84,7 +90,12 @@ def run_q3(
         trend_sr = robust_linreg(tail["year"], tail["sr_energy"])["slope"]
         trend_far = robust_linreg(tail["year"], tail["far_energy"])["slope"]
 
-        has_recent_stage2 = float(tail["h_negative_obs"].max()) >= recent_hneg_min
+        recent_hneg = float(pd.to_numeric(tail["h_negative_obs"], errors="coerce").max())
+        recent_sr = float(pd.to_numeric(tail["sr_energy"], errors="coerce").max())
+        if is_scen:
+            has_recent_stage2 = (recent_hneg >= recent_hneg_min) or (recent_sr >= recent_sr_min_scen)
+        else:
+            has_recent_stage2 = recent_hneg >= recent_hneg_min
         if require_recent_stage2 and not has_recent_stage2:
             status = "hors_scope_stage2"
         elif trend_hneg > 0 and trend_cap < 0:

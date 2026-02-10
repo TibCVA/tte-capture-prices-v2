@@ -19,7 +19,8 @@ def test_q2_fragile_when_low_n(annual_panel_fixture):
     df = annual_panel_fixture[annual_panel_fixture["year"] >= 2024].copy()
     res = run_q2(df, assumptions, {"countries": ["FR"]}, "test")
     if not res.tables["Q2_country_slopes"].empty:
-        assert (res.tables["Q2_country_slopes"]["robust_flag"] == "FRAGILE").all()
+        allowed = {"FRAGILE", "NON_TESTABLE"}
+        assert set(res.tables["Q2_country_slopes"]["robust_flag"].astype(str).unique()).issubset(allowed)
 
 
 def test_q2_fallback_axis_sr_energy(annual_panel_fixture):

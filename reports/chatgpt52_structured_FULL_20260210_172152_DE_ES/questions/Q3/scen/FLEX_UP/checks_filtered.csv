@@ -1,0 +1,4 @@
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q3_FAR_ALREADY_REACHED,DE: FAR cible deja atteinte.,Q3,DE,False
+INFO,Q3_FAR_ALREADY_REACHED,ES: FAR cible deja atteinte.,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q3,,True

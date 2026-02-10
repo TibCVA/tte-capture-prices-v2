@@ -63,6 +63,12 @@ def _co2_required(
     return (ttl_target - alpha - base_q95_without_co2) / dco2
 
 
+def _co2_required_non_negative(value: float) -> float:
+    if not np.isfinite(value):
+        return np.nan
+    return max(0.0, float(value))
+
+
 def run_q5(
     hourly_df: pd.DataFrame,
     assumptions_df: pd.DataFrame,
@@ -97,6 +103,8 @@ def run_q5(
                     "ttl_target": ttl_target_eur_mwh,
                     "co2_required_base": np.nan,
                     "co2_required_gas_override": np.nan,
+                    "co2_required_base_non_negative": np.nan,
+                    "co2_required_gas_override_non_negative": np.nan,
                     "warnings_quality": "missing_commodities",
                 }
             ]
@@ -163,6 +171,8 @@ def run_q5(
     if gas_override_eur_mwh_th is not None and not cd.empty:
         base_override = float((pd.Series(float(gas_override_eur_mwh_th), index=cd.index) / eff + vom).quantile(0.95))
         co2_required_gas_override = _co2_required(target, alpha, base_override, dco2)
+    co2_required_base_non_negative = _co2_required_non_negative(co2_required_base)
+    co2_required_gas_override_non_negative = _co2_required_non_negative(co2_required_gas_override)
 
     checks: list[dict[str, str]] = []
     if not (np.isfinite(dco2) and dco2 > 0):
@@ -173,6 +183,14 @@ def run_q5(
         checks.append({"status": "WARN", "code": "Q5_LOW_CORR_CD", "message": "Relation prix-ancre faible sur regimes C/D (corr<0.2)."})
     if np.isfinite(alpha) and alpha < -20.0:
         checks.append({"status": "WARN", "code": "Q5_ALPHA_NEG", "message": "Alpha tres negatif: techno marginale possiblement inadaptee."})
+    if np.isfinite(co2_required_base) and co2_required_base < 0:
+        checks.append(
+            {
+                "status": "INFO",
+                "code": "Q5_CO2_TARGET_ALREADY_BELOW_BASELINE",
+                "message": "CO2 requis brut negatif: cible TTL deja atteinte sans CO2 additionnel.",
+            }
+        )
     if not checks:
         checks.append({"status": "PASS", "code": "Q5_PASS", "message": "Q5 checks passes."})
 
@@ -191,6 +209,8 @@ def run_q5(
                 "ttl_target": target,
                 "co2_required_base": co2_required_base,
                 "co2_required_gas_override": co2_required_gas_override,
+                "co2_required_base_non_negative": co2_required_base_non_negative,
+                "co2_required_gas_override_non_negative": co2_required_gas_override_non_negative,
                 "warnings_quality": "",
             }
         ]

@@ -95,7 +95,7 @@ _REGISTRY: list[QuestionTestSpec] = [
         scenario_group="DEFAULT",
         title="Effets DEMAND_UP/FLEX_UP/LOW_RIGIDITY",
         what_is_tested="Les leviers scenario modifient la bascule vs BASE.",
-        metric_rule="delta bascule_year_market vs BASE calculable",
+        metric_rule="delta bascule_year_market vs BASE effectivement observable (finite_share/nonzero_share)",
         severity_if_fail="MEDIUM",
     ),
     QuestionTestSpec(
@@ -319,4 +319,3 @@ def get_question_tests(question_id: str, mode: str | None = None) -> list[Questi
 
 def all_tests() -> list[QuestionTestSpec]:
     return list(_REGISTRY)
-

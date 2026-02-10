@@ -93,7 +93,7 @@ def render() -> None:
     )
 
     st.markdown("## Question business")
-    render_question_box("Que deviennent SR/FAR/IR, regimes, capture ratios et stress prix sous hypotheses 2030/2040 ?")
+    render_question_box("Que deviennent SR/FAR/IR, regimes, capture ratios et stress prix sur une trajectoire annuelle prospective ?")
 
     show_definitions_cards(
         [

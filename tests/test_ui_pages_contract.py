@@ -37,3 +37,9 @@ def test_q_pages_use_form_submit_for_heavy_runs() -> None:
     for page in Q_PAGES:
         content = _read(page)
         assert "st.form_submit_button(" in content, f"Missing st.form_submit_button in {page}"
+
+
+def test_q_pages_no_hardcoded_2030_2040_year_list() -> None:
+    for page in Q_PAGES:
+        content = _read(page)
+        assert "[2030, 2040]" not in content, f"Hardcoded [2030, 2040] found in {page}"

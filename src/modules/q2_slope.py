@@ -55,6 +55,23 @@ def _hourly_driver_features(hourly: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def _delta_slope_two_point(x: pd.Series, y: pd.Series) -> dict[str, float]:
+    tmp = pd.DataFrame({"x": pd.to_numeric(x, errors="coerce"), "y": pd.to_numeric(y, errors="coerce")}).dropna()
+    n = int(len(tmp))
+    if n < 2:
+        return {"slope": np.nan, "intercept": np.nan, "r2": np.nan, "p_value": np.nan, "n": n}
+    x0 = float(tmp["x"].iloc[0])
+    x1 = float(tmp["x"].iloc[-1])
+    y0 = float(tmp["y"].iloc[0])
+    y1 = float(tmp["y"].iloc[-1])
+    dx = x1 - x0
+    if abs(dx) < 1e-12:
+        return {"slope": np.nan, "intercept": np.nan, "r2": np.nan, "p_value": np.nan, "n": n}
+    slope = (y1 - y0) / dx
+    intercept = y0 - slope * x0
+    return {"slope": float(slope), "intercept": float(intercept), "r2": np.nan, "p_value": np.nan, "n": n}
+
+
 def run_q2(
     annual_df: pd.DataFrame,
     assumptions_df: pd.DataFrame,
@@ -84,12 +101,59 @@ def run_q2(
     for country, group in panel.groupby("country"):
         bascule_year = group["bascule_year_market"].dropna()
         if bascule_year.empty:
-            warnings.append(f"{country}: pas de bascule Q1, pente Q2 non calculee.")
+            warnings.append(f"{country}: pas de bascule Q1, pente Q2 non calculable.")
+            for tech in ["PV", "WIND"]:
+                rows.append(
+                    {
+                        "country": country,
+                        "tech": tech,
+                        "x_axis_used": "none",
+                        "phase2_years": "",
+                        "slope": np.nan,
+                        "intercept": np.nan,
+                        "r2": np.nan,
+                        "p_value": np.nan,
+                        "n": 0,
+                        "slope_method": "NONE_NO_BASCULE",
+                        "robust_flag": "NON_TESTABLE",
+                        "mean_sr_energy_phase2": np.nan,
+                        "mean_far_energy_phase2": np.nan,
+                        "mean_ir_p10_phase2": np.nan,
+                        "mean_ttl_phase2": np.nan,
+                        "vre_load_corr_phase2": np.nan,
+                        "surplus_load_trough_share_phase2": np.nan,
+                    }
+                )
             continue
         start = int(bascule_year.iloc[0])
         gp = group[group["year"] >= start].copy().sort_values("year")
         if exclude_2022:
             gp = gp[gp["year"] != 2022]
+        if gp.empty:
+            warnings.append(f"{country}: panel Phase 2 vide apres filtrage, pente Q2 non calculable.")
+            for tech in ["PV", "WIND"]:
+                rows.append(
+                    {
+                        "country": country,
+                        "tech": tech,
+                        "x_axis_used": "none",
+                        "phase2_years": "",
+                        "slope": np.nan,
+                        "intercept": np.nan,
+                        "r2": np.nan,
+                        "p_value": np.nan,
+                        "n": 0,
+                        "slope_method": "NONE_EMPTY_PANEL",
+                        "robust_flag": "NON_TESTABLE",
+                        "mean_sr_energy_phase2": np.nan,
+                        "mean_far_energy_phase2": np.nan,
+                        "mean_ir_p10_phase2": np.nan,
+                        "mean_ttl_phase2": np.nan,
+                        "vre_load_corr_phase2": np.nan,
+                        "surplus_load_trough_share_phase2": np.nan,
+                    }
+                )
+            continue
 
         hourly_phase2 = []
         if hourly_by_country_year is not None:
@@ -117,7 +181,16 @@ def run_q2(
                 x_axis = "sr_energy"
 
             reg = robust_linreg(x, y)
+            slope_method = "OLS"
+            if reg["n"] == 2:
+                # With two horizon points (typical in SCEN), expose directional slope via delta.
+                reg_delta = _delta_slope_two_point(x, y)
+                if np.isfinite(reg_delta["slope"]):
+                    reg = reg_delta
+                    slope_method = "DELTA_2PT"
             robust_flag = "ROBUST" if reg["n"] >= min_points else "FRAGILE"
+            if reg["n"] <= 0:
+                robust_flag = "NON_TESTABLE"
 
             if robust_flag == "FRAGILE":
                 checks.append({"status": "WARN", "code": "Q2_FRAGILE", "message": f"{country}-{tech}: n={reg['n']} < {min_points}."})
@@ -137,6 +210,7 @@ def run_q2(
                     "r2": reg["r2"],
                     "p_value": reg["p_value"],
                     "n": reg["n"],
+                    "slope_method": slope_method,
                     "robust_flag": robust_flag,
                     "mean_sr_energy_phase2": float(pd.to_numeric(gp.get("sr_energy"), errors="coerce").mean()),
                     "mean_far_energy_phase2": float(pd.to_numeric(gp.get("far_energy"), errors="coerce").mean()),

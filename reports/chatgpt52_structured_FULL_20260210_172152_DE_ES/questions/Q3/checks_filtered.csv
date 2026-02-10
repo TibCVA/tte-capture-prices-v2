@@ -1,0 +1,18 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q3_FAR_ALREADY_REACHED,DE: FAR cible deja atteinte.,HIST,,Q3,DE,False
+WARN,Q3_MUSTRUN_HIGH,ES: inversion_r_mustrun=53.3% (>50%).,HIST,,Q3,ES,False
+INFO,Q3_FAR_ALREADY_REACHED,ES: FAR cible deja atteinte.,HIST,,Q3,ES,False
+INFO,Q3_FAR_ALREADY_REACHED,DE: FAR cible deja atteinte.,SCEN,BASE,Q3,DE,False
+INFO,Q3_FAR_ALREADY_REACHED,ES: FAR cible deja atteinte.,SCEN,BASE,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q3,,True
+INFO,Q3_FAR_ALREADY_REACHED,DE: FAR cible deja atteinte.,SCEN,DEMAND_UP,Q3,DE,False
+INFO,Q3_FAR_ALREADY_REACHED,ES: FAR cible deja atteinte.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,DEMAND_UP,Q3,,True
+INFO,Q3_FAR_ALREADY_REACHED,DE: FAR cible deja atteinte.,SCEN,FLEX_UP,Q3,DE,False
+INFO,Q3_FAR_ALREADY_REACHED,ES: FAR cible deja atteinte.,SCEN,FLEX_UP,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,FLEX_UP,Q3,,True
+INFO,Q3_FAR_ALREADY_REACHED,DE: FAR cible deja atteinte.,SCEN,LOW_RIGIDITY,Q3,DE,False
+INFO,Q3_FAR_ALREADY_REACHED,ES: FAR cible deja atteinte.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,LOW_RIGIDITY,Q3,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q3,,True
+PASS,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=92.86%,BUNDLE,,Q3,,True

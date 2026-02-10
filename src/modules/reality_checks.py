@@ -27,6 +27,8 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
     sr = row.get("sr_energy", np.nan)
     far = row.get("far_energy", np.nan)
     ir = row.get("ir_p10", np.nan)
+    p10_must_run = row.get("p10_must_run_mw", np.nan)
+    p10_load = row.get("p10_load_mw", np.nan)
     ttl = row.get("ttl_eur_mwh", np.nan)
     baseload = row.get("baseload_price_eur_mwh", np.nan)
     capture_pv = row.get("capture_price_pv_eur_mwh", row.get("capture_rate_pv_eur_mwh", np.nan))
@@ -48,7 +50,19 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
     if _finite(ttl) and _finite(baseload) and float(ttl) < float(baseload) - 20.0:
         checks.append({"status": "WARN", "code": "RC_TTL_LOW", "message": f"{label}: TTL notablement sous baseload."})
     if _finite(ir) and float(ir) > 1.0:
-        checks.append({"status": "WARN", "code": "RC_IR_GT_1", "message": f"{label}: IR > 1 (must-run tres eleve en creux)."})
+        if _finite(p10_must_run) and _finite(p10_load):
+            checks.append(
+                {
+                    "status": "WARN",
+                    "code": "RC_IR_GT_1",
+                    "message": (
+                        f"{label}: IR > 1 (must-run tres eleve en creux). "
+                        f"p10_must_run_mw={float(p10_must_run):.2f}, p10_load_mw={float(p10_load):.2f}."
+                    ),
+                }
+            )
+        else:
+            checks.append({"status": "WARN", "code": "RC_IR_GT_1", "message": f"{label}: IR > 1 (must-run tres eleve en creux)."})
     if _finite(regime_coherence) and float(regime_coherence) < 0.55:
         checks.append({"status": "WARN", "code": "RC_LOW_REGIME_COHERENCE", "message": f"{label}: regime_coherence < 0.55."})
     if _finite(h_regime_c) and _finite(h_regime_d) and (_finite(ttl)) and (float(h_regime_c) + float(h_regime_d) < 500):

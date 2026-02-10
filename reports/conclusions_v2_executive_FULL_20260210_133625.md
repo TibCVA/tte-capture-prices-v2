@@ -1,7 +1,10 @@
 # Executive Summary - Run `FULL_20260210_133625`
 
 Verdict qualite global: **PASS**.
-Exigences slides non couvertes: **0**.
+Slides - docx fournis/existants: **2/2**.
+Slides - exigences extraites: **613**.
+Slides - lignes de tracabilite: **613**.
+Slides - couvertes oui/non: **613/0**.
 
 ## Controles narratifs par question
 - `Q1`: words=1738 / min=1200, word_ok=True, all_test_refs=True

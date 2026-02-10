@@ -1,13 +1,13 @@
-# Rapport Final V2.3 — Run `FULL_20260210_113139`
+# Rapport Final V2.3 - Run `FULL_20260210_113139`
 
 ## 1. Page de garde
-- Date de génération: `2026-02-10 11:36:36 UTC`
+- Date de génération: `2026-02-10 12:43:35 UTC`
 - Run combiné source: `outputs\combined\FULL_20260210_113139`
-- Périmètre pays déclaré: `FR, DE, ES, NL, BE, CZ, IT_NORD`
-- Fenêtre historique de référence: `2018–2024`
+- Périmètre pays déclaré: `non renseigné`
+- Fenêtre historique de référence: `2018-2024`
 - Horizons prospectifs de référence: `2030/2040`
 - Questions couvertes: `Q1, Q2, Q3, Q4, Q5`
-- Avertissement méthodologique: ce rapport n'est pas un modèle d'équilibre complet, mais une analyse empirique et scénarisée, auditable et explicitement bornée.
+- Avertissement méthodologique: ce rapport n'est pas un modèle d'équilibre complet, mais une analyse empirique et scénarisée bornée par les hypothèses explicites.
 
 ### Scénarios exécutés par question
 - `Q1`: BASE, DEMAND_UP, FLEX_UP, LOW_RIGIDITY
@@ -28,560 +28,444 @@
 - Prospectif: mêmes métriques appliquées à des chroniques scénarisées, avec hypothèses explicites.
 
 ### 2.3 Qualité des données et limites structurantes
-- Un résultat n'est jugé robuste que s'il ne contredit aucun FAIL et explicite tout WARN.
+- Un résultat est robuste uniquement s'il ne contredit aucun FAIL et explicite tout WARN.
 - Tout NON_TESTABLE est conservé comme zone d'incertitude, jamais masqué.
-- Les conclusions sont formulées au niveau des preuves disponibles, sans extrapolation hors périmètre.
+- Les conclusions sont formulées au niveau des preuves disponibles, sans extrapolation.
 
 ## 3. Analyses détaillées par question
 
-## Q1 — Analyse détaillée
+## Q1 - Analyse détaillée
 
 ### Question business
-Identifier de façon auditable la bascule de Phase 1 vers Phase 2 et distinguer la composante marché de la composante physique.
+Identifier de façon auditable la bascule de Phase 1 vers Phase 2, et distinguer explicitement ce qui relève d'un signal marché et ce qui relève d'un signal physique.
 
 ### Définitions opérationnelles
-- SR mesure l'intensité annuelle du surplus ; plus SR augmente, plus la pression structurelle s'accroît.
-- FAR mesure la part de surplus effectivement absorbée ; FAR faible signale une insuffisance de flexibilité.
-- IR mesure la rigidité en creux de demande ; IR élevé accroît le risque de surplus récurrent.
-- La bascule marché s'appuie sur les symptômes prix/capture ; la bascule physique s'appuie sur SR/FAR/IR.
+- SR (Surplus Ratio) mesure l'intensité du surplus en énergie sur l'année.
+- FAR (Flex Absorption Ratio) mesure la part du surplus absorbée par la flexibilité.
+- IR (Inflexibility Ratio) mesure la rigidité en creux de charge.
+- La bascule marché est détectée via prix/capture ; la bascule physique via SR/FAR/IR.
 
 ### Périmètre des tests exécutés
-L'analyse couvre le périmètre `FR, DE, ES, NL, BE, CZ, IT_NORD`. Le module `Q1` est lu en mode historique et en mode prospectif à partir d'un run combiné unique, sans mélange inter-runs, afin de garantir la cohérence de traçabilité.
+Le périmètre analysé couvre `périmètre du run`. L'analyse s'appuie sur un run combiné unique pour éviter tout mélange inter-runs, et distingue systématiquement historique (observé) et prospectif (scénarisé).
+Synthèse des tests exécutés: 16 tests au total, HIST=4, SCEN=12. Répartition statuts: PASS=15, WARN=1, FAIL=0, NON_TESTABLE=0.
+Couverture prospective par scénario: BASE:3, DEMAND_UP:3, FLEX_UP:3, LOW_RIGIDITY:3.
+Points d'attention prioritaires issus des tests non pleinement conformes: Q1-H-03 (HIST/nan) -> WARN, valeur=42.86%, règle=>=50%, lecture=Concordance mesuree entre bascules marche et physique..
 
-### Résultats historiques test par test
-Test `Q1-H-01` (historique scénario `nan`) : l'objectif est "La signature marche de phase 2 est calculee et exploitable.". La règle de décision est "stage2_market_score present et non vide". Valeur observée = `4.1020` ; seuil/règle = `score present` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Le score de bascule marche est exploitable.. [evidence:Q1-H-01] [source:SPEC2-Q1/Slides 2-4]
-Test `Q1-H-02` (historique scénario `nan`) : l'objectif est "La bascule physique est fondee sur SR/FAR/IR.". La règle de décision est "sr_energy/far_energy/ir_p10 presentes". Valeur observée = `far_energy,ir_p10,sr_energy` ; seuil/règle = `SR/FAR/IR presents` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Le stress physique est calculable.. [evidence:Q1-H-02] [source:SPEC2-Q1/Slides 3-4]
-Test `Q1-H-03` (historique scénario `nan`) : l'objectif est "La relation entre bascule marche et bascule physique est mesurable.". La règle de décision est "bascule_year_market et bascule_year_physical comparables". Valeur observée = `42.86%` ; seuil/règle = `>=50%` ; statut = `WARN`. Résultat exploitable mais nécessitant une lecture prudente. Interprétation métier associée : Concordance mesuree entre bascules marche et physique.. [evidence:Q1-H-03] [source:SPEC2-Q1]
-Test `Q1-H-04` (historique scénario `nan`) : l'objectif est "Le diagnostic reste stable sous variation raisonnable de seuils.". La règle de décision est "delta bascules sous choc de seuil <= 50%". Valeur observée = `0.9140` ; seuil/règle = `confidence moyenne >=0.60` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Proxy de robustesse du diagnostic de bascule.. [evidence:Q1-H-04] [source:Slides 4-6]
-
-### Résultats prospectifs test par test (par scénario)
-Test `Q1-S-01` (prospectif scénario `BASE`) : l'objectif est "Chaque scenario fournit un diagnostic de bascule projetee.". La règle de décision est "Q1_country_summary non vide en SCEN". Valeur observée = `7.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La bascule projetee est produite.. [evidence:Q1-S-01] [source:SPEC2-Q1/Slides 5]
-Test `Q1-S-01` (prospectif scénario `DEMAND_UP`) : l'objectif est "Chaque scenario fournit un diagnostic de bascule projetee.". La règle de décision est "Q1_country_summary non vide en SCEN". Valeur observée = `7.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La bascule projetee est produite.. [evidence:Q1-S-01] [source:SPEC2-Q1/Slides 5]
-Test `Q1-S-01` (prospectif scénario `FLEX_UP`) : l'objectif est "Chaque scenario fournit un diagnostic de bascule projetee.". La règle de décision est "Q1_country_summary non vide en SCEN". Valeur observée = `7.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La bascule projetee est produite.. [evidence:Q1-S-01] [source:SPEC2-Q1/Slides 5]
-Test `Q1-S-01` (prospectif scénario `LOW_RIGIDITY`) : l'objectif est "Chaque scenario fournit un diagnostic de bascule projetee.". La règle de décision est "Q1_country_summary non vide en SCEN". Valeur observée = `7.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La bascule projetee est produite.. [evidence:Q1-S-01] [source:SPEC2-Q1/Slides 5]
-Test `Q1-S-02` (prospectif scénario `BASE`) : l'objectif est "Les leviers scenario modifient la bascule vs BASE.". La règle de décision est "delta bascule_year_market vs BASE calculable". Valeur observée = `7.0000` ; seuil/règle = `>=1 bascule` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Le scenario fournit une variation exploitable.. [evidence:Q1-S-02] [source:SPEC2-Q1/Slides 5]
-Test `Q1-S-02` (prospectif scénario `DEMAND_UP`) : l'objectif est "Les leviers scenario modifient la bascule vs BASE.". La règle de décision est "delta bascule_year_market vs BASE calculable". Valeur observée = `7.0000` ; seuil/règle = `>=1 bascule` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Le scenario fournit une variation exploitable.. [evidence:Q1-S-02] [source:SPEC2-Q1/Slides 5]
-Test `Q1-S-02` (prospectif scénario `FLEX_UP`) : l'objectif est "Les leviers scenario modifient la bascule vs BASE.". La règle de décision est "delta bascule_year_market vs BASE calculable". Valeur observée = `7.0000` ; seuil/règle = `>=1 bascule` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Le scenario fournit une variation exploitable.. [evidence:Q1-S-02] [source:SPEC2-Q1/Slides 5]
-Test `Q1-S-02` (prospectif scénario `LOW_RIGIDITY`) : l'objectif est "Les leviers scenario modifient la bascule vs BASE.". La règle de décision est "delta bascule_year_market vs BASE calculable". Valeur observée = `7.0000` ; seuil/règle = `>=1 bascule` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Le scenario fournit une variation exploitable.. [evidence:Q1-S-02] [source:SPEC2-Q1/Slides 5]
-Test `Q1-S-03` (prospectif scénario `BASE`) : l'objectif est "Le regime_coherence respecte le seuil d'interpretation.". La règle de décision est "part regime_coherence >= seuil min". Valeur observée = `100.00%` ; seuil/règle = `>=50% lignes >=0.55` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La coherence scenario est lisible.. [evidence:Q1-S-03] [source:SPEC2-Q1]
-Test `Q1-S-03` (prospectif scénario `DEMAND_UP`) : l'objectif est "Le regime_coherence respecte le seuil d'interpretation.". La règle de décision est "part regime_coherence >= seuil min". Valeur observée = `100.00%` ; seuil/règle = `>=50% lignes >=0.55` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La coherence scenario est lisible.. [evidence:Q1-S-03] [source:SPEC2-Q1]
-Test `Q1-S-03` (prospectif scénario `FLEX_UP`) : l'objectif est "Le regime_coherence respecte le seuil d'interpretation.". La règle de décision est "part regime_coherence >= seuil min". Valeur observée = `100.00%` ; seuil/règle = `>=50% lignes >=0.55` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La coherence scenario est lisible.. [evidence:Q1-S-03] [source:SPEC2-Q1]
-Test `Q1-S-03` (prospectif scénario `LOW_RIGIDITY`) : l'objectif est "Le regime_coherence respecte le seuil d'interpretation.". La règle de décision est "part regime_coherence >= seuil min". Valeur observée = `100.00%` ; seuil/règle = `>=50% lignes >=0.55` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La coherence scenario est lisible.. [evidence:Q1-S-03] [source:SPEC2-Q1]
+### Résultats historiques et prospectifs (synthèse chiffrée)
+Historique Q1 sur 7 pays: la bascule marché est observée entre 2 018.00 et 2 020.00, avec une confiance moyenne de 0.9143. La bascule physique est disponible pour 3 pays.
+Le décalage moyen (physique - marché) vaut 1.6667 année(s). Un décalage positif signifie que le marché signale la tension avant la saturation physique mesurée.
+Les notes de qualité signalent 2 cas de cohérence faible à traiter prudemment.
+Prospectif Q1 par scénario (lecture moyenne):
+| scenario_id | countries | mean_bascule_year_market | mean_bascule_confidence |
+| --- | --- | --- | --- |
+| BASE | 7.0000 | 2 030.00 | 1.0000 |
+| DEMAND_UP | 7.0000 | 2 030.00 | 1.0000 |
+| FLEX_UP | 7.0000 | 2 030.00 | 1.0000 |
+| LOW_RIGIDITY | 7.0000 | 2 030.00 | 1.0000 |
 
 ### Comparaison historique vs prospectif
-Comparaison `bascule_year_market` pour `BE` sous scénario `BASE` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `CZ` sous scénario `BASE` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `DE` sous scénario `BASE` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `ES` sous scénario `BASE` : historique = `2 020.00`, prospectif = `2 030.00`, delta = `10.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `FR` sous scénario `BASE` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `IT_NORD` sous scénario `BASE` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `NL` sous scénario `BASE` : historique = `2 019.00`, prospectif = `2 030.00`, delta = `11.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `BE` sous scénario `DEMAND_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `CZ` sous scénario `DEMAND_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `DE` sous scénario `DEMAND_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `ES` sous scénario `DEMAND_UP` : historique = `2 020.00`, prospectif = `2 030.00`, delta = `10.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `FR` sous scénario `DEMAND_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `IT_NORD` sous scénario `DEMAND_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `NL` sous scénario `DEMAND_UP` : historique = `2 019.00`, prospectif = `2 030.00`, delta = `11.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `BE` sous scénario `FLEX_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `CZ` sous scénario `FLEX_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `DE` sous scénario `FLEX_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `ES` sous scénario `FLEX_UP` : historique = `2 020.00`, prospectif = `2 030.00`, delta = `10.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `FR` sous scénario `FLEX_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `IT_NORD` sous scénario `FLEX_UP` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `NL` sous scénario `FLEX_UP` : historique = `2 019.00`, prospectif = `2 030.00`, delta = `11.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `BE` sous scénario `LOW_RIGIDITY` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `CZ` sous scénario `LOW_RIGIDITY` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `DE` sous scénario `LOW_RIGIDITY` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `ES` sous scénario `LOW_RIGIDITY` : historique = `2 020.00`, prospectif = `2 030.00`, delta = `10.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `FR` sous scénario `LOW_RIGIDITY` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `IT_NORD` sous scénario `LOW_RIGIDITY` : historique = `2 018.00`, prospectif = `2 030.00`, delta = `12.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
-Comparaison `bascule_year_market` pour `NL` sous scénario `LOW_RIGIDITY` : historique = `2 019.00`, prospectif = `2 030.00`, delta = `11.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q1]
+La comparaison historique vs prospectif contient 28 lignes sur 1 métriques et 4 scénarios.
+Lecture synthétique des deltas moyens (prospectif - historique):
+| metric | scenario_id | count | mean | median |
+| --- | --- | --- | --- | --- |
+| bascule_year_market | BASE | 7.0000 | 11.5714 | 12.0000 |
+| bascule_year_market | DEMAND_UP | 7.0000 | 11.5714 | 12.0000 |
+| bascule_year_market | FLEX_UP | 7.0000 | 11.5714 | 12.0000 |
+| bascule_year_market | LOW_RIGIDITY | 7.0000 | 11.5714 | 12.0000 |
 
-### Interprétation argumentée
-La lecture stratégique repose sur une discipline simple: 1) qualifier la validité des tests, 2) expliquer les écarts avec les règles attendues, 3) convertir ces écarts en implications décisionnelles. Tout résultat présenté ici est strictement borné aux preuves chiffrées du ledger et des tables de comparaison. Aucune extrapolation hors périmètre n'est retenue.
-En pratique, un signal convergent entre historique et prospectif renforce la robustesse opérationnelle de la conclusion. À l'inverse, un signal divergent n'est pas rejeté: il est traité comme une zone d'incertitude à instrumenter, avec hypothèses explicites et test de sensibilité additionnel.
-
-### Robustesse / fragilité
-Bilan de robustesse `Q1` : PASS=15, WARN=1, FAIL=0, NON_TESTABLE=0, total=16.
-Lecture de gouvernance : un PASS valide le test au regard de sa règle locale ; un WARN impose une prudence d'interprétation ; un FAIL invalide l'assertion correspondante tant que la cause n'est pas traitée ; un NON_TESTABLE interdit la conclusion.
-Part de tests PASS = `93.75%`. Cette part sert d'indicateur de confiance global, mais ne remplace pas la lecture test par test. [evidence:ledger_Q1]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : CZ-2018: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : CZ-2018: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : CZ-2019: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : CZ-2022: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : CZ-2022: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : CZ-2023: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : FR-2018: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2018: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : FR-2019: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2019: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : FR-2021: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2021: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2023: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : FR-2024: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2024: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : DE-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : FR-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : IT_NORD-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : DE-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : ES-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : FR-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : IT_NORD-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=FLEX_UP) : DE-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=FLEX_UP) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=FLEX_UP) : FR-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=FLEX_UP) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=FLEX_UP) : IT_NORD-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=FLEX_UP) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : DE-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : ES-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : FR-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : IT_NORD-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `BUNDLE_LEDGER_STATUS` (scope=BUNDLE, scénario=) : ledger: FAIL=0, WARN=1. [evidence:check_BUNDLE_LEDGER_STATUS]
-
-### Risques de mauvaise lecture
-Premier risque: confondre cohérence empirique et causalité stricte. Le dispositif est construit pour expliquer, pas pour prouver un mécanisme unique.
-Deuxième risque: ignorer les tests NON_TESTABLE et surinterpréter un sous-ensemble favorable de résultats.
-Troisième risque: lire des niveaux absolus hors de leur contexte (pays, année, scénario, qualité de données).
+### Robustesse, fragilité et risques de mauvaise lecture
+Checks consolidés: total=42, WARN/FAIL/ERROR=42, INFO=0.
+Codes les plus fréquents à traiter: RC_CAPTURE_RANGE:26, RC_LOW_REGIME_COHERENCE:8, RC_IR_GT_1:7, BUNDLE_LEDGER_STATUS:1.
+Risque 1: confondre corrélation et causalité. Risque 2: ignorer les WARN/NON_TESTABLE. Risque 3: extrapoler hors périmètre (pays, période, scénario) sans revalidation empirique.
 
 ### Réponse conclusive à la question
-La réponse de cette section est valide dans le cadre des tests exécutés et des statuts associés. Une conclusion opérationnelle n'est retenue comme robuste que si elle ne contredit aucun FAIL et explicite tout WARN.
+La conclusion est formulée au niveau des preuves effectivement observées. Une conclusion est considérée robuste uniquement si elle ne contredit aucun FAIL et si les WARN restants sont explicitement interprétés.
+En cas de divergence historique/prospectif, la position recommandée n'est pas de choisir un camp, mais de qualifier précisément la cause de divergence: hypothèses scénario, qualité des données, ou limites structurelles du modèle.
 
-### Actions / priorités de décision
-Priorité 1: traiter les écarts marqués FAIL avant toute décision engageante. Priorité 2: encadrer les WARN par un plan de mitigation analytique (sensibilités, qualité data, scénarios complémentaires). Priorité 3: convertir les résultats robustes en options de pilotage hiérarchisées (court, moyen, long terme).
+### Actions et priorités de décision
+1. Prioriser le traitement des incohérences critiques (FAIL ou contradiction forte avec reality checks).
+2. Réviser les hypothèses prospectives qui réduisent artificiellement le stress système.
+3. Consolider les périmètres avec faible robustesse statistique avant usage stratégique.
 
-## Q2 — Analyse détaillée
+### Table de traçabilité test par test
+| test_id | source_ref | mode | scenario_id | status | value | threshold | interpretation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Q1-H-01 | SPEC2-Q1/Slides 2-4 | HIST | NaN | PASS | 4.1020408163265305 | score present | Le score de bascule marche est exploitable. |
+| Q1-H-02 | SPEC2-Q1/Slides 3-4 | HIST | NaN | PASS | far_energy,ir_p10,sr_energy | SR/FAR/IR presents | Le stress physique est calculable. |
+| Q1-H-03 | SPEC2-Q1 | HIST | NaN | WARN | 42.86% | >=50% | Concordance mesuree entre bascules marche et physique. |
+| Q1-H-04 | Slides 4-6 | HIST | NaN | PASS | 0.914 | confidence moyenne >=0.60 | Proxy de robustesse du diagnostic de bascule. |
+| Q1-S-01 | SPEC2-Q1/Slides 5 | SCEN | BASE | PASS | 7 | >0 lignes | La bascule projetee est produite. |
+| Q1-S-01 | SPEC2-Q1/Slides 5 | SCEN | DEMAND_UP | PASS | 7 | >0 lignes | La bascule projetee est produite. |
+| Q1-S-01 | SPEC2-Q1/Slides 5 | SCEN | FLEX_UP | PASS | 7 | >0 lignes | La bascule projetee est produite. |
+| Q1-S-01 | SPEC2-Q1/Slides 5 | SCEN | LOW_RIGIDITY | PASS | 7 | >0 lignes | La bascule projetee est produite. |
+| Q1-S-02 | SPEC2-Q1/Slides 5 | SCEN | BASE | PASS | 7 | >=1 bascule | Le scenario fournit une variation exploitable. |
+| Q1-S-02 | SPEC2-Q1/Slides 5 | SCEN | DEMAND_UP | PASS | 7 | >=1 bascule | Le scenario fournit une variation exploitable. |
+| Q1-S-02 | SPEC2-Q1/Slides 5 | SCEN | FLEX_UP | PASS | 7 | >=1 bascule | Le scenario fournit une variation exploitable. |
+| Q1-S-02 | SPEC2-Q1/Slides 5 | SCEN | LOW_RIGIDITY | PASS | 7 | >=1 bascule | Le scenario fournit une variation exploitable. |
+| Q1-S-03 | SPEC2-Q1 | SCEN | BASE | PASS | 100.00% | >=50% lignes >=0.55 | La coherence scenario est lisible. |
+| Q1-S-03 | SPEC2-Q1 | SCEN | DEMAND_UP | PASS | 100.00% | >=50% lignes >=0.55 | La coherence scenario est lisible. |
+| Q1-S-03 | SPEC2-Q1 | SCEN | FLEX_UP | PASS | 100.00% | >=50% lignes >=0.55 | La coherence scenario est lisible. |
+| Q1-S-03 | SPEC2-Q1 | SCEN | LOW_RIGIDITY | PASS | 100.00% | >=50% lignes >=0.55 | La coherence scenario est lisible. |
+
+### Références de preuve obligatoires
+[evidence:Q1-H-01] [evidence:Q1-H-02] [evidence:Q1-H-03] [evidence:Q1-H-04] [evidence:Q1-S-01] [evidence:Q1-S-02] [evidence:Q1-S-03]
+
+Lecture complémentaire de preuve `Q1-H-01`: le test vérifie `La signature marche de phase 2 est calculee et exploitable.` selon la règle `stage2_market_score present et non vide`. La valeur observée (`4.1020`) est lue contre le seuil/règle (`score present`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Le score de bascule marche est exploitable. [evidence:Q1-H-01] [source:SPEC2-Q1/Slides 2-4]
+Lecture complémentaire de preuve `Q1-H-02`: le test vérifie `La bascule physique est fondee sur SR/FAR/IR.` selon la règle `sr_energy/far_energy/ir_p10 presentes`. La valeur observée (`far_energy,ir_p10,sr_energy`) est lue contre le seuil/règle (`SR/FAR/IR presents`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Le stress physique est calculable. [evidence:Q1-H-02] [source:SPEC2-Q1/Slides 3-4]
+Lecture complémentaire de preuve `Q1-H-03`: le test vérifie `La relation entre bascule marche et bascule physique est mesurable.` selon la règle `bascule_year_market et bascule_year_physical comparables`. La valeur observée (`42.86%`) est lue contre le seuil/règle (`>=50%`) avec statut `WARN` (interprétable mais fragile.). D'un point de vue décisionnel, cela signifie: Concordance mesuree entre bascules marche et physique. [evidence:Q1-H-03] [source:SPEC2-Q1]
+Lecture complémentaire de preuve `Q1-H-04`: le test vérifie `Le diagnostic reste stable sous variation raisonnable de seuils.` selon la règle `delta bascules sous choc de seuil <= 50%`. La valeur observée (`0.9140`) est lue contre le seuil/règle (`confidence moyenne >=0.60`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Proxy de robustesse du diagnostic de bascule. [evidence:Q1-H-04] [source:Slides 4-6]
+
+## Q2 - Analyse détaillée
 
 ### Question business
-Mesurer la pente de cannibalisation, qualifier sa robustesse statistique et isoler les drivers dominants.
+Mesurer la pente de cannibalisation de valeur, qualifier sa robustesse statistique, et relier cette pente aux drivers physiques et marché sans surinterpréter la causalité.
 
 ### Définitions opérationnelles
-- La pente est ici une relation empirique entre pénétration et capture ratio, pas une loi structurelle universelle.
-- La robustesse statistique repose sur le triplet n, R², p-value et doit être explicitée avant toute conclusion forte.
-- Les drivers SR/FAR/IR/corrélation VRE-load servent à expliquer, pas à prouver une causalité stricte.
+- La pente est une relation empirique entre pénétration et capture ratio, pas une loi structurelle.
+- La robustesse statistique se lit avec n, p-value et R².
+- Un driver corrélé n'est pas une preuve causale ; c'est un facteur explicatif plausible à challenger.
 
 ### Périmètre des tests exécutés
-L'analyse couvre le périmètre `FR, DE, ES, NL, BE, CZ, IT_NORD`. Le module `Q2` est lu en mode historique et en mode prospectif à partir d'un run combiné unique, sans mélange inter-runs, afin de garantir la cohérence de traçabilité.
+Le périmètre analysé couvre `périmètre du run`. L'analyse s'appuie sur un run combiné unique pour éviter tout mélange inter-runs, et distingue systématiquement historique (observé) et prospectif (scénarisé).
+Synthèse des tests exécutés: 9 tests au total, HIST=3, SCEN=6. Répartition statuts: PASS=6, WARN=3, FAIL=0, NON_TESTABLE=0.
+Couverture prospective par scénario: BASE:2, HIGH_CO2:2, HIGH_GAS:2.
+Points d'attention prioritaires issus des tests non pleinement conformes: Q2-S-02 (SCEN/BASE) -> WARN, valeur=0.00%, règle=>=30% robustes, lecture=Delta de pente interpretable avec robustesse.; Q2-S-02 (SCEN/HIGH_CO2) -> WARN, valeur=0.00%, règle=>=30% robustes, lecture=Delta de pente interpretable avec robustesse.; Q2-S-02 (SCEN/HIGH_GAS) -> WARN, valeur=0.00%, règle=>=30% robustes, lecture=Delta de pente interpretable avec robustesse..
 
-### Résultats historiques test par test
-Test `Q2-H-01` (historique scénario `nan`) : l'objectif est "Les pentes PV/Wind sont estimees en historique.". La règle de décision est "Q2_country_slopes non vide". Valeur observée = `14.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les pentes historiques sont calculees.. [evidence:Q2-H-01] [source:SPEC2-Q2/Slides 10]
-Test `Q2-H-02` (historique scénario `nan`) : l'objectif est "R2/p-value/n sont disponibles pour qualifier la robustesse.". La règle de décision est "colonnes r2,p_value,n presentes". Valeur observée = `n,p_value,r2` ; seuil/règle = `r2,p_value,n disponibles` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La robustesse statistique est lisible.. [evidence:Q2-H-02] [source:SPEC2-Q2/Slides 10-12]
-Test `Q2-H-03` (historique scénario `nan`) : l'objectif est "Les drivers SR/FAR/IR/corr VRE-load sont exploites.". La règle de décision est "driver correlations non vides". Valeur observée = `6.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les drivers de pente sont disponibles.. [evidence:Q2-H-03] [source:Slides 10-13]
-
-### Résultats prospectifs test par test (par scénario)
-Test `Q2-S-01` (prospectif scénario `BASE`) : l'objectif est "Les pentes sont reproduites en mode scenario.". La règle de décision est "Q2_country_slopes non vide en SCEN". Valeur observée = `14.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Pentes prospectives calculees.. [evidence:Q2-S-01] [source:SPEC2-Q2/Slides 11]
-Test `Q2-S-01` (prospectif scénario `HIGH_CO2`) : l'objectif est "Les pentes sont reproduites en mode scenario.". La règle de décision est "Q2_country_slopes non vide en SCEN". Valeur observée = `14.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Pentes prospectives calculees.. [evidence:Q2-S-01] [source:SPEC2-Q2/Slides 11]
-Test `Q2-S-01` (prospectif scénario `HIGH_GAS`) : l'objectif est "Les pentes sont reproduites en mode scenario.". La règle de décision est "Q2_country_slopes non vide en SCEN". Valeur observée = `14.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Pentes prospectives calculees.. [evidence:Q2-S-01] [source:SPEC2-Q2/Slides 11]
-Test `Q2-S-02` (prospectif scénario `BASE`) : l'objectif est "Les differences de pente vs BASE sont calculables.". La règle de décision est "delta slope par pays/tech vs BASE". Valeur observée = `0.00%` ; seuil/règle = `>=30% robustes` ; statut = `WARN`. Résultat exploitable mais nécessitant une lecture prudente. Interprétation métier associée : Delta de pente interpretable avec robustesse.. [evidence:Q2-S-02] [source:SPEC2-Q2]
-Test `Q2-S-02` (prospectif scénario `HIGH_CO2`) : l'objectif est "Les differences de pente vs BASE sont calculables.". La règle de décision est "delta slope par pays/tech vs BASE". Valeur observée = `0.00%` ; seuil/règle = `>=30% robustes` ; statut = `WARN`. Résultat exploitable mais nécessitant une lecture prudente. Interprétation métier associée : Delta de pente interpretable avec robustesse.. [evidence:Q2-S-02] [source:SPEC2-Q2]
-Test `Q2-S-02` (prospectif scénario `HIGH_GAS`) : l'objectif est "Les differences de pente vs BASE sont calculables.". La règle de décision est "delta slope par pays/tech vs BASE". Valeur observée = `0.00%` ; seuil/règle = `>=30% robustes` ; statut = `WARN`. Résultat exploitable mais nécessitant une lecture prudente. Interprétation métier associée : Delta de pente interpretable avec robustesse.. [evidence:Q2-S-02] [source:SPEC2-Q2]
+### Résultats historiques et prospectifs (synthèse chiffrée)
+Historique Q2 (pentes observées) par technologie:
+| tech | n | mean_slope | median_slope | robust_share | sig_share |
+| --- | --- | --- | --- | --- | --- |
+| PV | 7.0000 | -9.6775 | -3.0701 | 1.0000 | 0.0000 |
+| WIND | 7.0000 | 3.1074 | -0.7863 | 1.0000 | 0.0000 |
+Drivers historiques de pente (corrélations):
+| driver_name | corr_with_slope_pv | corr_with_slope_wind | n_countries |
+| --- | --- | --- | --- |
+| mean_sr_energy_phase2 | 0.2731 | -0.0089 | 7.0000 |
+| mean_far_energy_phase2 | 0.8728 | -0.2752 | 7.0000 |
+| mean_ir_p10_phase2 | 0.4182 | 0.0440 | 7.0000 |
+| mean_ttl_phase2 | -0.0632 | 0.5287 | 7.0000 |
+| vre_load_corr_phase2 | -0.1086 | 0.5786 | 7.0000 |
+| surplus_load_trough_share_phase2 | 0.7605 | 0.6674 | 7.0000 |
+Prospectif Q2 (qualité statistique des pentes):
+| scenario_id | rows | finite_slope_share | mean_r2 | fragile_share |
+| --- | --- | --- | --- | --- |
+| BASE | 14.0000 | 0.2857 | 1.0000 | 1.0000 |
+| HIGH_CO2 | 14.0000 | 0.2857 | 1.0000 | 1.0000 |
+| HIGH_GAS | 14.0000 | 0.2857 | 1.0000 | 1.0000 |
 
 ### Comparaison historique vs prospectif
-Comparaison `slope` pour `BE` sous scénario `BASE` : historique = `-2.3320`, prospectif = `-12.2679`, delta = `-9.9359`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `BE` sous scénario `BASE` : historique = `-0.8094`, prospectif = `-18.9691`, delta = `-18.1597`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `CZ` sous scénario `BASE` : historique = `-5.6369`, prospectif = `307.2372`, delta = `312.8741`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `CZ` sous scénario `BASE` : historique = `13.8789`, prospectif = `-1 514.73`, delta = `-1 528.61`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `DE` sous scénario `BASE` : historique = `-3.0701`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `DE` sous scénario `BASE` : historique = `-0.1120`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `ES` sous scénario `BASE` : historique = `-1.9867`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `ES` sous scénario `BASE` : historique = `-6.5245`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `FR` sous scénario `BASE` : historique = `-5.4638`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `FR` sous scénario `BASE` : historique = `-2.6513`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `IT_NORD` sous scénario `BASE` : historique = `-0.8261`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `IT_NORD` sous scénario `BASE` : historique = `18.7563`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `NL` sous scénario `BASE` : historique = `-48.4269`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `NL` sous scénario `BASE` : historique = `-0.7863`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `BE` sous scénario `HIGH_CO2` : historique = `-2.3320`, prospectif = `-11.6203`, delta = `-9.2884`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `BE` sous scénario `HIGH_CO2` : historique = `-0.8094`, prospectif = `-18.4126`, delta = `-17.6032`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `CZ` sous scénario `HIGH_CO2` : historique = `-5.6369`, prospectif = `1 244.33`, delta = `1 249.97`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `CZ` sous scénario `HIGH_CO2` : historique = `13.8789`, prospectif = `-580.0432`, delta = `-593.9220`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `DE` sous scénario `HIGH_CO2` : historique = `-3.0701`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `DE` sous scénario `HIGH_CO2` : historique = `-0.1120`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `ES` sous scénario `HIGH_CO2` : historique = `-1.9867`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `ES` sous scénario `HIGH_CO2` : historique = `-6.5245`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `FR` sous scénario `HIGH_CO2` : historique = `-5.4638`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `FR` sous scénario `HIGH_CO2` : historique = `-2.6513`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `IT_NORD` sous scénario `HIGH_CO2` : historique = `-0.8261`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `IT_NORD` sous scénario `HIGH_CO2` : historique = `18.7563`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `NL` sous scénario `HIGH_CO2` : historique = `-48.4269`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `NL` sous scénario `HIGH_CO2` : historique = `-0.7863`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `BE` sous scénario `HIGH_GAS` : historique = `-2.3320`, prospectif = `-7.9740`, delta = `-5.6420`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `BE` sous scénario `HIGH_GAS` : historique = `-0.8094`, prospectif = `-14.8003`, delta = `-13.9909`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `CZ` sous scénario `HIGH_GAS` : historique = `-5.6369`, prospectif = `7 535.51`, delta = `7 541.15`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `CZ` sous scénario `HIGH_GAS` : historique = `13.8789`, prospectif = `5 520.72`, delta = `5 506.85`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `DE` sous scénario `HIGH_GAS` : historique = `-3.0701`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `DE` sous scénario `HIGH_GAS` : historique = `-0.1120`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `ES` sous scénario `HIGH_GAS` : historique = `-1.9867`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `ES` sous scénario `HIGH_GAS` : historique = `-6.5245`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `FR` sous scénario `HIGH_GAS` : historique = `-5.4638`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `FR` sous scénario `HIGH_GAS` : historique = `-2.6513`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `IT_NORD` sous scénario `HIGH_GAS` : historique = `-0.8261`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `IT_NORD` sous scénario `HIGH_GAS` : historique = `18.7563`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `NL` sous scénario `HIGH_GAS` : historique = `-48.4269`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
-Comparaison `slope` pour `NL` sous scénario `HIGH_GAS` : historique = `-0.7863`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q2]
+La comparaison historique vs prospectif contient 42 lignes sur 1 métriques et 3 scénarios.
+Lecture synthétique des deltas moyens (prospectif - historique):
+| metric | scenario_id | count | mean | median |
+| --- | --- | --- | --- | --- |
+| slope | BASE | 4.0000 | -310.9575 | -14.0478 |
+| slope | HIGH_CO2 | 4.0000 | 157.2880 | -13.4458 |
+| slope | HIGH_GAS | 4.0000 | 3 257.09 | 2 750.60 |
 
-### Interprétation argumentée
-La lecture stratégique repose sur une discipline simple: 1) qualifier la validité des tests, 2) expliquer les écarts avec les règles attendues, 3) convertir ces écarts en implications décisionnelles. Tout résultat présenté ici est strictement borné aux preuves chiffrées du ledger et des tables de comparaison. Aucune extrapolation hors périmètre n'est retenue.
-En pratique, un signal convergent entre historique et prospectif renforce la robustesse opérationnelle de la conclusion. À l'inverse, un signal divergent n'est pas rejeté: il est traité comme une zone d'incertitude à instrumenter, avec hypothèses explicites et test de sensibilité additionnel.
-
-### Robustesse / fragilité
-Bilan de robustesse `Q2` : PASS=6, WARN=3, FAIL=0, NON_TESTABLE=0, total=9.
-Lecture de gouvernance : un PASS valide le test au regard de sa règle locale ; un WARN impose une prudence d'interprétation ; un FAIL invalide l'assertion correspondante tant que la cause n'est pas traitée ; un NON_TESTABLE interdit la conclusion.
-Part de tests PASS = `66.67%`. Cette part sert d'indicateur de confiance global, mais ne remplace pas la lecture test par test. [evidence:ledger_Q2]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : CZ-2018: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : CZ-2018: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : CZ-2019: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : CZ-2022: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : CZ-2022: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : CZ-2023: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : FR-2018: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2018: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : FR-2019: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2019: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : FR-2021: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2021: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2023: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : FR-2024: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2024: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : BE-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : BE-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : CZ-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_POSITIVE_PV_SLOPE` (scope=SCEN, scénario=BASE) : CZ: slope PV positive et significative.. [evidence:check_Q2_POSITIVE_PV_SLOPE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : CZ-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : DE-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : DE-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : ES-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : ES-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : FR-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : FR-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : IT_NORD-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : IT_NORD-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : NL-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=BASE) : NL-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : DE-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : FR-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : IT_NORD-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : BE-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : BE-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : CZ-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_POSITIVE_PV_SLOPE` (scope=SCEN, scénario=HIGH_CO2) : CZ: slope PV positive et significative.. [evidence:check_Q2_POSITIVE_PV_SLOPE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : CZ-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : DE-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : DE-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : ES-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : ES-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : FR-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : FR-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : IT_NORD-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : IT_NORD-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : NL-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_CO2) : NL-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_CO2) : DE-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_CO2) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_CO2) : ES-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_CO2) : FR-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_CO2) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_CO2) : IT_NORD-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_CO2) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : BE-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : BE-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : CZ-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_POSITIVE_PV_SLOPE` (scope=SCEN, scénario=HIGH_GAS) : CZ: slope PV positive et significative.. [evidence:check_Q2_POSITIVE_PV_SLOPE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : CZ-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : DE-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : DE-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : ES-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : ES-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : FR-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : FR-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : IT_NORD-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : IT_NORD-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : NL-PV: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `Q2_FRAGILE` (scope=SCEN, scénario=HIGH_GAS) : NL-WIND: n=2 < 3.. [evidence:check_Q2_FRAGILE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_GAS) : DE-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_GAS) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_GAS) : ES-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_GAS) : FR-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_GAS) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_GAS) : IT_NORD-2030: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=HIGH_GAS) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `BUNDLE_LEDGER_STATUS` (scope=BUNDLE, scénario=) : ledger: FAIL=0, WARN=3. [evidence:check_BUNDLE_LEDGER_STATUS]
-
-### Risques de mauvaise lecture
-Premier risque: confondre cohérence empirique et causalité stricte. Le dispositif est construit pour expliquer, pas pour prouver un mécanisme unique.
-Deuxième risque: ignorer les tests NON_TESTABLE et surinterpréter un sous-ensemble favorable de résultats.
-Troisième risque: lire des niveaux absolus hors de leur contexte (pays, année, scénario, qualité de données).
+### Robustesse, fragilité et risques de mauvaise lecture
+Checks consolidés: total=86, WARN/FAIL/ERROR=81, INFO=5.
+Codes les plus fréquents à traiter: Q2_FRAGILE:42, RC_CAPTURE_RANGE:20, RC_LOW_REGIME_COHERENCE:8, RC_IR_GT_1:7, Q2_POSITIVE_PV_SLOPE:3, BUNDLE_LEDGER_STATUS:1.
+Risque 1: confondre corrélation et causalité. Risque 2: ignorer les WARN/NON_TESTABLE. Risque 3: extrapoler hors périmètre (pays, période, scénario) sans revalidation empirique.
 
 ### Réponse conclusive à la question
-La réponse de cette section est valide dans le cadre des tests exécutés et des statuts associés. Une conclusion opérationnelle n'est retenue comme robuste que si elle ne contredit aucun FAIL et explicite tout WARN.
+La conclusion est formulée au niveau des preuves effectivement observées. Une conclusion est considérée robuste uniquement si elle ne contredit aucun FAIL et si les WARN restants sont explicitement interprétés.
+En cas de divergence historique/prospectif, la position recommandée n'est pas de choisir un camp, mais de qualifier précisément la cause de divergence: hypothèses scénario, qualité des données, ou limites structurelles du modèle.
 
-### Actions / priorités de décision
-Priorité 1: traiter les écarts marqués FAIL avant toute décision engageante. Priorité 2: encadrer les WARN par un plan de mitigation analytique (sensibilités, qualité data, scénarios complémentaires). Priorité 3: convertir les résultats robustes en options de pilotage hiérarchisées (court, moyen, long terme).
+### Actions et priorités de décision
+1. Prioriser le traitement des incohérences critiques (FAIL ou contradiction forte avec reality checks).
+2. Réviser les hypothèses prospectives qui réduisent artificiellement le stress système.
+3. Consolider les périmètres avec faible robustesse statistique avant usage stratégique.
 
-## Q3 — Analyse détaillée
+### Table de traçabilité test par test
+| test_id | source_ref | mode | scenario_id | status | value | threshold | interpretation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Q2-H-01 | SPEC2-Q2/Slides 10 | HIST | NaN | PASS | 14 | >0 lignes | Les pentes historiques sont calculees. |
+| Q2-H-02 | SPEC2-Q2/Slides 10-12 | HIST | NaN | PASS | n,p_value,r2 | r2,p_value,n disponibles | La robustesse statistique est lisible. |
+| Q2-H-03 | Slides 10-13 | HIST | NaN | PASS | 6 | >0 lignes | Les drivers de pente sont disponibles. |
+| Q2-S-01 | SPEC2-Q2/Slides 11 | SCEN | BASE | PASS | 14 | >0 lignes | Pentes prospectives calculees. |
+| Q2-S-01 | SPEC2-Q2/Slides 11 | SCEN | HIGH_CO2 | PASS | 14 | >0 lignes | Pentes prospectives calculees. |
+| Q2-S-01 | SPEC2-Q2/Slides 11 | SCEN | HIGH_GAS | PASS | 14 | >0 lignes | Pentes prospectives calculees. |
+| Q2-S-02 | SPEC2-Q2 | SCEN | BASE | WARN | 0.00% | >=30% robustes | Delta de pente interpretable avec robustesse. |
+| Q2-S-02 | SPEC2-Q2 | SCEN | HIGH_CO2 | WARN | 0.00% | >=30% robustes | Delta de pente interpretable avec robustesse. |
+| Q2-S-02 | SPEC2-Q2 | SCEN | HIGH_GAS | WARN | 0.00% | >=30% robustes | Delta de pente interpretable avec robustesse. |
+
+### Références de preuve obligatoires
+[evidence:Q2-H-01] [evidence:Q2-H-02] [evidence:Q2-H-03] [evidence:Q2-S-01] [evidence:Q2-S-02]
+
+Lecture complémentaire de preuve `Q2-H-01`: le test vérifie `Les pentes PV/Wind sont estimees en historique.` selon la règle `Q2_country_slopes non vide`. La valeur observée (`14.0000`) est lue contre le seuil/règle (`>0 lignes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Les pentes historiques sont calculees. [evidence:Q2-H-01] [source:SPEC2-Q2/Slides 10]
+Lecture complémentaire de preuve `Q2-H-02`: le test vérifie `R2/p-value/n sont disponibles pour qualifier la robustesse.` selon la règle `colonnes r2,p_value,n presentes`. La valeur observée (`n,p_value,r2`) est lue contre le seuil/règle (`r2,p_value,n disponibles`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: La robustesse statistique est lisible. [evidence:Q2-H-02] [source:SPEC2-Q2/Slides 10-12]
+Lecture complémentaire de preuve `Q2-H-03`: le test vérifie `Les drivers SR/FAR/IR/corr VRE-load sont exploites.` selon la règle `driver correlations non vides`. La valeur observée (`6.0000`) est lue contre le seuil/règle (`>0 lignes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Les drivers de pente sont disponibles. [evidence:Q2-H-03] [source:Slides 10-13]
+
+## Q3 - Analyse détaillée
 
 ### Question business
-Déterminer si le système reste en dégradation, se stabilise ou s'améliore, puis chiffrer les ordres de grandeur d'inversion.
+Qualifier la dynamique de sortie de Phase 2 (dégradation, stabilisation, amélioration) et chiffrer les ordres de grandeur des leviers d'inversion (demande, must-run, flex).
 
 ### Définitions opérationnelles
-- Le statut système (dégradation/stabilisation/amélioration) agrège plusieurs tendances, il ne dépend pas d'un seul KPI.
-- Les contre-factuels demande, must-run, flex sont des ordres de grandeur statiques, pas une trajectoire d'investissement optimisée.
-- La condition d'entrée en Phase 3 doit combiner un signal prix et un signal physique cohérent.
+- Le statut (dégradation, stabilisation, amélioration) est multi-indicateurs et non monocritère.
+- Les contre-factuels demande/must-run/flex sont des ordres de grandeur statiques.
+- L'entrée en Phase 3 exige une convergence de signaux physiques et marché.
 
 ### Périmètre des tests exécutés
-L'analyse couvre le périmètre `FR, DE, ES, NL, BE, CZ, IT_NORD`. Le module `Q3` est lu en mode historique et en mode prospectif à partir d'un run combiné unique, sans mélange inter-runs, afin de garantir la cohérence de traçabilité.
+Le périmètre analysé couvre `périmètre du run`. L'analyse s'appuie sur un run combiné unique pour éviter tout mélange inter-runs, et distingue systématiquement historique (observé) et prospectif (scénarisé).
+Synthèse des tests exécutés: 10 tests au total, HIST=2, SCEN=8. Répartition statuts: PASS=10, WARN=0, FAIL=0, NON_TESTABLE=0.
+Couverture prospective par scénario: BASE:2, DEMAND_UP:2, FLEX_UP:2, LOW_RIGIDITY:2.
+Aucun test WARN/FAIL/NON_TESTABLE n'est remonté; le diagnostic technique est globalement stable.
 
-### Résultats historiques test par test
-Test `Q3-H-01` (historique scénario `nan`) : l'objectif est "Les tendances h_negative et capture_ratio sont estimees.". La règle de décision est "Q3_status non vide". Valeur observée = `7.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les tendances historiques sont calculees.. [evidence:Q3-H-01] [source:SPEC2-Q3/Slides 16]
-Test `Q3-H-02` (historique scénario `nan`) : l'objectif est "Les statuts degradation/stabilisation/amelioration sont attribues.". La règle de décision est "status dans ensemble attendu". Valeur observée = `2.0000` ; seuil/règle = `status valides` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les statuts business sont renseignes.. [evidence:Q3-H-02] [source:SPEC2-Q3]
-
-### Résultats prospectifs test par test (par scénario)
-Test `Q3-S-01` (prospectif scénario `BASE`) : l'objectif est "Les besoins demande/must-run/flex sont quantifies en scenario.". La règle de décision est "inversion_k, inversion_r et additional_absorbed presentes". Valeur observée = `7.0000` ; seuil/règle = `colonnes inversion presentes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les ordres de grandeur d'inversion sont quantifies.. [evidence:Q3-S-01] [source:SPEC2-Q3/Slides 17]
-Test `Q3-S-01` (prospectif scénario `DEMAND_UP`) : l'objectif est "Les besoins demande/must-run/flex sont quantifies en scenario.". La règle de décision est "inversion_k, inversion_r et additional_absorbed presentes". Valeur observée = `7.0000` ; seuil/règle = `colonnes inversion presentes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les ordres de grandeur d'inversion sont quantifies.. [evidence:Q3-S-01] [source:SPEC2-Q3/Slides 17]
-Test `Q3-S-01` (prospectif scénario `FLEX_UP`) : l'objectif est "Les besoins demande/must-run/flex sont quantifies en scenario.". La règle de décision est "inversion_k, inversion_r et additional_absorbed presentes". Valeur observée = `7.0000` ; seuil/règle = `colonnes inversion presentes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les ordres de grandeur d'inversion sont quantifies.. [evidence:Q3-S-01] [source:SPEC2-Q3/Slides 17]
-Test `Q3-S-01` (prospectif scénario `LOW_RIGIDITY`) : l'objectif est "Les besoins demande/must-run/flex sont quantifies en scenario.". La règle de décision est "inversion_k, inversion_r et additional_absorbed presentes". Valeur observée = `7.0000` ; seuil/règle = `colonnes inversion presentes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les ordres de grandeur d'inversion sont quantifies.. [evidence:Q3-S-01] [source:SPEC2-Q3/Slides 17]
-Test `Q3-S-02` (prospectif scénario `BASE`) : l'objectif est "Le statut prospectif est interpretable pour la transition phase 3.". La règle de décision est "status non vide en SCEN". Valeur observée = `1.0000` ; seuil/règle = `status renseignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La lecture de transition phase 3 est possible.. [evidence:Q3-S-02] [source:Slides 17-19]
-Test `Q3-S-02` (prospectif scénario `DEMAND_UP`) : l'objectif est "Le statut prospectif est interpretable pour la transition phase 3.". La règle de décision est "status non vide en SCEN". Valeur observée = `1.0000` ; seuil/règle = `status renseignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La lecture de transition phase 3 est possible.. [evidence:Q3-S-02] [source:Slides 17-19]
-Test `Q3-S-02` (prospectif scénario `FLEX_UP`) : l'objectif est "Le statut prospectif est interpretable pour la transition phase 3.". La règle de décision est "status non vide en SCEN". Valeur observée = `1.0000` ; seuil/règle = `status renseignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La lecture de transition phase 3 est possible.. [evidence:Q3-S-02] [source:Slides 17-19]
-Test `Q3-S-02` (prospectif scénario `LOW_RIGIDITY`) : l'objectif est "Le statut prospectif est interpretable pour la transition phase 3.". La règle de décision est "status non vide en SCEN". Valeur observée = `1.0000` ; seuil/règle = `status renseignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : La lecture de transition phase 3 est possible.. [evidence:Q3-S-02] [source:Slides 17-19]
+### Résultats historiques et prospectifs (synthèse chiffrée)
+Historique Q3 - distribution des statuts: degradation:6, hors_scope_stage2:1.
+Ordres de grandeur historiques des leviers d'inversion:
+| metric | mean | median | max |
+| --- | --- | --- | --- |
+| inversion_k_demand | 0.0942 | 0.0583 | 0.2786 |
+| inversion_r_mustrun | 0.1703 | 0.1264 | 0.5332 |
+| additional_absorbed_needed_TWh_year | 1.3860 | 0.0000 | 9.6888 |
+Prospectif Q3 - synthèse par scénario:
+| scenario_id | rows | status_main | mean_inversion_k | mean_inversion_r |
+| --- | --- | --- | --- | --- |
+| BASE | 7.0000 | hors_scope_stage2 | 0.0000 | 0.0000 |
+| DEMAND_UP | 7.0000 | hors_scope_stage2 | 0.0000 | 0.0000 |
+| FLEX_UP | 7.0000 | hors_scope_stage2 | 0.0000 | 0.0000 |
+| LOW_RIGIDITY | 7.0000 | hors_scope_stage2 | 0.0000 | 0.0000 |
 
 ### Comparaison historique vs prospectif
-Comparaison `inversion_k_demand` pour `BE` sous scénario `BASE` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `BE` sous scénario `BASE` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `CZ` sous scénario `BASE` : historique = `0.1476`, prospectif = `0.0000`, delta = `-0.1476`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `CZ` sous scénario `BASE` : historique = `0.1264`, prospectif = `0.0000`, delta = `-0.1264`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `DE` sous scénario `BASE` : historique = `0.0583`, prospectif = `0.0000`, delta = `-0.0583`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `DE` sous scénario `BASE` : historique = `0.2854`, prospectif = `0.0000`, delta = `-0.2854`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `ES` sous scénario `BASE` : historique = `0.1747`, prospectif = `0.0000`, delta = `-0.1747`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `ES` sous scénario `BASE` : historique = `0.5332`, prospectif = `0.0000`, delta = `-0.5332`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `FR` sous scénario `BASE` : historique = `0.2786`, prospectif = `0.0000`, delta = `-0.2786`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `FR` sous scénario `BASE` : historique = `0.2468`, prospectif = `0.0000`, delta = `-0.2468`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `IT_NORD` sous scénario `BASE` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `IT_NORD` sous scénario `BASE` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `NL` sous scénario `BASE` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `NL` sous scénario `BASE` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `BE` sous scénario `DEMAND_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `BE` sous scénario `DEMAND_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `CZ` sous scénario `DEMAND_UP` : historique = `0.1476`, prospectif = `0.0000`, delta = `-0.1476`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `CZ` sous scénario `DEMAND_UP` : historique = `0.1264`, prospectif = `0.0000`, delta = `-0.1264`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `DE` sous scénario `DEMAND_UP` : historique = `0.0583`, prospectif = `0.0000`, delta = `-0.0583`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `DE` sous scénario `DEMAND_UP` : historique = `0.2854`, prospectif = `0.0000`, delta = `-0.2854`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `ES` sous scénario `DEMAND_UP` : historique = `0.1747`, prospectif = `0.0000`, delta = `-0.1747`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `ES` sous scénario `DEMAND_UP` : historique = `0.5332`, prospectif = `0.0000`, delta = `-0.5332`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `FR` sous scénario `DEMAND_UP` : historique = `0.2786`, prospectif = `0.0000`, delta = `-0.2786`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `FR` sous scénario `DEMAND_UP` : historique = `0.2468`, prospectif = `0.0000`, delta = `-0.2468`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `IT_NORD` sous scénario `DEMAND_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `IT_NORD` sous scénario `DEMAND_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `NL` sous scénario `DEMAND_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `NL` sous scénario `DEMAND_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `BE` sous scénario `FLEX_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `BE` sous scénario `FLEX_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `CZ` sous scénario `FLEX_UP` : historique = `0.1476`, prospectif = `0.0000`, delta = `-0.1476`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `CZ` sous scénario `FLEX_UP` : historique = `0.1264`, prospectif = `0.0000`, delta = `-0.1264`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `DE` sous scénario `FLEX_UP` : historique = `0.0583`, prospectif = `0.0000`, delta = `-0.0583`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `DE` sous scénario `FLEX_UP` : historique = `0.2854`, prospectif = `0.0000`, delta = `-0.2854`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `ES` sous scénario `FLEX_UP` : historique = `0.1747`, prospectif = `0.0000`, delta = `-0.1747`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `ES` sous scénario `FLEX_UP` : historique = `0.5332`, prospectif = `0.0000`, delta = `-0.5332`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `FR` sous scénario `FLEX_UP` : historique = `0.2786`, prospectif = `0.0000`, delta = `-0.2786`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `FR` sous scénario `FLEX_UP` : historique = `0.2468`, prospectif = `0.0000`, delta = `-0.2468`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `IT_NORD` sous scénario `FLEX_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `IT_NORD` sous scénario `FLEX_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `NL` sous scénario `FLEX_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `NL` sous scénario `FLEX_UP` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `BE` sous scénario `LOW_RIGIDITY` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `BE` sous scénario `LOW_RIGIDITY` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `CZ` sous scénario `LOW_RIGIDITY` : historique = `0.1476`, prospectif = `0.0000`, delta = `-0.1476`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `CZ` sous scénario `LOW_RIGIDITY` : historique = `0.1264`, prospectif = `0.0000`, delta = `-0.1264`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `DE` sous scénario `LOW_RIGIDITY` : historique = `0.0583`, prospectif = `0.0000`, delta = `-0.0583`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `DE` sous scénario `LOW_RIGIDITY` : historique = `0.2854`, prospectif = `0.0000`, delta = `-0.2854`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `ES` sous scénario `LOW_RIGIDITY` : historique = `0.1747`, prospectif = `0.0000`, delta = `-0.1747`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `ES` sous scénario `LOW_RIGIDITY` : historique = `0.5332`, prospectif = `0.0000`, delta = `-0.5332`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `FR` sous scénario `LOW_RIGIDITY` : historique = `0.2786`, prospectif = `0.0000`, delta = `-0.2786`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `FR` sous scénario `LOW_RIGIDITY` : historique = `0.2468`, prospectif = `0.0000`, delta = `-0.2468`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `IT_NORD` sous scénario `LOW_RIGIDITY` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `IT_NORD` sous scénario `LOW_RIGIDITY` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_k_demand` pour `NL` sous scénario `LOW_RIGIDITY` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
-Comparaison `inversion_r_mustrun` pour `NL` sous scénario `LOW_RIGIDITY` : historique = `0.0000`, prospectif = `0.0000`, delta = `0.0000`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q3]
+La comparaison historique vs prospectif contient 56 lignes sur 2 métriques et 4 scénarios.
+Lecture synthétique des deltas moyens (prospectif - historique):
+| metric | scenario_id | count | mean | median |
+| --- | --- | --- | --- | --- |
+| inversion_k_demand | BASE | 7.0000 | -0.0942 | -0.0583 |
+| inversion_k_demand | DEMAND_UP | 7.0000 | -0.0942 | -0.0583 |
+| inversion_k_demand | FLEX_UP | 7.0000 | -0.0942 | -0.0583 |
+| inversion_k_demand | LOW_RIGIDITY | 7.0000 | -0.0942 | -0.0583 |
+| inversion_r_mustrun | BASE | 7.0000 | -0.1703 | -0.1264 |
+| inversion_r_mustrun | DEMAND_UP | 7.0000 | -0.1703 | -0.1264 |
+| inversion_r_mustrun | FLEX_UP | 7.0000 | -0.1703 | -0.1264 |
+| inversion_r_mustrun | LOW_RIGIDITY | 7.0000 | -0.1703 | -0.1264 |
 
-### Interprétation argumentée
-La lecture stratégique repose sur une discipline simple: 1) qualifier la validité des tests, 2) expliquer les écarts avec les règles attendues, 3) convertir ces écarts en implications décisionnelles. Tout résultat présenté ici est strictement borné aux preuves chiffrées du ledger et des tables de comparaison. Aucune extrapolation hors périmètre n'est retenue.
-En pratique, un signal convergent entre historique et prospectif renforce la robustesse opérationnelle de la conclusion. À l'inverse, un signal divergent n'est pas rejeté: il est traité comme une zone d'incertitude à instrumenter, avec hypothèses explicites et test de sensibilité additionnel.
-
-### Robustesse / fragilité
-Bilan de robustesse `Q3` : PASS=10, WARN=0, FAIL=0, NON_TESTABLE=0, total=10.
-Lecture de gouvernance : un PASS valide le test au regard de sa règle locale ; un WARN impose une prudence d'interprétation ; un FAIL invalide l'assertion correspondante tant que la cause n'est pas traitée ; un NON_TESTABLE interdit la conclusion.
-Part de tests PASS = `100.00%`. Cette part sert d'indicateur de confiance global, mais ne remplace pas la lecture test par test. [evidence:ledger_Q3]
-Check `Q3_MUSTRUN_HIGH` (scope=HIST, scénario=) : ES: inversion_r_mustrun=53.3% (>50%).. [evidence:check_Q3_MUSTRUN_HIGH]
-Check `Q3_DEMAND_HIGH` (scope=HIST, scénario=) : FR: inversion_k_demand=27.9% (>25%).. [evidence:check_Q3_DEMAND_HIGH]
-Check `RC_IR_GT_1` (scope=HIST, scénario=) : FR-2024: IR > 1 (must-run tres eleve en creux).. [evidence:check_RC_IR_GT_1]
-Check `RC_LOW_REGIME_COHERENCE` (scope=HIST, scénario=) : FR-2024: regime_coherence < 0.55.. [evidence:check_RC_LOW_REGIME_COHERENCE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=BASE) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : ES-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=DEMAND_UP) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=FLEX_UP) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=FLEX_UP) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=FLEX_UP) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : DE-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : ES-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : FR-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-Check `RC_CAPTURE_RANGE` (scope=SCEN, scénario=LOW_RIGIDITY) : IT_NORD-2040: capture price PV hors plage attendue.. [evidence:check_RC_CAPTURE_RANGE]
-
-### Risques de mauvaise lecture
-Premier risque: confondre cohérence empirique et causalité stricte. Le dispositif est construit pour expliquer, pas pour prouver un mécanisme unique.
-Deuxième risque: ignorer les tests NON_TESTABLE et surinterpréter un sous-ensemble favorable de résultats.
-Troisième risque: lire des niveaux absolus hors de leur contexte (pays, année, scénario, qualité de données).
+### Robustesse, fragilité et risques de mauvaise lecture
+Checks consolidés: total=51, WARN/FAIL/ERROR=18, INFO=32.
+Codes les plus fréquents à traiter: RC_CAPTURE_RANGE:14, Q3_DEMAND_HIGH:1, Q3_MUSTRUN_HIGH:1, RC_IR_GT_1:1, RC_LOW_REGIME_COHERENCE:1.
+Risque 1: confondre corrélation et causalité. Risque 2: ignorer les WARN/NON_TESTABLE. Risque 3: extrapoler hors périmètre (pays, période, scénario) sans revalidation empirique.
 
 ### Réponse conclusive à la question
-La réponse de cette section est valide dans le cadre des tests exécutés et des statuts associés. Une conclusion opérationnelle n'est retenue comme robuste que si elle ne contredit aucun FAIL et explicite tout WARN.
+La conclusion est formulée au niveau des preuves effectivement observées. Une conclusion est considérée robuste uniquement si elle ne contredit aucun FAIL et si les WARN restants sont explicitement interprétés.
+En cas de divergence historique/prospectif, la position recommandée n'est pas de choisir un camp, mais de qualifier précisément la cause de divergence: hypothèses scénario, qualité des données, ou limites structurelles du modèle.
 
-### Actions / priorités de décision
-Priorité 1: traiter les écarts marqués FAIL avant toute décision engageante. Priorité 2: encadrer les WARN par un plan de mitigation analytique (sensibilités, qualité data, scénarios complémentaires). Priorité 3: convertir les résultats robustes en options de pilotage hiérarchisées (court, moyen, long terme).
+### Actions et priorités de décision
+1. Prioriser le traitement des incohérences critiques (FAIL ou contradiction forte avec reality checks).
+2. Réviser les hypothèses prospectives qui réduisent artificiellement le stress système.
+3. Consolider les périmètres avec faible robustesse statistique avant usage stratégique.
 
-## Q4 — Analyse détaillée
+### Table de traçabilité test par test
+| test_id | source_ref | mode | scenario_id | status | value | threshold | interpretation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Q3-H-01 | SPEC2-Q3/Slides 16 | HIST | NaN | PASS | 7.0000 | >0 lignes | Les tendances historiques sont calculees. |
+| Q3-H-02 | SPEC2-Q3 | HIST | NaN | PASS | 2.0000 | status valides | Les statuts business sont renseignes. |
+| Q3-S-01 | SPEC2-Q3/Slides 17 | SCEN | BASE | PASS | 7.0000 | colonnes inversion presentes | Les ordres de grandeur d'inversion sont quantifies. |
+| Q3-S-01 | SPEC2-Q3/Slides 17 | SCEN | DEMAND_UP | PASS | 7.0000 | colonnes inversion presentes | Les ordres de grandeur d'inversion sont quantifies. |
+| Q3-S-01 | SPEC2-Q3/Slides 17 | SCEN | FLEX_UP | PASS | 7.0000 | colonnes inversion presentes | Les ordres de grandeur d'inversion sont quantifies. |
+| Q3-S-01 | SPEC2-Q3/Slides 17 | SCEN | LOW_RIGIDITY | PASS | 7.0000 | colonnes inversion presentes | Les ordres de grandeur d'inversion sont quantifies. |
+| Q3-S-02 | Slides 17-19 | SCEN | BASE | PASS | 1.0000 | status renseignes | La lecture de transition phase 3 est possible. |
+| Q3-S-02 | Slides 17-19 | SCEN | DEMAND_UP | PASS | 1.0000 | status renseignes | La lecture de transition phase 3 est possible. |
+| Q3-S-02 | Slides 17-19 | SCEN | FLEX_UP | PASS | 1.0000 | status renseignes | La lecture de transition phase 3 est possible. |
+| Q3-S-02 | Slides 17-19 | SCEN | LOW_RIGIDITY | PASS | 1.0000 | status renseignes | La lecture de transition phase 3 est possible. |
+
+### Références de preuve obligatoires
+[evidence:Q3-H-01] [evidence:Q3-H-02] [evidence:Q3-S-01] [evidence:Q3-S-02]
+
+Lecture complémentaire de preuve `Q3-H-01`: le test vérifie `Les tendances h_negative et capture_ratio sont estimees.` selon la règle `Q3_status non vide`. La valeur observée (`7.0000`) est lue contre le seuil/règle (`>0 lignes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Les tendances historiques sont calculees. [evidence:Q3-H-01] [source:SPEC2-Q3/Slides 16]
+Lecture complémentaire de preuve `Q3-H-02`: le test vérifie `Les statuts degradation/stabilisation/amelioration sont attribues.` selon la règle `status dans ensemble attendu`. La valeur observée (`2.0000`) est lue contre le seuil/règle (`status valides`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Les statuts business sont renseignes. [evidence:Q3-H-02] [source:SPEC2-Q3]
+Lecture complémentaire de preuve `Q3-S-01`: le test vérifie `Les besoins demande/must-run/flex sont quantifies en scenario.` selon la règle `inversion_k, inversion_r et additional_absorbed presentes`. La valeur observée (`7.0000`) est lue contre le seuil/règle (`colonnes inversion presentes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Les ordres de grandeur d'inversion sont quantifies. [evidence:Q3-S-01] [source:SPEC2-Q3/Slides 17]
+Lecture complémentaire de preuve `Q3-S-01`: le test vérifie `Les besoins demande/must-run/flex sont quantifies en scenario.` selon la règle `inversion_k, inversion_r et additional_absorbed presentes`. La valeur observée (`7.0000`) est lue contre le seuil/règle (`colonnes inversion presentes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Les ordres de grandeur d'inversion sont quantifies. [evidence:Q3-S-01] [source:SPEC2-Q3/Slides 17]
+Lecture complémentaire de preuve `Q3-S-01`: le test vérifie `Les besoins demande/must-run/flex sont quantifies en scenario.` selon la règle `inversion_k, inversion_r et additional_absorbed presentes`. La valeur observée (`7.0000`) est lue contre le seuil/règle (`colonnes inversion presentes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Les ordres de grandeur d'inversion sont quantifies. [evidence:Q3-S-01] [source:SPEC2-Q3/Slides 17]
+Lecture complémentaire de preuve `Q3-S-01`: le test vérifie `Les besoins demande/must-run/flex sont quantifies en scenario.` selon la règle `inversion_k, inversion_r et additional_absorbed presentes`. La valeur observée (`7.0000`) est lue contre le seuil/règle (`colonnes inversion presentes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Les ordres de grandeur d'inversion sont quantifies. [evidence:Q3-S-01] [source:SPEC2-Q3/Slides 17]
+
+## Q4 - Analyse détaillée
 
 ### Question business
-Quantifier l'effet des batteries sur la physique du surplus et sur la valeur de l'actif selon différents modes de dispatch.
+Quantifier l'effet des batteries sous une lecture système et une lecture actif, avec tests d'invariants physiques et comparaison des scénarios de contexte.
 
 ### Définitions opérationnelles
-- SURPLUS_FIRST mesure l'effet système sur l'absorption du surplus ; PRICE_ARBITRAGE_SIMPLE mesure une logique valeur simplifiée.
-- PV_COLOCATED permet d'évaluer l'amélioration potentielle du capture price d'un actif couplé batterie.
-- La frontière puissance/durée révèle les rendements décroissants et les zones de sur-dimensionnement.
+- SURPLUS_FIRST porte une lecture système (absorption du surplus).
+- PRICE_ARBITRAGE_SIMPLE porte une lecture économique batterie simplifiée.
+- PV_COLOCATED porte une lecture valeur actif PV + batterie.
 
 ### Périmètre des tests exécutés
-L'analyse couvre le périmètre `FR, DE, ES, NL, BE, CZ, IT_NORD`. Le module `Q4` est lu en mode historique et en mode prospectif à partir d'un run combiné unique, sans mélange inter-runs, afin de garantir la cohérence de traçabilité.
+Le périmètre analysé couvre `périmètre du run`. L'analyse s'appuie sur un run combiné unique pour éviter tout mélange inter-runs, et distingue systématiquement historique (observé) et prospectif (scénarisé).
+Synthèse des tests exécutés: 10 tests au total, HIST=2, SCEN=8. Répartition statuts: PASS=10, WARN=0, FAIL=0, NON_TESTABLE=0.
+Couverture prospective par scénario: BASE:2, FLEX_UP:2, HIGH_CO2:2, HIGH_GAS:2.
+Aucun test WARN/FAIL/NON_TESTABLE n'est remonté; le diagnostic technique est globalement stable.
 
-### Résultats historiques test par test
-Test `Q4-H-01` (historique scénario `nan`) : l'objectif est "SURPLUS_FIRST, PRICE_ARBITRAGE_SIMPLE et PV_COLOCATED sont executes.". La règle de décision est "3 modes executes avec sorties non vides". Valeur observée = `HIST_PRICE_ARBITRAGE_SIMPLE,HIST_PV_COLOCATED` ; seuil/règle = `3 modes executes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les trois modes Q4 sont disponibles.. [evidence:Q4-H-01] [source:SPEC2-Q4/Slides 22]
-Test `Q4-H-02` (historique scénario `nan`) : l'objectif est "Bornes SOC/puissance/energie respectees.". La règle de décision est "aucun check FAIL Q4". Valeur observée = `PASS` ; seuil/règle = `pas de FAIL` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Les invariants physiques batterie sont respectes.. [evidence:Q4-H-02] [source:SPEC2-Q4]
-
-### Résultats prospectifs test par test (par scénario)
-Test `Q4-S-01` (prospectif scénario `BASE`) : l'objectif est "Impact FAR/surplus/capture compare entre scenarios utiles.". La règle de décision est "Q4 summary non vide pour >=1 scenario". Valeur observée = `1.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Resultats Q4 prospectifs disponibles.. [evidence:Q4-S-01] [source:SPEC2-Q4/Slides 23]
-Test `Q4-S-01` (prospectif scénario `FLEX_UP`) : l'objectif est "Impact FAR/surplus/capture compare entre scenarios utiles.". La règle de décision est "Q4 summary non vide pour >=1 scenario". Valeur observée = `1.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Resultats Q4 prospectifs disponibles.. [evidence:Q4-S-01] [source:SPEC2-Q4/Slides 23]
-Test `Q4-S-01` (prospectif scénario `HIGH_CO2`) : l'objectif est "Impact FAR/surplus/capture compare entre scenarios utiles.". La règle de décision est "Q4 summary non vide pour >=1 scenario". Valeur observée = `1.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Resultats Q4 prospectifs disponibles.. [evidence:Q4-S-01] [source:SPEC2-Q4/Slides 23]
-Test `Q4-S-01` (prospectif scénario `HIGH_GAS`) : l'objectif est "Impact FAR/surplus/capture compare entre scenarios utiles.". La règle de décision est "Q4 summary non vide pour >=1 scenario". Valeur observée = `1.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Resultats Q4 prospectifs disponibles.. [evidence:Q4-S-01] [source:SPEC2-Q4/Slides 23]
-Test `Q4-S-02` (prospectif scénario `BASE`) : l'objectif est "Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.". La règle de décision est "delta pv_capture ou revenus vs BASE". Valeur observée = `1 318.76` ; seuil/règle = `capture apres finite` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Sensibilite valeur exploitable.. [evidence:Q4-S-02] [source:Slides 23-25]
-Test `Q4-S-02` (prospectif scénario `FLEX_UP`) : l'objectif est "Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.". La règle de décision est "delta pv_capture ou revenus vs BASE". Valeur observée = `1 317.04` ; seuil/règle = `capture apres finite` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Sensibilite valeur exploitable.. [evidence:Q4-S-02] [source:Slides 23-25]
-Test `Q4-S-02` (prospectif scénario `HIGH_CO2`) : l'objectif est "Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.". La règle de décision est "delta pv_capture ou revenus vs BASE". Valeur observée = `1 336.28` ; seuil/règle = `capture apres finite` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Sensibilite valeur exploitable.. [evidence:Q4-S-02] [source:Slides 23-25]
-Test `Q4-S-02` (prospectif scénario `HIGH_GAS`) : l'objectif est "Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.". La règle de décision est "delta pv_capture ou revenus vs BASE". Valeur observée = `1 356.60` ; seuil/règle = `capture apres finite` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Sensibilite valeur exploitable.. [evidence:Q4-S-02] [source:Slides 23-25]
+### Résultats historiques et prospectifs (synthèse chiffrée)
+Frontière historique Q4:
+| dispatch_mode | objective | required_bess_power_mw | required_bess_energy_mwh | required_bess_duration_h | far_before | far_after | surplus_unabs_energy_before | surplus_unabs_energy_after | pv_capture_price_before | pv_capture_price_after | revenue_bess_price_taker | soc_min | soc_max | charge_max | discharge_max | charge_sum_mwh | discharge_sum_mwh | initial_deliverable_mwh | engine_version | compute_time_sec | cache_hit |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SURPLUS_FIRST | FAR_TARGET | 0.0000 | 0.0000 | 1.0000 | 0.7911 | 0.7911 | 12.7375 | 12.7375 | 39.2480 | 39.2480 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 0.0000 | 0.0000 | 2.0000 | 0.7911 | 0.7911 | 12.7375 | 12.7375 | 39.2480 | 39.2480 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 0.0000 | 0.0000 | 4.0000 | 0.7911 | 0.7911 | 12.7375 | 12.7375 | 39.2480 | 39.2480 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 0.0000 | 0.0000 | 6.0000 | 0.7911 | 0.7911 | 12.7375 | 12.7375 | 39.2480 | 39.2480 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 0.0000 | 0.0000 | 8.0000 | 0.7911 | 0.7911 | 12.7375 | 12.7375 | 39.2480 | 39.2480 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 0.0000 | 0.0000 | 10.0000 | 0.7911 | 0.7911 | 12.7375 | 12.7375 | 39.2480 | 39.2480 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 200.0000 | 200.0000 | 1.0000 | 0.7911 | 0.7922 | 12.7375 | 12.6718 | 39.2480 | 39.2480 | 2 653 039.2 | 0.0000 | 200.0000 | 200.0000 | 187.6166 | 65 761.53 | 57 787.95 | 93.8083 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 200.0000 | 400.0000 | 2.0000 | 0.7911 | 0.7932 | 12.7375 | 12.6068 | 39.2480 | 39.2480 | 5 245 639.2 | 0.0000 | 400.0000 | 200.0000 | 200.0000 | 130 773.60 | 115 092.38 | 187.6166 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 200.0000 | 800.0000 | 4.0000 | 0.7911 | 0.7953 | 12.7375 | 12.4801 | 39.2480 | 39.2480 | 9 831 831.2 | 0.0000 | 800.0000 | 200.0000 | 200.0000 | 257 461.60 | 226 765.44 | 375.2333 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 200.0000 | 1 200.00 | 6.0000 | 0.7911 | 0.7973 | 12.7375 | 12.3613 | 39.2480 | 39.2480 | 12 288 985.3 | 0.0000 | 1 200.00 | 200.0000 | 200.0000 | 376 276.65 | 331 510.31 | 562.8499 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 200.0000 | 1 600.00 | 8.0000 | 0.7911 | 0.7991 | 12.7375 | 12.2510 | 39.2480 | 39.2480 | 14 026 056.7 | 0.0000 | 1 600.00 | 200.0000 | 200.0000 | 486 504.35 | 428 698.30 | 750.4665 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 200.0000 | 2 000.00 | 10.0000 | 0.7911 | 0.8007 | 12.7375 | 12.1508 | 39.2480 | 39.2480 | 15 337 124.4 | 0.0000 | 2 000.00 | 200.0000 | 200.0000 | 586 724.43 | 517 079.58 | 938.0832 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 500.0000 | 500.0000 | 1.0000 | 0.7911 | 0.7938 | 12.7375 | 12.5742 | 39.2480 | 39.2480 | 6 655 521.5 | 0.0000 | 500.0000 | 500.0000 | 469.0416 | 163 343.57 | 143 536.86 | 234.5208 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 500.0000 | 1 000.00 | 2.0000 | 0.7911 | 0.7964 | 12.7375 | 12.4122 | 39.2480 | 39.2480 | 13 144 189.9 | 0.0000 | 1 000.00 | 500.0000 | 500.0000 | 325 300.86 | 286 293.80 | 469.0416 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 500.0000 | 2 000.00 | 4.0000 | 0.7911 | 0.8016 | 12.7375 | 12.0966 | 39.2480 | 39.2480 | 24 616 879.4 | 0.0000 | 2 000.00 | 500.0000 | 500.0000 | 640 944.73 | 564 529.45 | 938.0832 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 500.0000 | 3 000.00 | 6.0000 | 0.7911 | 0.8064 | 12.7375 | 11.8042 | 39.2480 | 39.2480 | 30 744 074.2 | 0.0000 | 3 000.00 | 500.0000 | 500.0000 | 933 364.40 | 822 327.80 | 1 407.12 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 500.0000 | 4 000.00 | 8.0000 | 0.7911 | 0.8109 | 12.7375 | 11.5325 | 39.2480 | 39.2480 | 35 044 855.1 | 0.0000 | 4 000.00 | 500.0000 | 500.0000 | 1 204 987.6 | 1 061 825.3 | 1 876.17 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 500.0000 | 5 000.00 | 10.0000 | 0.7911 | 0.8149 | 12.7375 | 11.2879 | 39.2480 | 39.2480 | 38 346 349.8 | 0.0000 | 5 000.00 | 500.0000 | 500.0000 | 1 449 624.6 | 1 277 574.9 | 2 345.21 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 1 000.00 | 1 000.00 | 1.0000 | 0.7911 | 0.7964 | 12.7375 | 12.4136 | 39.2480 | 39.2480 | 13 349 020.3 | 0.0000 | 1 000.00 | 1 000.00 | 938.0832 | 323 930.21 | 284 848.42 | 469.0416 | v2.1.0 | 1.5958 | 1.0000 |
+| SURPLUS_FIRST | FAR_TARGET | 1 000.00 | 2 000.00 | 2.0000 | 0.7911 | 0.8017 | 12.7375 | 12.0914 | 39.2480 | 39.2480 | 26 352 082.7 | 0.0000 | 2 000.00 | 1 000.00 | 1 000.00 | 646 113.04 | 568 838.35 | 938.0832 | v2.1.0 | 1.5958 | 1.0000 |
+Synthèse historique Q4:
+| country | year | dispatch_mode | objective | required_bess_power_mw | required_bess_energy_mwh | required_bess_duration_h | far_before | far_after | surplus_unabs_energy_before | surplus_unabs_energy_after | pv_capture_price_before | pv_capture_price_after | revenue_bess_price_taker | soc_min | soc_max | charge_max | discharge_max | charge_sum_mwh | discharge_sum_mwh | initial_deliverable_mwh | engine_version | compute_time_sec | cache_hit | notes_quality |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FR | 2 024.00 | SURPLUS_FIRST | FAR_TARGET | 6 000.00 | 48 000.00 | 8.0000 | 0.7911 | 0.9656 | 12.7375 | 2.1003 | 39.2480 | 39.2480 | 355 296 205.8 | 0.0000 | 48 000.00 | 6 000.00 | 6 000.00 | 10 637 245.9 | 9 382 611.2 | 22 514.00 | v2.1.0 | 1.5958 | 1.0000 | ok |
+Prospectif Q4 - synthèse:
+| scenario_id | rows | far_after_mean | surplus_unabs_after_mean | pv_capture_after_mean |
+| --- | --- | --- | --- | --- |
+| BASE | 1.0000 | NaN | 0.0000 | 1 318.76 |
+| FLEX_UP | 1.0000 | NaN | 0.0000 | 1 317.04 |
+| HIGH_CO2 | 1.0000 | NaN | 0.0000 | 1 336.28 |
+| HIGH_GAS | 1.0000 | NaN | 0.0000 | 1 356.60 |
 
 ### Comparaison historique vs prospectif
-Comparaison `far_after` pour `FR` sous scénario `BASE` : historique = `0.9656`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `surplus_unabs_energy_after` pour `FR` sous scénario `BASE` : historique = `2.1003`, prospectif = `0.0000`, delta = `-2.1003`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `pv_capture_price_after` pour `FR` sous scénario `BASE` : historique = `39.2480`, prospectif = `1 318.76`, delta = `1 279.51`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `far_after` pour `FR` sous scénario `FLEX_UP` : historique = `0.9656`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `surplus_unabs_energy_after` pour `FR` sous scénario `FLEX_UP` : historique = `2.1003`, prospectif = `0.0000`, delta = `-2.1003`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `pv_capture_price_after` pour `FR` sous scénario `FLEX_UP` : historique = `39.2480`, prospectif = `1 317.04`, delta = `1 277.79`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `far_after` pour `FR` sous scénario `HIGH_CO2` : historique = `0.9656`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `surplus_unabs_energy_after` pour `FR` sous scénario `HIGH_CO2` : historique = `2.1003`, prospectif = `0.0000`, delta = `-2.1003`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `pv_capture_price_after` pour `FR` sous scénario `HIGH_CO2` : historique = `39.2480`, prospectif = `1 336.28`, delta = `1 297.03`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `far_after` pour `FR` sous scénario `HIGH_GAS` : historique = `0.9656`, prospectif = `NaN`, delta = `NaN`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `surplus_unabs_energy_after` pour `FR` sous scénario `HIGH_GAS` : historique = `2.1003`, prospectif = `0.0000`, delta = `-2.1003`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `pv_capture_price_after` pour `FR` sous scénario `HIGH_GAS` : historique = `39.2480`, prospectif = `1 356.60`, delta = `1 317.36`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `far_after` pour `FR` sous scénario `HIST_PRICE_ARBITRAGE_SIMPLE` : historique = `0.9656`, prospectif = `0.9307`, delta = `-0.0349`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
-Comparaison `far_after` pour `FR` sous scénario `HIST_PV_COLOCATED` : historique = `0.9656`, prospectif = `0.9055`, delta = `-0.0600`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q4]
+La comparaison historique vs prospectif contient 14 lignes sur 3 métriques et 6 scénarios.
+Lecture synthétique des deltas moyens (prospectif - historique):
+| metric | scenario_id | count | mean | median |
+| --- | --- | --- | --- | --- |
+| far_after | BASE | 0.0000 | NaN | NaN |
+| far_after | FLEX_UP | 0.0000 | NaN | NaN |
+| far_after | HIGH_CO2 | 0.0000 | NaN | NaN |
+| far_after | HIGH_GAS | 0.0000 | NaN | NaN |
+| far_after | HIST_PRICE_ARBITRAGE_SIMPLE | 1.0000 | -0.0349 | -0.0349 |
+| far_after | HIST_PV_COLOCATED | 1.0000 | -0.0600 | -0.0600 |
+| pv_capture_price_after | BASE | 1.0000 | 1 279.51 | 1 279.51 |
+| pv_capture_price_after | FLEX_UP | 1.0000 | 1 277.79 | 1 277.79 |
+| pv_capture_price_after | HIGH_CO2 | 1.0000 | 1 297.03 | 1 297.03 |
+| pv_capture_price_after | HIGH_GAS | 1.0000 | 1 317.36 | 1 317.36 |
+| surplus_unabs_energy_after | BASE | 1.0000 | -2.1003 | -2.1003 |
+| surplus_unabs_energy_after | FLEX_UP | 1.0000 | -2.1003 | -2.1003 |
+| surplus_unabs_energy_after | HIGH_CO2 | 1.0000 | -2.1003 | -2.1003 |
+| surplus_unabs_energy_after | HIGH_GAS | 1.0000 | -2.1003 | -2.1003 |
 
-### Interprétation argumentée
-La lecture stratégique repose sur une discipline simple: 1) qualifier la validité des tests, 2) expliquer les écarts avec les règles attendues, 3) convertir ces écarts en implications décisionnelles. Tout résultat présenté ici est strictement borné aux preuves chiffrées du ledger et des tables de comparaison. Aucune extrapolation hors périmètre n'est retenue.
-En pratique, un signal convergent entre historique et prospectif renforce la robustesse opérationnelle de la conclusion. À l'inverse, un signal divergent n'est pas rejeté: il est traité comme une zone d'incertitude à instrumenter, avec hypothèses explicites et test de sensibilité additionnel.
-
-### Robustesse / fragilité
-Bilan de robustesse `Q4` : PASS=10, WARN=0, FAIL=0, NON_TESTABLE=0, total=10.
-Lecture de gouvernance : un PASS valide le test au regard de sa règle locale ; un WARN impose une prudence d'interprétation ; un FAIL invalide l'assertion correspondante tant que la cause n'est pas traitée ; un NON_TESTABLE interdit la conclusion.
-Part de tests PASS = `100.00%`. Cette part sert d'indicateur de confiance global, mais ne remplace pas la lecture test par test. [evidence:ledger_Q4]
-Aucun check technique WARN/FAIL n'est remonté en complément du ledger.
-
-### Risques de mauvaise lecture
-Premier risque: confondre cohérence empirique et causalité stricte. Le dispositif est construit pour expliquer, pas pour prouver un mécanisme unique.
-Deuxième risque: ignorer les tests NON_TESTABLE et surinterpréter un sous-ensemble favorable de résultats.
-Troisième risque: lire des niveaux absolus hors de leur contexte (pays, année, scénario, qualité de données).
+### Robustesse, fragilité et risques de mauvaise lecture
+Checks consolidés: total=6, WARN/FAIL/ERROR=0, INFO=2.
+Risque 1: confondre corrélation et causalité. Risque 2: ignorer les WARN/NON_TESTABLE. Risque 3: extrapoler hors périmètre (pays, période, scénario) sans revalidation empirique.
 
 ### Réponse conclusive à la question
-La réponse de cette section est valide dans le cadre des tests exécutés et des statuts associés. Une conclusion opérationnelle n'est retenue comme robuste que si elle ne contredit aucun FAIL et explicite tout WARN.
+La conclusion est formulée au niveau des preuves effectivement observées. Une conclusion est considérée robuste uniquement si elle ne contredit aucun FAIL et si les WARN restants sont explicitement interprétés.
+En cas de divergence historique/prospectif, la position recommandée n'est pas de choisir un camp, mais de qualifier précisément la cause de divergence: hypothèses scénario, qualité des données, ou limites structurelles du modèle.
 
-### Actions / priorités de décision
-Priorité 1: traiter les écarts marqués FAIL avant toute décision engageante. Priorité 2: encadrer les WARN par un plan de mitigation analytique (sensibilités, qualité data, scénarios complémentaires). Priorité 3: convertir les résultats robustes en options de pilotage hiérarchisées (court, moyen, long terme).
+### Actions et priorités de décision
+1. Prioriser le traitement des incohérences critiques (FAIL ou contradiction forte avec reality checks).
+2. Réviser les hypothèses prospectives qui réduisent artificiellement le stress système.
+3. Consolider les périmètres avec faible robustesse statistique avant usage stratégique.
 
-## Q5 — Analyse détaillée
+### Table de traçabilité test par test
+| test_id | source_ref | mode | scenario_id | status | value | threshold | interpretation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Q4-H-01 | SPEC2-Q4/Slides 22 | HIST | NaN | PASS | HIST_PRICE_ARBITRAGE_SIMPLE,HIST_PV_COLOCATED | 3 modes executes | Les trois modes Q4 sont disponibles. |
+| Q4-H-02 | SPEC2-Q4 | HIST | NaN | PASS | PASS | pas de FAIL | Les invariants physiques batterie sont respectes. |
+| Q4-S-01 | SPEC2-Q4/Slides 23 | SCEN | BASE | PASS | 1 | >0 lignes | Resultats Q4 prospectifs disponibles. |
+| Q4-S-01 | SPEC2-Q4/Slides 23 | SCEN | FLEX_UP | PASS | 1 | >0 lignes | Resultats Q4 prospectifs disponibles. |
+| Q4-S-01 | SPEC2-Q4/Slides 23 | SCEN | HIGH_CO2 | PASS | 1 | >0 lignes | Resultats Q4 prospectifs disponibles. |
+| Q4-S-01 | SPEC2-Q4/Slides 23 | SCEN | HIGH_GAS | PASS | 1 | >0 lignes | Resultats Q4 prospectifs disponibles. |
+| Q4-S-02 | Slides 23-25 | SCEN | BASE | PASS | 1318.7589939342624 | capture apres finite | Sensibilite valeur exploitable. |
+| Q4-S-02 | Slides 23-25 | SCEN | FLEX_UP | PASS | 1317.042435494933 | capture apres finite | Sensibilite valeur exploitable. |
+| Q4-S-02 | Slides 23-25 | SCEN | HIGH_CO2 | PASS | 1336.2811724552707 | capture apres finite | Sensibilite valeur exploitable. |
+| Q4-S-02 | Slides 23-25 | SCEN | HIGH_GAS | PASS | 1356.6039238995759 | capture apres finite | Sensibilite valeur exploitable. |
+
+### Références de preuve obligatoires
+[evidence:Q4-H-01] [evidence:Q4-H-02] [evidence:Q4-S-01] [evidence:Q4-S-02]
+
+## Q5 - Analyse détaillée
 
 ### Question business
-Mesurer l'impact CO2/gaz sur l'ancre thermique et traduire ce signal en implications opérationnelles et de scénarisation.
+Mesurer l'impact du gaz et du CO2 sur l'ancre thermique, puis traduire cet impact en sensibilités opérationnelles et en niveau de CO2 requis sous hypothèses explicites.
 
 ### Définitions opérationnelles
-- TTL est une statistique de queue de prix hors surplus ; TCA est une ancre coût explicative, les deux ne sont pas interchangeables.
-- Les sensibilités dTCA/dCO2 et dTCA/dGas donnent une lecture incrémentale des chocs de commodités.
-- Le CO2 requis pour un TTL cible est un ordre de grandeur conditionnel aux hypothèses techno et de pass-through.
+- TTL est une statistique de prix hors surplus ; TCA est une ancre coût explicative.
+- dTCA/dCO2 et dTCA/dGas mesurent des sensibilités incrémentales.
+- Le CO2 requis est un ordre de grandeur conditionnel aux hypothèses de techno marginale et de pass-through.
 
 ### Périmètre des tests exécutés
-L'analyse couvre le périmètre `FR, DE, ES, NL, BE, CZ, IT_NORD`. Le module `Q5` est lu en mode historique et en mode prospectif à partir d'un run combiné unique, sans mélange inter-runs, afin de garantir la cohérence de traçabilité.
+Le périmètre analysé couvre `périmètre du run`. L'analyse s'appuie sur un run combiné unique pour éviter tout mélange inter-runs, et distingue systématiquement historique (observé) et prospectif (scénarisé).
+Synthèse des tests exécutés: 10 tests au total, HIST=2, SCEN=8. Répartition statuts: PASS=10, WARN=0, FAIL=0, NON_TESTABLE=0.
+Couverture prospective par scénario: BASE:2, HIGH_CO2:2, HIGH_GAS:2, HIGH_BOTH:2.
+Aucun test WARN/FAIL/NON_TESTABLE n'est remonté; le diagnostic technique est globalement stable.
 
-### Résultats historiques test par test
-Test `Q5-H-01` (historique scénario `nan`) : l'objectif est "TTL/TCA/alpha/corr sont estimes hors surplus.". La règle de décision est "Q5_summary non vide avec ttl_obs et tca_q95". Valeur observée = `ttl=419.95, tca=370.83959999999996` ; seuil/règle = `ttl/tca finis` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : L'ancre thermique est quantifiable.. [evidence:Q5-H-01] [source:SPEC2-Q5/Slides 28]
-Test `Q5-H-02` (historique scénario `nan`) : l'objectif est "dTCA/dCO2 et dTCA/dGas sont positives.". La règle de décision est "dTCA_dCO2 > 0 et dTCA_dGas > 0". Valeur observée = `dCO2=0.36727272727272725, dGas=1.8181818181818181` ; seuil/règle = `>0` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Sensibilites analytiques coherentes.. [evidence:Q5-H-02] [source:SPEC2-Q5]
-
-### Résultats prospectifs test par test (par scénario)
-Test `Q5-S-01` (prospectif scénario `BASE`) : l'objectif est "BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.". La règle de décision est "Q5_summary non vide sur scenarios selectionnes". Valeur observée = `1.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Sensibilites scenario calculees.. [evidence:Q5-S-01] [source:SPEC2-Q5/Slides 29]
-Test `Q5-S-01` (prospectif scénario `HIGH_CO2`) : l'objectif est "BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.". La règle de décision est "Q5_summary non vide sur scenarios selectionnes". Valeur observée = `1.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Sensibilites scenario calculees.. [evidence:Q5-S-01] [source:SPEC2-Q5/Slides 29]
-Test `Q5-S-01` (prospectif scénario `HIGH_GAS`) : l'objectif est "BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.". La règle de décision est "Q5_summary non vide sur scenarios selectionnes". Valeur observée = `1.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Sensibilites scenario calculees.. [evidence:Q5-S-01] [source:SPEC2-Q5/Slides 29]
-Test `Q5-S-01` (prospectif scénario `HIGH_BOTH`) : l'objectif est "BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.". La règle de décision est "Q5_summary non vide sur scenarios selectionnes". Valeur observée = `1.0000` ; seuil/règle = `>0 lignes` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : Sensibilites scenario calculees.. [evidence:Q5-S-01] [source:SPEC2-Q5/Slides 29]
-Test `Q5-S-02` (prospectif scénario `BASE`) : l'objectif est "Le CO2 requis est calcule et interpretable.". La règle de décision est "co2_required_* non NaN". Valeur observée = `-10 168.86` ; seuil/règle = `valeur finie` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : CO2 requis interpretable.. [evidence:Q5-S-02] [source:SPEC2-Q5/Slides 31]
-Test `Q5-S-02` (prospectif scénario `HIGH_CO2`) : l'objectif est "Le CO2 requis est calcule et interpretable.". La règle de décision est "co2_required_* non NaN". Valeur observée = `-10 177.06` ; seuil/règle = `valeur finie` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : CO2 requis interpretable.. [evidence:Q5-S-02] [source:SPEC2-Q5/Slides 31]
-Test `Q5-S-02` (prospectif scénario `HIGH_GAS`) : l'objectif est "Le CO2 requis est calcule et interpretable.". La règle de décision est "co2_required_* non NaN". Valeur observée = `-10 308.64` ; seuil/règle = `valeur finie` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : CO2 requis interpretable.. [evidence:Q5-S-02] [source:SPEC2-Q5/Slides 31]
-Test `Q5-S-02` (prospectif scénario `HIGH_BOTH`) : l'objectif est "Le CO2 requis est calcule et interpretable.". La règle de décision est "co2_required_* non NaN". Valeur observée = `-10 113.86` ; seuil/règle = `valeur finie` ; statut = `PASS`. Résultat conforme à la règle attendue. Interprétation métier associée : CO2 requis interpretable.. [evidence:Q5-S-02] [source:SPEC2-Q5/Slides 31]
+### Résultats historiques et prospectifs (synthèse chiffrée)
+Synthèse historique Q5 (TTL/TCA/sensibilités):
+| country | year_range_used | marginal_tech | ttl_obs | tca_q95 | alpha | corr_cd | dTCA_dCO2 | dTCA_dGas | ttl_target | co2_required_base | co2_required_gas_override | warnings_quality |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FR | 2018-2024 | CCGT | 419.9500 | 370.8396 | 49.1104 | 0.9082 | 0.3673 | 1.8182 | 120.0000 | -749.8055 | NaN | NaN |
+Prospectif Q5 - synthèse:
+| scenario_id | rows | ttl_obs_mean | tca_q95_mean | co2_required_base_mean |
+| --- | --- | --- | --- | --- |
+| BASE | 1.0000 | 3 895.15 | 130.6727 | -10 168.86 |
+| HIGH_BOTH | 1.0000 | 3 895.15 | 194.5091 | -10 113.86 |
+| HIGH_CO2 | 1.0000 | 3 918.36 | 150.8727 | -10 177.06 |
+| HIGH_GAS | 1.0000 | 3 946.48 | 174.3091 | -10 308.64 |
 
 ### Comparaison historique vs prospectif
-Comparaison `ttl_obs` pour `FR` sous scénario `BASE` : historique = `419.9500`, prospectif = `3 895.15`, delta = `3 475.20`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `tca_q95` pour `FR` sous scénario `BASE` : historique = `370.8396`, prospectif = `130.6727`, delta = `-240.1669`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `co2_required_base` pour `FR` sous scénario `BASE` : historique = `-749.8055`, prospectif = `-10 168.86`, delta = `-9 419.06`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `ttl_obs` pour `FR` sous scénario `HIGH_CO2` : historique = `419.9500`, prospectif = `3 918.36`, delta = `3 498.41`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `tca_q95` pour `FR` sous scénario `HIGH_CO2` : historique = `370.8396`, prospectif = `150.8727`, delta = `-219.9669`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `co2_required_base` pour `FR` sous scénario `HIGH_CO2` : historique = `-749.8055`, prospectif = `-10 177.06`, delta = `-9 427.26`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `ttl_obs` pour `FR` sous scénario `HIGH_GAS` : historique = `419.9500`, prospectif = `3 946.48`, delta = `3 526.53`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `tca_q95` pour `FR` sous scénario `HIGH_GAS` : historique = `370.8396`, prospectif = `174.3091`, delta = `-196.5305`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `co2_required_base` pour `FR` sous scénario `HIGH_GAS` : historique = `-749.8055`, prospectif = `-10 308.64`, delta = `-9 558.83`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `ttl_obs` pour `FR` sous scénario `HIGH_BOTH` : historique = `419.9500`, prospectif = `3 895.15`, delta = `3 475.20`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `tca_q95` pour `FR` sous scénario `HIGH_BOTH` : historique = `370.8396`, prospectif = `194.5091`, delta = `-176.3305`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
-Comparaison `co2_required_base` pour `FR` sous scénario `HIGH_BOTH` : historique = `-749.8055`, prospectif = `-10 113.86`, delta = `-9 364.06`. Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. [evidence:comparison_Q5]
+La comparaison historique vs prospectif contient 12 lignes sur 3 métriques et 4 scénarios.
+Lecture synthétique des deltas moyens (prospectif - historique):
+| metric | scenario_id | count | mean | median |
+| --- | --- | --- | --- | --- |
+| co2_required_base | BASE | 1.0000 | -9 419.06 | -9 419.06 |
+| co2_required_base | HIGH_BOTH | 1.0000 | -9 364.06 | -9 364.06 |
+| co2_required_base | HIGH_CO2 | 1.0000 | -9 427.26 | -9 427.26 |
+| co2_required_base | HIGH_GAS | 1.0000 | -9 558.83 | -9 558.83 |
+| tca_q95 | BASE | 1.0000 | -240.1669 | -240.1669 |
+| tca_q95 | HIGH_BOTH | 1.0000 | -176.3305 | -176.3305 |
+| tca_q95 | HIGH_CO2 | 1.0000 | -219.9669 | -219.9669 |
+| tca_q95 | HIGH_GAS | 1.0000 | -196.5305 | -196.5305 |
+| ttl_obs | BASE | 1.0000 | 3 475.20 | 3 475.20 |
+| ttl_obs | HIGH_BOTH | 1.0000 | 3 475.20 | 3 475.20 |
+| ttl_obs | HIGH_CO2 | 1.0000 | 3 498.41 | 3 498.41 |
+| ttl_obs | HIGH_GAS | 1.0000 | 3 526.53 | 3 526.53 |
 
-### Interprétation argumentée
-La lecture stratégique repose sur une discipline simple: 1) qualifier la validité des tests, 2) expliquer les écarts avec les règles attendues, 3) convertir ces écarts en implications décisionnelles. Tout résultat présenté ici est strictement borné aux preuves chiffrées du ledger et des tables de comparaison. Aucune extrapolation hors périmètre n'est retenue.
-En pratique, un signal convergent entre historique et prospectif renforce la robustesse opérationnelle de la conclusion. À l'inverse, un signal divergent n'est pas rejeté: il est traité comme une zone d'incertitude à instrumenter, avec hypothèses explicites et test de sensibilité additionnel.
-
-### Robustesse / fragilité
-Bilan de robustesse `Q5` : PASS=10, WARN=0, FAIL=0, NON_TESTABLE=0, total=10.
-Lecture de gouvernance : un PASS valide le test au regard de sa règle locale ; un WARN impose une prudence d'interprétation ; un FAIL invalide l'assertion correspondante tant que la cause n'est pas traitée ; un NON_TESTABLE interdit la conclusion.
-Part de tests PASS = `100.00%`. Cette part sert d'indicateur de confiance global, mais ne remplace pas la lecture test par test. [evidence:ledger_Q5]
-Check `Q5_LOW_CORR_CD` (scope=SCEN, scénario=BASE) : Relation prix-ancre faible sur regimes C/D (corr<0.2).. [evidence:check_Q5_LOW_CORR_CD]
-Check `Q5_LOW_CORR_CD` (scope=SCEN, scénario=HIGH_CO2) : Relation prix-ancre faible sur regimes C/D (corr<0.2).. [evidence:check_Q5_LOW_CORR_CD]
-Check `Q5_LOW_CORR_CD` (scope=SCEN, scénario=HIGH_GAS) : Relation prix-ancre faible sur regimes C/D (corr<0.2).. [evidence:check_Q5_LOW_CORR_CD]
-Check `Q5_LOW_CORR_CD` (scope=SCEN, scénario=HIGH_BOTH) : Relation prix-ancre faible sur regimes C/D (corr<0.2).. [evidence:check_Q5_LOW_CORR_CD]
-
-### Risques de mauvaise lecture
-Premier risque: confondre cohérence empirique et causalité stricte. Le dispositif est construit pour expliquer, pas pour prouver un mécanisme unique.
-Deuxième risque: ignorer les tests NON_TESTABLE et surinterpréter un sous-ensemble favorable de résultats.
-Troisième risque: lire des niveaux absolus hors de leur contexte (pays, année, scénario, qualité de données).
+### Robustesse, fragilité et risques de mauvaise lecture
+Checks consolidés: total=6, WARN/FAIL/ERROR=4, INFO=0.
+Codes les plus fréquents à traiter: Q5_LOW_CORR_CD:4.
+Risque 1: confondre corrélation et causalité. Risque 2: ignorer les WARN/NON_TESTABLE. Risque 3: extrapoler hors périmètre (pays, période, scénario) sans revalidation empirique.
 
 ### Réponse conclusive à la question
-La réponse de cette section est valide dans le cadre des tests exécutés et des statuts associés. Une conclusion opérationnelle n'est retenue comme robuste que si elle ne contredit aucun FAIL et explicite tout WARN.
+La conclusion est formulée au niveau des preuves effectivement observées. Une conclusion est considérée robuste uniquement si elle ne contredit aucun FAIL et si les WARN restants sont explicitement interprétés.
+En cas de divergence historique/prospectif, la position recommandée n'est pas de choisir un camp, mais de qualifier précisément la cause de divergence: hypothèses scénario, qualité des données, ou limites structurelles du modèle.
 
-### Actions / priorités de décision
-Priorité 1: traiter les écarts marqués FAIL avant toute décision engageante. Priorité 2: encadrer les WARN par un plan de mitigation analytique (sensibilités, qualité data, scénarios complémentaires). Priorité 3: convertir les résultats robustes en options de pilotage hiérarchisées (court, moyen, long terme).
+### Actions et priorités de décision
+1. Prioriser le traitement des incohérences critiques (FAIL ou contradiction forte avec reality checks).
+2. Réviser les hypothèses prospectives qui réduisent artificiellement le stress système.
+3. Consolider les périmètres avec faible robustesse statistique avant usage stratégique.
+
+### Table de traçabilité test par test
+| test_id | source_ref | mode | scenario_id | status | value | threshold | interpretation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Q5-H-01 | SPEC2-Q5/Slides 28 | HIST | NaN | PASS | ttl=419.95, tca=370.83959999999996 | ttl/tca finis | L'ancre thermique est quantifiable. |
+| Q5-H-02 | SPEC2-Q5 | HIST | NaN | PASS | dCO2=0.36727272727272725, dGas=1.8181818181818181 | >0 | Sensibilites analytiques coherentes. |
+| Q5-S-01 | SPEC2-Q5/Slides 29 | SCEN | BASE | PASS | 1 | >0 lignes | Sensibilites scenario calculees. |
+| Q5-S-01 | SPEC2-Q5/Slides 29 | SCEN | HIGH_CO2 | PASS | 1 | >0 lignes | Sensibilites scenario calculees. |
+| Q5-S-01 | SPEC2-Q5/Slides 29 | SCEN | HIGH_GAS | PASS | 1 | >0 lignes | Sensibilites scenario calculees. |
+| Q5-S-01 | SPEC2-Q5/Slides 29 | SCEN | HIGH_BOTH | PASS | 1 | >0 lignes | Sensibilites scenario calculees. |
+| Q5-S-02 | SPEC2-Q5/Slides 31 | SCEN | BASE | PASS | -10168.862806747053 | valeur finie | CO2 requis interpretable. |
+| Q5-S-02 | SPEC2-Q5/Slides 31 | SCEN | HIGH_CO2 | PASS | -10177.062869892936 | valeur finie | CO2 requis interpretable. |
+| Q5-S-02 | SPEC2-Q5/Slides 31 | SCEN | HIGH_GAS | PASS | -10308.637127318678 | valeur finie | CO2 requis interpretable. |
+| Q5-S-02 | SPEC2-Q5/Slides 31 | SCEN | HIGH_BOTH | PASS | -10113.862806747053 | valeur finie | CO2 requis interpretable. |
+
+### Références de preuve obligatoires
+[evidence:Q5-H-01] [evidence:Q5-H-02] [evidence:Q5-S-01] [evidence:Q5-S-02]
+
+Lecture complémentaire de preuve `Q5-H-01`: le test vérifie `TTL/TCA/alpha/corr sont estimes hors surplus.` selon la règle `Q5_summary non vide avec ttl_obs et tca_q95`. La valeur observée (`ttl=419.95, tca=370.83959999999996`) est lue contre le seuil/règle (`ttl/tca finis`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: L'ancre thermique est quantifiable. [evidence:Q5-H-01] [source:SPEC2-Q5/Slides 28]
+Lecture complémentaire de preuve `Q5-H-02`: le test vérifie `dTCA/dCO2 et dTCA/dGas sont positives.` selon la règle `dTCA_dCO2 > 0 et dTCA_dGas > 0`. La valeur observée (`dCO2=0.36727272727272725, dGas=1.8181818181818181`) est lue contre le seuil/règle (`>0`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Sensibilites analytiques coherentes. [evidence:Q5-H-02] [source:SPEC2-Q5]
+Lecture complémentaire de preuve `Q5-S-01`: le test vérifie `BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.` selon la règle `Q5_summary non vide sur scenarios selectionnes`. La valeur observée (`1.0000`) est lue contre le seuil/règle (`>0 lignes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Sensibilites scenario calculees. [evidence:Q5-S-01] [source:SPEC2-Q5/Slides 29]
+Lecture complémentaire de preuve `Q5-S-01`: le test vérifie `BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.` selon la règle `Q5_summary non vide sur scenarios selectionnes`. La valeur observée (`1.0000`) est lue contre le seuil/règle (`>0 lignes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Sensibilites scenario calculees. [evidence:Q5-S-01] [source:SPEC2-Q5/Slides 29]
+Lecture complémentaire de preuve `Q5-S-01`: le test vérifie `BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.` selon la règle `Q5_summary non vide sur scenarios selectionnes`. La valeur observée (`1.0000`) est lue contre le seuil/règle (`>0 lignes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Sensibilites scenario calculees. [evidence:Q5-S-01] [source:SPEC2-Q5/Slides 29]
+Lecture complémentaire de preuve `Q5-S-01`: le test vérifie `BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.` selon la règle `Q5_summary non vide sur scenarios selectionnes`. La valeur observée (`1.0000`) est lue contre le seuil/règle (`>0 lignes`) avec statut `PASS` (conforme à la règle.). D'un point de vue décisionnel, cela signifie: Sensibilites scenario calculees. [evidence:Q5-S-01] [source:SPEC2-Q5/Slides 29]
 
 
 ## 4. Annexes de preuve et traçabilité
@@ -785,6 +669,46 @@ Priorité 1: traiter les écarts marqués FAIL avant toute décision engageante.
 | FULL_20260210_113139 | Q2 | WARN | Q2_FRAGILE | IT_NORD-WIND: n=2 < 3. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
 | FULL_20260210_113139 | Q2 | WARN | Q2_FRAGILE | NL-PV: n=2 < 3. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
 | FULL_20260210_113139 | Q2 | WARN | Q2_FRAGILE | NL-WIND: n=2 < 3. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
+| FULL_20260210_113139 | Q2 | WARN | RC_CAPTURE_RANGE | DE-2030: capture price PV hors plage attendue. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
+| FULL_20260210_113139 | Q2 | WARN | RC_CAPTURE_RANGE | DE-2040: capture price PV hors plage attendue. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
+| FULL_20260210_113139 | Q2 | WARN | RC_CAPTURE_RANGE | ES-2040: capture price PV hors plage attendue. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
+| FULL_20260210_113139 | Q2 | WARN | RC_CAPTURE_RANGE | FR-2030: capture price PV hors plage attendue. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
+| FULL_20260210_113139 | Q2 | WARN | RC_CAPTURE_RANGE | FR-2040: capture price PV hors plage attendue. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
+| FULL_20260210_113139 | Q2 | WARN | RC_CAPTURE_RANGE | IT_NORD-2030: capture price PV hors plage attendue. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
+| FULL_20260210_113139 | Q2 | WARN | RC_CAPTURE_RANGE | IT_NORD-2040: capture price PV hors plage attendue. | SCEN | HIGH_GAS | outputs\combined\FULL_20260210_113139\Q2\summary.json |
+| FULL_20260210_113139 | Q2 | WARN | BUNDLE_LEDGER_STATUS | ledger: FAIL=0, WARN=3 | BUNDLE |  | outputs\combined\FULL_20260210_113139\Q2\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | CZ: FAR cible deja atteinte. | HIST |  | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | DE: FAR cible deja atteinte. | HIST |  | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | Q3_MUSTRUN_HIGH | ES: inversion_r_mustrun=53.3% (>50%). | HIST |  | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | ES: FAR cible deja atteinte. | HIST |  | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | Q3_DEMAND_HIGH | FR: inversion_k_demand=27.9% (>25%). | HIST |  | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | NL: FAR cible deja atteinte. | HIST |  | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | RC_IR_GT_1 | FR-2024: IR > 1 (must-run tres eleve en creux). | HIST |  | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | RC_LOW_REGIME_COHERENCE | FR-2024: regime_coherence < 0.55. | HIST |  | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | BE: FAR cible deja atteinte. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | CZ: FAR cible deja atteinte. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | DE: FAR cible deja atteinte. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | ES: FAR cible deja atteinte. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | FR: FAR cible deja atteinte. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | IT_NORD: FAR cible deja atteinte. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | NL: FAR cible deja atteinte. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | RC_CAPTURE_RANGE | DE-2040: capture price PV hors plage attendue. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | RC_CAPTURE_RANGE | FR-2040: capture price PV hors plage attendue. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | RC_CAPTURE_RANGE | IT_NORD-2040: capture price PV hors plage attendue. | SCEN | BASE | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | BE: FAR cible deja atteinte. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | CZ: FAR cible deja atteinte. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | DE: FAR cible deja atteinte. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | ES: FAR cible deja atteinte. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | FR: FAR cible deja atteinte. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | IT_NORD: FAR cible deja atteinte. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | NL: FAR cible deja atteinte. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | RC_CAPTURE_RANGE | DE-2040: capture price PV hors plage attendue. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | RC_CAPTURE_RANGE | ES-2040: capture price PV hors plage attendue. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | RC_CAPTURE_RANGE | FR-2040: capture price PV hors plage attendue. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | WARN | RC_CAPTURE_RANGE | IT_NORD-2040: capture price PV hors plage attendue. | SCEN | DEMAND_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | BE: FAR cible deja atteinte. | SCEN | FLEX_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | CZ: FAR cible deja atteinte. | SCEN | FLEX_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
+| FULL_20260210_113139 | Q3 | INFO | Q3_FAR_ALREADY_REACHED | DE: FAR cible deja atteinte. | SCEN | FLEX_UP | outputs\combined\FULL_20260210_113139\Q3\summary.json |
 
 ### 4.3 Traçabilité tests -> sources
 | run_id | question_id | test_id | source_ref | mode | scenario_id | status | evidence_ref |
@@ -1048,6 +972,56 @@ Priorité 1: traiter les écarts marqués FAIL avant toute décision engageante.
 | 11 | SLIDE_11_07 | Q2 | Le “capture ratio” est la valeur captée par une filière rapportée au prix moyen de marché | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
 | 11 | SLIDE_11_08 | Q2 | Scénarios simples à construire | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
 | 11 | SLIDE_11_09 | Q2 | Scénario A | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_10 | Q2 | Demande faible et forte croissance solaire | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_11 | Q2 | La pente doit s’accentuer si la flexibilité ne suit pas | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_12 | Q2 | Scénario B | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_13 | Q2 | Demande dynamique via électrification | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_14 | Q2 | La pente peut se réduire si les heures de surplus diminuent | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_15 | Q2 | Scénario C | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_16 | Q2 | Accélération stockage et effacement | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_17 | Q2 | La pente se réduit si le ratio d’absorption par flexibilité augmente vite | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_18 | Q2 | Scénario D | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_19 | Q2 | Choc gaz et CO2 | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_20 | Q2 | L’ancre thermique augmente et change la valeur relative, même si le surplus ne change pas | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_21 | Q2 | Scénario E | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_22 | Q2 | Maintien d’incitations hors marché sur de gros volumes | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_23 | Q2 | La pente peut rester forte car l’investissement ne se freine pas naturellement | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_24 | Q2 | Leviers à relier directement aux drivers | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_25 | Q2 | Le levier “flexibilité” agit sur le ratio d’absorption par flexibilité | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_26 | Q2 | Le levier “pilotabilité” agit sur le ratio d’inflexibilité | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 11 | SLIDE_11_27 | Q2 | Le levier “politique et règles de soutien” agit sur la trajectoire d’investissement et donc sur la vitesse d’augmentation de la pénétration. | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01 | Q2-H-02; Q2-H-03; Q2-S-01 | Q2 |
+| 12 | SLIDE_12_01 | Q2 | Question 2 Limites et règles d’interprétation Définitions nécessaires sur cette slide | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_02 | Q2 | Le “capture ratio” est la valeur captée par une filière rapportée au prix moyen de marché | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_03 | Q2 | L’“ancre thermique des prix” dépend du coût du gaz et du prix du CO2 | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_04 | Q2 | Le “ratio de surplus” mesure l’énergie en surplus sur l’année rapportée à la production totale | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_05 | Q2 | Limites si on veut rester auditable | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_06 | Q2 | La pente observée sur dix ans peut refléter plusieurs régimes différents | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_07 | Q2 | Le marché peut changer de règles au milieu de la période | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_08 | Q2 | La pente peut dépendre d’effets voisins | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_09 | Q2 | L’absorption par export dépend aussi de la situation simultanée des pays interconnectés | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_10 | Q2 | Les incitations politiques sont difficiles à quantifier sans une variable dédiée | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_11 | Q2 | Si on ne modélise pas ce facteur, on peut mal expliquer la durée de phase 2 | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_12 | Q2 | Une pente statistique n’est pas une loi physique | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_13 | Q2 | Elle doit être interprétée comme un ordre de grandeur conditionnel | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_14 | Q2 | Règles de lecture à imposer | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_15 | Q2 | Nous présentons toujours une pente avec un intervalle d’incertitude | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_16 | Q2 | Nous explicitons les années exclues et la raison | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 12 | SLIDE_12_17 | Q2 | Nous relions chaque pente à des variables explicatives mesurables, sinon elle n’est pas actionnable. | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02; outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-02; Q2-H-03 | Q2 |
+| 13 | SLIDE_13_01 | Q2 | Question 2 Livrable attendu Livrable principal | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_02 | Q2 | Un diagnostic chiffré de la pente en phase 2, et une explication simple des facteurs qui la pilotent | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_03 | Q2 | Définitions nécessaires sur cette slide | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_04 | Q2 | Le “capture ratio” est la valeur captée par une filière rapportée au prix moyen de marché | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_05 | Q2 | La “pente” est la variation du capture ratio quand la pénétration augmente en phase 2 | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_06 | Q2 | L’“ancre thermique des prix” dépend du coût du gaz et du prix du CO2 | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_07 | Q2 | Le “ratio de surplus” mesure l’énergie en surplus sur l’année rapportée à la production totale | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_08 | Q2 | Le “ratio d’absorption par flexibilité” mesure la part de surplus absorbée par flexibilité | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_09 | Q2 | Le “ratio d’inflexibilité” mesure la rigidité du parc en heures creuses | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_10 | Q2 | Contenu concret du livrable | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_11 | Q2 | Nous fournissons, par pays, une pente du capture ratio solaire et une pente du capture ratio éolien en phase 2 | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_12 | Q2 | Nous fournissons une décomposition qualitative et si possible quantitative des drivers, avec un ordre de grandeur par driver | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_13 | Q2 | Nous fournissons une lecture opérationnelle pour TTE, sous forme de règles simples | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_14 | Q2 | Par exemple une pente forte signifie que chaque point de pénétration additionnel détruit rapidement la valeur captée si aucune flexibilité ne suit | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
+| 13 | SLIDE_13_15 | Q2 | Nous fournissons une analyse de sensibilité à l’ancre thermique via gaz et CO2, car cette ancre change le niveau de valeur même si la cannibalisation relative reste identique | yes | direct_slide_match | outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03 | Q2-H-03 | Q2 |
 
 ### 4.5 Dictionnaire de preuves
 | run_id | question_id | test_id | source_ref | mode | scenario_id | status | value | threshold | interpretation | evidence_ref |

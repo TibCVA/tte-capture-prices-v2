@@ -305,7 +305,7 @@ def render() -> None:
     st.markdown(
         "**Source principale**: ENTSO-E Transparency Platform\n\n"
         "- **Couverture**: FR, DE, ES, NL, BE, CZ, IT_NORD (7 pays)\n"
-        "- **Periode**: 2018-2024 (historique), 2030/2040 (prospectif)\n"
+        "- **Periode**: 2018-2024 (historique), trajectoire annuelle prospective (par defaut 2025-2035, ancrages 2030/2040)\n"
         "- **Resolution**: Horaire UTC stricte (8760/8784 heures par an)\n"
         "- **Variables cles**: prix day-ahead, charge totale, generation par techno, echanges transfrontaliers, pompage PSH\n"
         "- **Completeness attendue**: >= 98% pour chaque colonne critique\n"

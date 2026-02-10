@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.config_loader import load_phase2_assumptions
+from src.config_loader import load_countries, load_phase2_assumptions
 from src.modules.bundle_result import export_question_bundle
 from src.modules.question_bundle_runner import run_question_bundle
 from src.modules.test_registry import get_default_scenarios
@@ -20,6 +20,7 @@ from src.storage import load_hourly
 
 
 DEFAULT_COUNTRIES = ["FR", "DE", "ES", "NL", "BE", "CZ", "IT_NORD"]
+DEFAULT_SCENARIO_YEARS = list(range(2025, 2036))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -28,9 +29,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--countries", default=",".join(DEFAULT_COUNTRIES))
     parser.add_argument("--hist-year-start", type=int, default=2018)
     parser.add_argument("--hist-year-end", type=int, default=2024)
-    parser.add_argument("--scenario-years", default="2030,2040")
-    parser.add_argument("--q4-country", default="FR")
-    parser.add_argument("--q5-country", default="FR")
+    parser.add_argument("--scenario-years", default=",".join([str(y) for y in DEFAULT_SCENARIO_YEARS]))
+    parser.add_argument("--q4-countries", default="", help="Comma-separated countries for Q4 (default: all --countries)")
+    parser.add_argument("--q5-countries", default="", help="Comma-separated countries for Q5 (default: all --countries)")
     parser.add_argument("--q5-marginal-tech", default="CCGT")
     parser.add_argument("--q5-ttl-target", type=float, default=160.0)
     return parser.parse_args()
@@ -39,6 +40,8 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     countries = [c.strip() for c in str(args.countries).split(",") if c.strip()]
+    q4_countries = [c.strip() for c in str(args.q4_countries).split(",") if c.strip()] or countries
+    q5_countries = [c.strip() for c in str(args.q5_countries).split(",") if c.strip()] or countries
     hist_years = list(range(int(args.hist_year_start), int(args.hist_year_end) + 1))
     scenario_years = [int(y.strip()) for y in str(args.scenario_years).split(",") if y.strip()]
 
@@ -48,6 +51,7 @@ def main() -> None:
     annual_hist = pd.read_parquet(annual_path)
     assumptions_phase1 = load_assumptions_table()
     assumptions_phase2 = load_phase2_assumptions()
+    countries_cfg = load_countries().get("countries", {})
 
     hourly_hist_map: dict[tuple[str, int], pd.DataFrame] = {}
     for country in countries:
@@ -79,8 +83,8 @@ def main() -> None:
             "scenario_years": scenario_years,
         },
         "Q4": {
-            "country": str(args.q4_country),
-            "countries": [str(args.q4_country)],
+            "country": str(q4_countries[0]),
+            "countries": q4_countries,
             "year": int(args.hist_year_end),
             "years": [int(args.hist_year_end)],
             "horizon_year": max(scenario_years),
@@ -91,10 +95,14 @@ def main() -> None:
             "scenario_years": scenario_years,
         },
         "Q5": {
-            "country": str(args.q5_country),
-            "countries": [str(args.q5_country)],
+            "country": str(q5_countries[0]),
+            "countries": q5_countries,
             "years": hist_years,
             "marginal_tech": str(args.q5_marginal_tech),
+            "marginal_tech_by_country": {
+                c: str(countries_cfg.get(c, {}).get("thermal", {}).get("marginal_tech", args.q5_marginal_tech)).upper()
+                for c in q5_countries
+            },
             "ttl_target_eur_mwh": float(args.q5_ttl_target),
             "scenario_ids": get_default_scenarios("Q5"),
             "scenario_years": scenario_years,
@@ -120,4 +128,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

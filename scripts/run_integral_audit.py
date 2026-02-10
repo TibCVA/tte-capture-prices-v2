@@ -49,6 +49,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--reports-dir", default="reports", help="Output reports directory")
     parser.add_argument("--annual-hist-path", default="data/metrics/annual_metrics.parquet")
     parser.add_argument("--scenario-root", default="data/processed/scenario")
+    parser.add_argument("--phase2-assumptions-path", default="data/assumptions/phase2/phase2_scenario_country_year.csv")
     parser.add_argument("--countries", default=",".join(DEFAULT_COUNTRIES))
     return parser.parse_args()
 
@@ -93,7 +94,12 @@ def _load_slides_trace(reports_dir: Path, run_id: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _scenario_coverage(scenario_root: Path, scenario_id: str, countries: list[str]) -> tuple[str, str]:
+def _scenario_coverage(
+    scenario_root: Path,
+    scenario_id: str,
+    countries: list[str],
+    phase2_assumptions: pd.DataFrame | None = None,
+) -> tuple[str, str]:
     p = scenario_root / scenario_id / "annual_metrics.parquet"
     if not p.exists():
         return "MANQUANT", f"{p} absent"
@@ -101,15 +107,36 @@ def _scenario_coverage(scenario_root: Path, scenario_id: str, countries: list[st
     if df.empty:
         return "MANQUANT", f"{p} vide"
     scoped = df[df["country"].astype(str).isin(countries)].copy()
-    expected_rows = len(countries) * 2  # 2030/2040
+    expected_rows = np.nan
+    if phase2_assumptions is not None and not phase2_assumptions.empty:
+        p2 = phase2_assumptions.copy()
+        if {"scenario_id", "country", "year"}.issubset(set(p2.columns)):
+            expected_rows = float(
+                len(
+                    p2[
+                        (p2["scenario_id"].astype(str) == str(scenario_id))
+                        & (p2["country"].astype(str).isin(countries))
+                    ]
+                )
+            )
+    if not np.isfinite(expected_rows) or expected_rows <= 0:
+        scenario_years = (
+            pd.to_numeric(scoped.get("year", pd.Series(dtype=float)), errors="coerce")
+            .dropna()
+            .astype(int)
+            .nunique()
+        )
+        expected_rows = float(len(countries) * max(1, int(scenario_years)))
+
+    expected_rows_i = int(expected_rows)
     n_rows = int(len(scoped))
     n_neg = int((pd.to_numeric(scoped.get("h_negative", np.nan), errors="coerce") > 0).sum())
     n_a = int((pd.to_numeric(scoped.get("h_regime_a", np.nan), errors="coerce") > 0).sum())
-    if n_rows < expected_rows:
-        return "PARTIEL", f"rows={n_rows}/{expected_rows}"
+    if n_rows < expected_rows_i:
+        return "PARTIEL", f"rows={n_rows}/{expected_rows_i}"
     if n_neg == 0 and n_a == 0:
-        return "PARTIEL", f"rows={n_rows}; h_negative>0={n_neg}; h_regime_a>0={n_a}"
-    return "OK", f"rows={n_rows}; h_negative>0={n_neg}; h_regime_a>0={n_a}"
+        return "PARTIEL", f"rows={n_rows}/{expected_rows_i}; h_negative>0={n_neg}; h_regime_a>0={n_a}"
+    return "OK", f"rows={n_rows}/{expected_rows_i}; h_negative>0={n_neg}; h_regime_a>0={n_a}"
 
 
 def _q3_informativeness(run_dir: Path) -> tuple[str, str]:
@@ -129,9 +156,17 @@ def _q3_informativeness(run_dir: Path) -> tuple[str, str]:
     return "PARTIEL", f"share_informative={share_info:.2%}"
 
 
-def run_audit(run_id: str, reports_dir: Path, annual_hist_path: Path, scenario_root: Path, countries: list[str]) -> dict:
+def run_audit(
+    run_id: str,
+    reports_dir: Path,
+    annual_hist_path: Path,
+    scenario_root: Path,
+    countries: list[str],
+    phase2_assumptions_path: Path,
+) -> dict:
     _, run_dir, blocks = load_combined_run(run_id=run_id, strict=True)
     annual_hist = pd.read_parquet(annual_hist_path) if annual_hist_path.exists() else pd.DataFrame()
+    phase2_assumptions = pd.read_csv(phase2_assumptions_path) if phase2_assumptions_path.exists() else pd.DataFrame()
     qc = _load_report_qc(reports_dir, run_id)
     slides_trace = _load_slides_trace(reports_dir, run_id)
 
@@ -161,6 +196,34 @@ def run_audit(run_id: str, reports_dir: Path, annual_hist_path: Path, scenario_r
                 severity=_severity_norm(spec.severity_if_fail),
             )
         )
+
+    # Semantic compliance: metric_rule text and implemented behavior for Q1-S-02.
+    q1_s02_specs = [s for s in tests if s.test_id == "Q1-S-02"]
+    q1_s02_spec = q1_s02_specs[0] if q1_s02_specs else None
+    q1_block = blocks.get("Q1")
+    q1_ledger = q1_block.ledger.copy() if q1_block is not None else pd.DataFrame()
+    q1_s02_rows = q1_ledger[q1_ledger.get("test_id", pd.Series(dtype=str)).astype(str) == "Q1-S-02"].copy() if not q1_ledger.empty else pd.DataFrame()
+    metric_rule_ok = bool(q1_s02_spec is not None and "BASE" in str(q1_s02_spec.metric_rule).upper())
+    behavior_ok = False
+    if not q1_s02_rows.empty:
+        values = q1_s02_rows.get("value", pd.Series(dtype=str)).astype(str).str.lower()
+        behavior_ok = bool(values.str.contains("finite_share=").any() and values.str.contains("nonzero_share=").any())
+    q1_s02_status = "OK" if metric_rule_ok and behavior_ok else "PARTIEL"
+    q1_s02_evidence = (
+        f"metric_rule={getattr(q1_s02_spec, 'metric_rule', 'missing')} ; "
+        f"ledger_rows={int(len(q1_s02_rows))} ; behavior_tokens={'ok' if behavior_ok else 'missing'}"
+    )
+    rows.append(
+        RequirementRow(
+            requirement_id="SEM_Q1_S02_RULE_LOGIC",
+            source_spec="SPEC2-Q1/Slides 5",
+            module_area="Q1",
+            status=q1_s02_status,
+            evidence_type="code+runtime",
+            evidence_ref=q1_s02_evidence,
+            severity="HIGH",
+        )
+    )
 
     # Historical data quality requirements
     hist = annual_hist.copy()
@@ -212,7 +275,7 @@ def run_audit(run_id: str, reports_dir: Path, annual_hist_path: Path, scenario_r
 
     # Scenario coverage requirements
     for sid in DEFAULT_SCENARIOS:
-        st, ev = _scenario_coverage(scenario_root, sid, countries)
+        st, ev = _scenario_coverage(scenario_root, sid, countries, phase2_assumptions=phase2_assumptions)
         rows.append(
             RequirementRow(
                 requirement_id=f"SCEN_{sid}_COVERAGE",
@@ -424,6 +487,7 @@ def main() -> None:
         annual_hist_path=Path(args.annual_hist_path),
         scenario_root=Path(args.scenario_root),
         countries=countries,
+        phase2_assumptions_path=Path(args.phase2_assumptions_path),
     )
     print(json.dumps(stats, ensure_ascii=False, indent=2))
 

@@ -67,6 +67,33 @@ def validate_phase2_assumptions(df: pd.DataFrame) -> list[dict[str, Any]]:
     if int(dup) > 0:
         findings.append({"severity": "ERROR", "code": "P2_DUP_KEY", "message": f"Duplicate keys: {int(dup)}"})
 
+    # Trajectory quality checks (advisory, non-blocking).
+    year_num = pd.to_numeric(df["year"], errors="coerce")
+    traj_df = df.copy()
+    traj_df["__year_num"] = year_num
+    for (scenario_id, country), gp in traj_df.groupby(["scenario_id", "country"], dropna=False):
+        years = sorted(gp["__year_num"].dropna().astype(int).unique().tolist())
+        label = f"{scenario_id}/{country}"
+        if len(years) < 3:
+            findings.append(
+                {
+                    "severity": "WARN",
+                    "code": "P2_TRAJECTORY_SPARSE",
+                    "message": f"{label}: trajectory too sparse ({len(years)} years).",
+                }
+            )
+        if len(years) >= 2:
+            gaps = [b - a for a, b in zip(years[:-1], years[1:])]
+            max_gap = max(gaps)
+            if max_gap > 1:
+                findings.append(
+                    {
+                        "severity": "WARN",
+                        "code": "P2_TRAJECTORY_GAPS",
+                        "message": f"{label}: trajectory has year gaps (max_gap={max_gap}).",
+                    }
+                )
+
     bounded_01 = [
         "must_run_min_output_factor",
         "export_coincidence_factor",
@@ -109,4 +136,3 @@ def validate_phase2_assumptions(df: pd.DataFrame) -> list[dict[str, Any]]:
     if not findings:
         findings.append({"severity": "PASS", "code": "P2_OK", "message": "Phase2 assumptions validation passed"})
     return findings
-

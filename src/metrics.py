@@ -152,7 +152,10 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
 
     p10_mr = _percentile(df[COL_GEN_MUST_RUN], 0.10)
     p10_load = _percentile(df[COL_LOAD_NET], 0.10)
+    p50_mr = _percentile(df[COL_GEN_MUST_RUN], 0.50)
+    p50_load = _percentile(df[COL_LOAD_NET], 0.50)
     ir_p10 = _safe_div(p10_mr, p10_load)
+    ir_p10_excess = float(ir_p10 - 1.0) if np.isfinite(ir_p10) else float("nan")
     ir_mean = _safe_div(float(pd.to_numeric(df[COL_GEN_MUST_RUN], errors="coerce").mean()), float(load.mean()))
 
     capture_ratio_pv_vs_baseload = _safe_div(capture_pv, baseload)
@@ -231,6 +234,11 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "far_observed": far,
         "far_energy": far,
         "ir_p10": ir_p10,
+        "p10_load_mw": p10_load,
+        "p10_must_run_mw": p10_mr,
+        "p50_load_mw": p50_load,
+        "p50_must_run_mw": p50_mr,
+        "ir_p10_excess": ir_p10_excess,
         "ir_mean": ir_mean,
         "ttl_price_based_eur_mwh": ttl,
         "ttl_eur_mwh": ttl,

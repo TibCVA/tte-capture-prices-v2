@@ -9,8 +9,10 @@ import streamlit as st
 _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
 try:
     from app.page_utils import (
+        available_phase2_years,
         assumptions_editor_for,
         build_bundle_hash,
+        default_analysis_scenario_years,
         load_annual_metrics,
         load_phase2_assumptions_table,
         run_question_bundle_cached,
@@ -23,6 +25,8 @@ except Exception as exc:  # pragma: no cover
 
     assumptions_editor_for = _page_utils_unavailable  # type: ignore[assignment]
     build_bundle_hash = _page_utils_unavailable  # type: ignore[assignment]
+    available_phase2_years = _page_utils_unavailable  # type: ignore[assignment]
+    default_analysis_scenario_years = _page_utils_unavailable  # type: ignore[assignment]
     load_annual_metrics = _page_utils_unavailable  # type: ignore[assignment]
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
@@ -128,6 +132,10 @@ def render() -> None:
     scenario_options = sorted(set(assumptions_phase2["scenario_id"].dropna().astype(str).tolist()))
     scenario_options = sorted(set(scenario_options + ["HIGH_BOTH"]))
     default_scen = [s for s in get_default_scenarios("Q5") if s in scenario_options]
+    scenario_year_options = available_phase2_years(assumptions_phase2, scenario_ids=[s for s in scenario_options if s != "HIGH_BOTH"], countries=countries)
+    default_scenario_years = default_analysis_scenario_years(scenario_year_options)
+    if not scenario_year_options:
+        scenario_year_options = default_scenario_years
 
     with st.form("q5_bundle_form"):
         selected_countries = st.multiselect("Pays", countries, default=["FR"] if "FR" in countries else countries[:1])
@@ -136,6 +144,7 @@ def render() -> None:
         marginal_tech = st.selectbox("Technologie marginale (fallback)", ["CCGT", "COAL"], index=0)
         ttl_target = st.number_input("TTL cible (EUR/MWh)", value=120.0, step=5.0)
         scenario_ids = st.multiselect("Scenarios prospectifs", scenario_options, default=default_scen or scenario_options[:2])
+        scenario_years = st.multiselect("Annees prospectives", scenario_year_options, default=default_scenario_years)
         force_recompute = st.checkbox("Forcer recalcul complet (ignore cache bundle)", value=False)
         run_submit = st.form_submit_button("Lancer l'analyse complete Q5", type="primary")
 
@@ -150,7 +159,7 @@ def render() -> None:
             "countries": countries_sel,
             "years": list(range(year_range[0], year_range[1] + 1)),
             "scenario_ids": scenario_ids,
-            "scenario_years": [2030, 2040],
+            "scenario_years": scenario_years or default_scenario_years,
             "marginal_tech": str(marginal_tech).upper(),
             "marginal_tech_by_country": tech_map,
             "ttl_target_eur_mwh": float(ttl_target),
