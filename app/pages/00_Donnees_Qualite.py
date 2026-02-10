@@ -1,6 +1,5 @@
-from __future__ import annotations
+ï»¿from __future__ import annotations
 
-import pandas as pd
 import plotly.express as px
 import streamlit as st
 
@@ -8,14 +7,14 @@ from app.page_utils import country_year_selector, load_hourly_safe, load_validat
 
 
 def render() -> None:
-    st.title("Données & Qualité")
+    st.title("Donnees & Qualite")
     country, year = country_year_selector()
 
     run_pipeline_ui(country, year)
 
     df = load_hourly_safe(country, year)
     if df is None:
-        st.info("Aucune table horaire disponible pour cette sélection.")
+        st.info("Aucune table horaire disponible pour cette selection.")
         return
 
     st.subheader("Completeness")
@@ -23,7 +22,7 @@ def render() -> None:
     st.metric("Completeness", f"{100*completeness:.2f}%")
     st.write("load_net_mode:", df["load_net_mode"].iloc[0])
 
-    st.subheader("Prix observé")
+    st.subheader("Prix observe")
     fig_price = px.line(df.reset_index(), x="timestamp_utc", y="price_da_eur_mwh")
     st.plotly_chart(fig_price, use_container_width=True)
 

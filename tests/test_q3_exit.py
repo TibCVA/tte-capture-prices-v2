@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import pandas as pd
 
@@ -13,9 +13,26 @@ def test_q3_monotonic_counterfactuals(annual_panel_fixture, make_raw_panel, coun
     hourly_map = {("FR", 2024): hourly}
     assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
     panel = annual_panel_fixture[annual_panel_fixture["country"] == "FR"].copy()
-    panel.loc[panel["year"] < 2024, "country"] = "FR"
 
     res = run_q3(panel, hourly_map, assumptions, {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]}, "test")
     out = res.tables["Q3_status"]
     assert not out.empty
     assert "inversion_k_demand" in out.columns
+    assert (out["inversion_k_demand"] >= 0).all()
+    assert (out["inversion_r_mustrun"] >= 0).all()
+
+
+def test_q3_status_field_present(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):
+    from src.processing import build_hourly_table
+
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q3(
+        annual_panel_fixture[annual_panel_fixture["country"] == "FR"],
+        {("FR", 2024): hourly},
+        assumptions,
+        {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]},
+        "test",
+    )
+    assert "status" in res.tables["Q3_status"].columns

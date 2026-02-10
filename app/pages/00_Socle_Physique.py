@@ -1,4 +1,4 @@
-from __future__ import annotations
+ï»¿from __future__ import annotations
 
 import plotly.express as px
 import streamlit as st
@@ -14,7 +14,7 @@ def render() -> None:
         st.info("Aucune table horaire disponible.")
         return
 
-    st.markdown("**Définitions express**: NRL, Surplus, Flex, Régimes A/B/C/D")
+    st.markdown("**Definitions express**: NRL, Surplus, Flex, Regimes A/B/C/D")
 
     view = df.reset_index().tail(48)
     fig1 = px.line(view, x="timestamp_utc", y=["nrl_mw", "surplus_mw", "flex_effective_mw"])

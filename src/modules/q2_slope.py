@@ -1,4 +1,4 @@
-﻿"""Q2 - Phase 2 slope and drivers."""
+"""Q2 - Phase 2 slope and drivers."""
 
 from __future__ import annotations
 
@@ -9,9 +9,13 @@ import pandas as pd
 
 from src.modules.common import assumptions_subset, robust_linreg
 from src.modules.q1_transition import run_q1
+from src.modules.reality_checks import build_common_checks
 from src.modules.result import ModuleResult
 
-Q2_PARAMS = ["min_points_regression"]
+Q2_PARAMS = [
+    "min_points_regression",
+    "exclude_year_2022",
+]
 
 
 def _driver_corr(df: pd.DataFrame, slope_col: str, driver: str) -> float:
@@ -21,49 +25,106 @@ def _driver_corr(df: pd.DataFrame, slope_col: str, driver: str) -> float:
     return float(tmp[slope_col].corr(tmp[driver]))
 
 
-def run_q2(annual_df: pd.DataFrame, assumptions_df: pd.DataFrame, selection: dict[str, Any], run_id: str) -> ModuleResult:
+def _hourly_driver_features(hourly: pd.DataFrame) -> dict[str, float]:
+    if hourly is None or hourly.empty:
+        return {
+            "vre_load_corr_phase2": np.nan,
+            "surplus_load_trough_share_phase2": np.nan,
+        }
+
+    temp = hourly.copy()
+    temp["gen_vre_mw"] = pd.to_numeric(temp.get("gen_vre_mw"), errors="coerce")
+    temp["load_mw"] = pd.to_numeric(temp.get("load_mw"), errors="coerce")
+    temp["surplus_mw"] = pd.to_numeric(temp.get("surplus_mw"), errors="coerce").fillna(0.0)
+    temp = temp.dropna(subset=["gen_vre_mw", "load_mw"])
+    if temp.empty:
+        return {
+            "vre_load_corr_phase2": np.nan,
+            "surplus_load_trough_share_phase2": np.nan,
+        }
+
+    corr = float(temp["gen_vre_mw"].corr(temp["load_mw"])) if len(temp) >= 3 else np.nan
+    p25 = float(temp["load_mw"].quantile(0.25))
+    surplus_total = float(temp["surplus_mw"].sum())
+    surplus_low_load = float(temp.loc[temp["load_mw"] <= p25, "surplus_mw"].sum())
+    trough_share = np.nan if surplus_total <= 0 else surplus_low_load / surplus_total
+
+    return {
+        "vre_load_corr_phase2": corr,
+        "surplus_load_trough_share_phase2": trough_share,
+    }
+
+
+def run_q2(
+    annual_df: pd.DataFrame,
+    assumptions_df: pd.DataFrame,
+    selection: dict[str, Any],
+    run_id: str,
+    hourly_by_country_year: dict[tuple[str, int], pd.DataFrame] | None = None,
+) -> ModuleResult:
     q1 = run_q1(annual_df, assumptions_df, selection, run_id)
+    q1_panel = q1.tables["Q1_year_panel"]
     bascule = q1.tables["Q1_country_summary"][["country", "bascule_year_market"]]
 
     params = {
-        r["param_name"]: float(r["param_value"])
+        str(r["param_name"]): float(r["param_value"])
         for _, r in assumptions_df[assumptions_df["param_name"].isin(Q2_PARAMS)].iterrows()
     }
     min_points = int(params.get("min_points_regression", 3))
+    exclude_2022 = int(params.get("exclude_year_2022", 0)) == 1
 
-    countries = selection.get("countries", sorted(annual_df["country"].unique()))
+    countries = selection.get("countries", sorted(annual_df["country"].dropna().unique().tolist()))
     panel = annual_df[annual_df["country"].isin(countries)].copy().merge(bascule, on="country", how="left")
+    panel = panel.sort_values(["country", "year"])
 
-    rows = []
-    checks = []
+    rows: list[dict[str, Any]] = []
+    checks: list[dict[str, str]] = []
+    warnings: list[str] = []
+
     for country, group in panel.groupby("country"):
         bascule_year = group["bascule_year_market"].dropna()
         if bascule_year.empty:
+            warnings.append(f"{country}: pas de bascule Q1, pente Q2 non calculee.")
             continue
         start = int(bascule_year.iloc[0])
-        gp = group[group["year"] >= start].sort_values("year")
+        gp = group[group["year"] >= start].copy().sort_values("year")
+        if exclude_2022:
+            gp = gp[gp["year"] != 2022]
+
+        hourly_phase2 = []
+        if hourly_by_country_year is not None:
+            for y in gp["year"].dropna().astype(int).tolist():
+                key = (country, y)
+                if key in hourly_by_country_year:
+                    h = hourly_by_country_year[key].copy()
+                    h["year"] = y
+                    hourly_phase2.append(h)
+        hourly_concat = pd.concat(hourly_phase2, ignore_index=False) if hourly_phase2 else pd.DataFrame()
+        h_features = _hourly_driver_features(hourly_concat)
 
         for tech in ["PV", "WIND"]:
             if tech == "PV":
-                x = gp["pv_penetration_pct_gen"].copy()
-                y = gp["capture_ratio_pv_vs_ttl"].copy()
+                x = pd.to_numeric(gp.get("pv_penetration_pct_gen"), errors="coerce")
+                y = pd.to_numeric(gp.get("capture_ratio_pv_vs_ttl"), errors="coerce")
                 x_axis = "pv_penetration_pct_gen"
             else:
-                x = gp["wind_penetration_pct_gen"].copy()
-                y = gp["capture_ratio_wind_vs_ttl"].copy()
+                x = pd.to_numeric(gp.get("wind_penetration_pct_gen"), errors="coerce")
+                y = pd.to_numeric(gp.get("capture_ratio_wind_vs_ttl"), errors="coerce")
                 x_axis = "wind_penetration_pct_gen"
 
-            if x.dropna().empty:
-                x = gp["vre_penetration_proxy"].copy()
-                x_axis = "vre_penetration_proxy"
+            if x.notna().sum() < min_points:
+                x = pd.to_numeric(gp.get("sr_energy"), errors="coerce")
+                x_axis = "sr_energy"
 
             reg = robust_linreg(x, y)
             robust_flag = "ROBUST" if reg["n"] >= min_points else "FRAGILE"
 
+            if robust_flag == "FRAGILE":
+                checks.append({"status": "WARN", "code": "Q2_FRAGILE", "message": f"{country}-{tech}: n={reg['n']} < {min_points}."})
             if tech == "PV" and np.isfinite(reg["slope"]) and reg["slope"] > 0 and reg.get("p_value", 1.0) < 0.05:
-                checks.append({"status": "WARN", "message": f"{country} PV slope positive and significant"})
+                checks.append({"status": "WARN", "code": "Q2_POSITIVE_PV_SLOPE", "message": f"{country}: slope PV positive et significative."})
             if np.isfinite(reg.get("r2", np.nan)) and reg["r2"] < 0.1:
-                checks.append({"status": "INFO", "message": f"{country} {tech} low linear explanatory power"})
+                checks.append({"status": "INFO", "code": "Q2_LOW_R2", "message": f"{country}-{tech}: R2 faible ({reg['r2']:.2f})."})
 
             rows.append(
                 {
@@ -77,18 +138,29 @@ def run_q2(annual_df: pd.DataFrame, assumptions_df: pd.DataFrame, selection: dic
                     "p_value": reg["p_value"],
                     "n": reg["n"],
                     "robust_flag": robust_flag,
-                    "mean_sr_energy_phase2": float(gp["sr_energy"].mean()),
-                    "mean_far_energy_phase2": float(gp["far_energy"].mean()),
-                    "mean_ir_p10_phase2": float(gp["ir_p10"].mean()),
-                    "mean_ttl_phase2": float(gp["ttl_eur_mwh"].mean()),
-                    "vre_load_corr_phase2": float(gp["nrl_price_corr"].mean()),
+                    "mean_sr_energy_phase2": float(pd.to_numeric(gp.get("sr_energy"), errors="coerce").mean()),
+                    "mean_far_energy_phase2": float(pd.to_numeric(gp.get("far_energy"), errors="coerce").mean()),
+                    "mean_ir_p10_phase2": float(pd.to_numeric(gp.get("ir_p10"), errors="coerce").mean()),
+                    "mean_ttl_phase2": float(pd.to_numeric(gp.get("ttl_eur_mwh"), errors="coerce").mean()),
+                    "vre_load_corr_phase2": h_features["vre_load_corr_phase2"],
+                    "surplus_load_trough_share_phase2": h_features["surplus_load_trough_share_phase2"],
                 }
             )
 
     slopes = pd.DataFrame(rows)
+    if slopes.empty:
+        checks.append({"status": "WARN", "code": "Q2_NO_SLOPE", "message": "Aucune pente Q2 n'a pu etre calculee."})
 
     drivers = []
-    for driver in ["mean_sr_energy_phase2", "mean_far_energy_phase2", "mean_ir_p10_phase2", "mean_ttl_phase2", "vre_load_corr_phase2"]:
+    driver_names = [
+        "mean_sr_energy_phase2",
+        "mean_far_energy_phase2",
+        "mean_ir_p10_phase2",
+        "mean_ttl_phase2",
+        "vre_load_corr_phase2",
+        "surplus_load_trough_share_phase2",
+    ]
+    for driver in driver_names:
         pv_corr = _driver_corr(slopes[slopes["tech"] == "PV"], "slope", driver) if not slopes.empty else np.nan
         wind_corr = _driver_corr(slopes[slopes["tech"] == "WIND"], "slope", driver) if not slopes.empty else np.nan
         drivers.append(
@@ -99,10 +171,11 @@ def run_q2(annual_df: pd.DataFrame, assumptions_df: pd.DataFrame, selection: dic
                 "n_countries": int(slopes["country"].nunique()) if not slopes.empty else 0,
             }
         )
-
     driver_corr = pd.DataFrame(drivers)
+
+    checks.extend(build_common_checks(q1_panel))
     if not checks:
-        checks.append({"status": "PASS", "message": "Q2 checks pass"})
+        checks.append({"status": "PASS", "code": "Q2_PASS", "message": "Q2 checks pass."})
 
     kpis = {
         "n_slopes": int(len(slopes)),
@@ -110,8 +183,8 @@ def run_q2(annual_df: pd.DataFrame, assumptions_df: pd.DataFrame, selection: dic
     }
 
     narrative = (
-        "Q2 estimates post-transition cannibalization slope and ranks cross-country drivers. "
-        "Slope is robust when at least 3 historical points are available in Phase 2."
+        "Q2 mesure la pente empirique de cannibalisation apres bascule Q1 "
+        "et classe les drivers transverses (SR/FAR/IR/correlation charge-VRE)."
     )
 
     return ModuleResult(
@@ -124,5 +197,5 @@ def run_q2(annual_df: pd.DataFrame, assumptions_df: pd.DataFrame, selection: dic
         figures=[],
         narrative_md=narrative,
         checks=checks,
-        warnings=[],
+        warnings=warnings,
     )
