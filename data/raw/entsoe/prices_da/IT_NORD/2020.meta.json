@@ -1,0 +1,20 @@
+{
+  "dataset_name": "prices_da",
+  "country": "IT_NORD",
+  "year": 2020,
+  "entsoe_codes_used": [
+    "IT_NORD"
+  ],
+  "start_utc": "2020-01-01 00:00:00+00:00",
+  "end_utc": "2020-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T01:21:57.461042+00:00",
+  "n_rows_raw": 8784,
+  "source_frequency_detected": "unknown",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011384335154826958,
+  "n_rows_after_normalization": 8784,
+  "sha256_of_parquet_file": "cc46f1a74140ca85fb5f23d97184ffa778f6187811a28e63c68ab6b19b0301aa"
+}

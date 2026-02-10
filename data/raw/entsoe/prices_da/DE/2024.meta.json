@@ -1,0 +1,20 @@
+{
+  "dataset_name": "prices_da",
+  "country": "DE",
+  "year": 2024,
+  "entsoe_codes_used": [
+    "DE_LU"
+  ],
+  "start_utc": "2024-01-01 00:00:00+00:00",
+  "end_utc": "2024-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-09T23:41:26.213987+00:00",
+  "n_rows_raw": 8784,
+  "source_frequency_detected": "unknown",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011384335154826958,
+  "n_rows_after_normalization": 8784,
+  "sha256_of_parquet_file": "7e86e037cb87f5cc83ec65238583386c5cba812a5bd8aa89aa20926b0b6b83f0"
+}

@@ -1,0 +1,20 @@
+{
+  "dataset_name": "load_total",
+  "country": "ES",
+  "year": 2022,
+  "entsoe_codes_used": [
+    "ES"
+  ],
+  "start_utc": "2022-01-01 00:00:00+00:00",
+  "end_utc": "2022-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-09T23:49:31.615177+00:00",
+  "n_rows_raw": 24813,
+  "source_frequency_detected": "unknown",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "4afb721142037cba1794a1a2c50b047dda15fe32cec104a3c2927e0d1fd1c8fe"
+}

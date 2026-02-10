@@ -1,0 +1,20 @@
+{
+  "dataset_name": "generation_by_type",
+  "country": "DE",
+  "year": 2020,
+  "entsoe_codes_used": [
+    "DE_LU"
+  ],
+  "start_utc": "2020-01-01 00:00:00+00:00",
+  "end_utc": "2020-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-09T23:14:36.867938+00:00",
+  "n_rows_raw": 35136,
+  "source_frequency_detected": "15min",
+  "resampling_applied": true,
+  "resampling_method": "mean_to_hour",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011384335154826958,
+  "n_rows_after_normalization": 8784,
+  "sha256_of_parquet_file": "27fb709483c083bbaffb7b33cfb586ab71169f1913e271b04c3898d65b2d125a"
+}

@@ -1,0 +1,20 @@
+{
+  "dataset_name": "prices_da",
+  "country": "NL",
+  "year": 2018,
+  "entsoe_codes_used": [
+    "NL"
+  ],
+  "start_utc": "2018-01-01 00:00:00+00:00",
+  "end_utc": "2018-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T00:05:07.430371+00:00",
+  "n_rows_raw": 8760,
+  "source_frequency_detected": "unknown",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "b03c05318a446ad6244a05388930351a3a3ba5636c1c7296b6100ac4dcad7826"
+}

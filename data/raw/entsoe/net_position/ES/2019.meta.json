@@ -1,0 +1,20 @@
+{
+  "dataset_name": "net_position",
+  "country": "ES",
+  "year": 2019,
+  "entsoe_codes_used": [
+    "ES"
+  ],
+  "start_utc": "2019-01-01 00:00:00+00:00",
+  "end_utc": "2019-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-09T23:44:42.495011+00:00",
+  "n_rows_raw": 8760,
+  "source_frequency_detected": "h",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "012b9cbd29ab5ba359c2290ed919a0aa0fe1119496830e93fc96fa042780a226"
+}

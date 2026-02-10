@@ -1,0 +1,20 @@
+{
+  "dataset_name": "net_position",
+  "country": "IT_NORD",
+  "year": 2024,
+  "entsoe_codes_used": [
+    "IT_NORD"
+  ],
+  "start_utc": "2024-01-01 00:00:00+00:00",
+  "end_utc": "2024-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T01:27:34.785462+00:00",
+  "n_rows_raw": 8784,
+  "source_frequency_detected": "h",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 49,
+  "missing_share": 0.005578324225865209,
+  "n_rows_after_normalization": 8784,
+  "sha256_of_parquet_file": "e49a05945cbd05475fe6566e56f9bdcfa7b25dbb4822977a04c7ee2da441c3f1"
+}

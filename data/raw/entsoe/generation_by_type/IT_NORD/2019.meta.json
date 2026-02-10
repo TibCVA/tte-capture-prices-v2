@@ -1,0 +1,20 @@
+{
+  "dataset_name": "generation_by_type",
+  "country": "IT_NORD",
+  "year": 2019,
+  "entsoe_codes_used": [
+    "IT_NORD"
+  ],
+  "start_utc": "2019-01-01 00:00:00+00:00",
+  "end_utc": "2019-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T01:20:34.250926+00:00",
+  "n_rows_raw": 8760,
+  "source_frequency_detected": "h",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "1af13f51066c0dbb8ae3d17bc0e5543c8034767b405e8712849962666f011c33"
+}

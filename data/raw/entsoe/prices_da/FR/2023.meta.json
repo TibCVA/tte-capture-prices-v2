@@ -7,7 +7,7 @@
   ],
   "start_utc": "2023-01-01 00:00:00+00:00",
   "end_utc": "2023-12-31 23:00:00+00:00",
-  "download_timestamp_utc": "2026-02-09T22:31:11.317308+00:00",
+  "download_timestamp_utc": "2026-02-09T22:48:55.294801+00:00",
   "n_rows_raw": 8760,
   "source_frequency_detected": "unknown",
   "resampling_applied": false,

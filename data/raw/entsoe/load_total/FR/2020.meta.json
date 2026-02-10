@@ -1,0 +1,20 @@
+{
+  "dataset_name": "load_total",
+  "country": "FR",
+  "year": 2020,
+  "entsoe_codes_used": [
+    "FR"
+  ],
+  "start_utc": "2020-01-01 00:00:00+00:00",
+  "end_utc": "2020-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-09T22:44:56.641690+00:00",
+  "n_rows_raw": 8782,
+  "source_frequency_detected": "unknown",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 3,
+  "missing_share": 0.00034153005464480874,
+  "n_rows_after_normalization": 8784,
+  "sha256_of_parquet_file": "9fbc60dc047b0f78241e5600ab3a341cfb9c00f2c4ae012a8e01328e36704684"
+}

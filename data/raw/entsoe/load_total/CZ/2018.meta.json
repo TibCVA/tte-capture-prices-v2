@@ -1,0 +1,20 @@
+{
+  "dataset_name": "load_total",
+  "country": "CZ",
+  "year": 2018,
+  "entsoe_codes_used": [
+    "CZ"
+  ],
+  "start_utc": "2018-01-01 00:00:00+00:00",
+  "end_utc": "2018-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T01:03:36.804571+00:00",
+  "n_rows_raw": 8753,
+  "source_frequency_detected": "unknown",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 8,
+  "missing_share": 0.0009132420091324201,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "e1335a769d20a06573590c6b192146501891bbb731df2266d8c609ebfad187cd"
+}

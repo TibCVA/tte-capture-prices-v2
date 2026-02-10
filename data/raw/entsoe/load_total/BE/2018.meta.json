@@ -1,0 +1,20 @@
+{
+  "dataset_name": "load_total",
+  "country": "BE",
+  "year": 2018,
+  "entsoe_codes_used": [
+    "BE"
+  ],
+  "start_utc": "2018-01-01 00:00:00+00:00",
+  "end_utc": "2018-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T00:49:37.037268+00:00",
+  "n_rows_raw": 35040,
+  "source_frequency_detected": "15min",
+  "resampling_applied": true,
+  "resampling_method": "mean_to_hour",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "d47416935ef230f2329dbabdef7efc82860f217093d2b44023e620c70e3d1ff3"
+}

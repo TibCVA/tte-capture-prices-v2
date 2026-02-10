@@ -1,0 +1,20 @@
+{
+  "dataset_name": "prices_da",
+  "country": "CZ",
+  "year": 2018,
+  "entsoe_codes_used": [
+    "CZ"
+  ],
+  "start_utc": "2018-01-01 00:00:00+00:00",
+  "end_utc": "2018-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T01:04:15.133167+00:00",
+  "n_rows_raw": 8760,
+  "source_frequency_detected": "unknown",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "c9832f19b196a3b97b802e14b678a5c7d4d8e366afd9f9db7984e04a855631b3"
+}

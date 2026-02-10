@@ -1,0 +1,20 @@
+{
+  "dataset_name": "generation_by_type",
+  "country": "FR",
+  "year": 2021,
+  "entsoe_codes_used": [
+    "FR"
+  ],
+  "start_utc": "2021-01-01 00:00:00+00:00",
+  "end_utc": "2021-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-09T22:46:45.973786+00:00",
+  "n_rows_raw": 8760,
+  "source_frequency_detected": "h",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "f53c975be4ea622a201d21289ddb194c1d558970bd71bb3b86dd1e1d24c428df"
+}

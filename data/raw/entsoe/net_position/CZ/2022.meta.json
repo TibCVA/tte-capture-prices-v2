@@ -1,0 +1,20 @@
+{
+  "dataset_name": "net_position",
+  "country": "CZ",
+  "year": 2022,
+  "entsoe_codes_used": [
+    "CZ"
+  ],
+  "start_utc": "2022-01-01 00:00:00+00:00",
+  "end_utc": "2022-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T01:11:59.626615+00:00",
+  "n_rows_raw": 8760,
+  "source_frequency_detected": "h",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "8788d6a6fb82ab96da5988c04fbc8e3983bdbb08b67e19b275010616e4c95f7d"
+}

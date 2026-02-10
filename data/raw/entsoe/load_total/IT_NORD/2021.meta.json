@@ -1,0 +1,20 @@
+{
+  "dataset_name": "load_total",
+  "country": "IT_NORD",
+  "year": 2021,
+  "entsoe_codes_used": [
+    "IT_NORD"
+  ],
+  "start_utc": "2021-01-01 00:00:00+00:00",
+  "end_utc": "2021-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T01:22:51.538925+00:00",
+  "n_rows_raw": 8760,
+  "source_frequency_detected": "h",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "1eb7807bb6692515f1b673d46fd30e66c9511c6fdbbfbbb88ce86237d0249aaa"
+}

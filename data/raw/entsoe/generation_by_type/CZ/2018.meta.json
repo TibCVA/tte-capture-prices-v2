@@ -1,0 +1,20 @@
+{
+  "dataset_name": "generation_by_type",
+  "country": "CZ",
+  "year": 2018,
+  "entsoe_codes_used": [
+    "CZ"
+  ],
+  "start_utc": "2018-01-01 00:00:00+00:00",
+  "end_utc": "2018-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T01:04:10.920929+00:00",
+  "n_rows_raw": 8758,
+  "source_frequency_detected": "unknown",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 3,
+  "missing_share": 0.00034246575342465754,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "345a3df1faff65e384754b9b79dc9286b70f6bb1fa3403293f6e5043ebf2cda0"
+}

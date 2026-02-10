@@ -1,0 +1,20 @@
+{
+  "dataset_name": "net_position",
+  "country": "NL",
+  "year": 2021,
+  "entsoe_codes_used": [
+    "NL"
+  ],
+  "start_utc": "2021-01-01 00:00:00+00:00",
+  "end_utc": "2021-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T00:26:31.918789+00:00",
+  "n_rows_raw": 8760,
+  "source_frequency_detected": "h",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "a2435e103ac7f4d7212ef131ccf99499c296c3fb8f6953c65ced298576f5bba9"
+}

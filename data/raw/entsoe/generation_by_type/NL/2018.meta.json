@@ -1,0 +1,20 @@
+{
+  "dataset_name": "generation_by_type",
+  "country": "NL",
+  "year": 2018,
+  "entsoe_codes_used": [
+    "NL"
+  ],
+  "start_utc": "2018-01-01 00:00:00+00:00",
+  "end_utc": "2018-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T00:04:58.269931+00:00",
+  "n_rows_raw": 35040,
+  "source_frequency_detected": "15min",
+  "resampling_applied": true,
+  "resampling_method": "mean_to_hour",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "d2e6a24396e28eef56ad9cef3a6912314d805d161d4d5b016dffbd06574a5c61"
+}

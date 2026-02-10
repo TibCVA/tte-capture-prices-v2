@@ -1,0 +1,20 @@
+{
+  "dataset_name": "generation_by_type",
+  "country": "FR",
+  "year": 2018,
+  "entsoe_codes_used": [
+    "FR"
+  ],
+  "start_utc": "2018-01-01 00:00:00+00:00",
+  "end_utc": "2018-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-09T22:43:03.158315+00:00",
+  "n_rows_raw": 8759,
+  "source_frequency_detected": "unknown",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 2,
+  "missing_share": 0.00022831050228310502,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "baed5c507f287e098be60a36efd243964db56f715e6b523a25eec7a2e556ff56"
+}

@@ -1,0 +1,20 @@
+{
+  "dataset_name": "psh_pump",
+  "country": "DE",
+  "year": 2022,
+  "entsoe_codes_used": [
+    "DE_LU"
+  ],
+  "start_utc": "2022-01-01 00:00:00+00:00",
+  "end_utc": "2022-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-09T23:28:40.892511+00:00",
+  "n_rows_raw": 8760,
+  "source_frequency_detected": "derived_from_generation",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011415525114155251,
+  "n_rows_after_normalization": 8760,
+  "sha256_of_parquet_file": "306d332c78090ff68b74b7dbeb6eea7a9f83a7ad9bde2730ff94750039dae624"
+}

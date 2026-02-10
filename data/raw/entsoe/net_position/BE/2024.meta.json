@@ -1,0 +1,20 @@
+{
+  "dataset_name": "net_position",
+  "country": "BE",
+  "year": 2024,
+  "entsoe_codes_used": [
+    "BE"
+  ],
+  "start_utc": "2024-01-01 00:00:00+00:00",
+  "end_utc": "2024-12-31 23:00:00+00:00",
+  "download_timestamp_utc": "2026-02-10T01:02:29.908721+00:00",
+  "n_rows_raw": 8784,
+  "source_frequency_detected": "h",
+  "resampling_applied": false,
+  "resampling_method": "none",
+  "duplicate_count": 0,
+  "missing_count": 1,
+  "missing_share": 0.00011384335154826958,
+  "n_rows_after_normalization": 8784,
+  "sha256_of_parquet_file": "40e1de84b96b67b4fa92d401d8aec6e2c8f682a9b4c8d50be4d71e849214fa5b"
+}
