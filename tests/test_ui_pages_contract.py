@@ -19,9 +19,10 @@ def _read(path: Path) -> str:
 def test_q_pages_have_required_sections() -> None:
     required_literals = [
         "## Question business",
+        "## Ce que cette execution teste (historique + prospectif)",
         "## Hypotheses utilisees",
         "## Tests empiriques",
-        "## Resultats et interpretation",
+        "## Resultats synthese",
         "## Checks & exports",
     ]
 

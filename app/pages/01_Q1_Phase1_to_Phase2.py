@@ -1,6 +1,5 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from time import perf_counter
 from datetime import datetime
 
 import pandas as pd
@@ -9,73 +8,99 @@ import streamlit as st
 
 from app.page_utils import (
     assumptions_editor_for,
+    build_bundle_hash,
     load_annual_metrics,
     load_phase2_assumptions_table,
-    load_scenario_annual_metrics_ui,
+    run_question_bundle_cached,
 )
 from app.ui_components import (
     guided_header,
     inject_theme,
+    render_hist_scen_comparison,
+    render_robustness_panel,
+    render_status_banner,
+    render_test_ledger,
     show_checks_summary,
     show_definitions,
     show_kpi_cards,
     show_limitations,
 )
+from src.modules.bundle_result import export_question_bundle
+from src.modules.q1_transition import Q1_PARAMS
+from src.modules.test_registry import get_default_scenarios, get_question_tests
 
 try:
     from app.ui_components import show_metric_explainers
-except ImportError:  # Backward-compatible fallback if cloud cache serves an older ui_components module.
+except ImportError:  # pragma: no cover
     def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
         return None
-from src.modules.q1_transition import Q1_PARAMS, run_q1
-from src.modules.result import export_module_result
 
 
-RESULT_KEY = "q1_last_result"
+RESULT_KEY = "q1_bundle_result"
+
+
+def _spec_table() -> pd.DataFrame:
+    rows = [s.to_dict() for s in get_question_tests("Q1")]
+    return pd.DataFrame(rows)
 
 
 def render() -> None:
     inject_theme()
     guided_header(
         title="Q1 - Passage Phase 1 vers Phase 2",
-        purpose="Identifier l'annee de bascule par pays et expliquer les drivers dominants.",
-        step_now="Q1: detecter la bascule",
-        step_next="Q2: mesurer la pente post-bascule",
+        purpose="Analyse complete historique + prospectif pour detecter la bascule et ses drivers.",
+        step_now="Q1: executer tous les tests historique/prospectif",
+        step_next="Q2: pente post-bascule avec la meme logique unifiee",
     )
 
     st.markdown("## Question business")
-    st.markdown("Quels parametres expliquent le passage de la phase 1 a la phase 2 ?")
+    st.markdown("Quels parametres expliquent le passage de la phase 1 a la phase 2, historiquement et en projection ?")
 
     show_definitions(
         [
             ("SR", "Part d'energie en surplus sur l'annee."),
             ("FAR", "Part du surplus absorbee par la flexibilite."),
             ("IR", "Rigidite du systeme en creux de charge."),
-            ("Capture ratio PV vs TTL", "Valeur captee par le PV relative a l'ancre hors surplus."),
+            ("Bascule", "Premiere annee ou les signaux phase 2 deviennent structurels."),
         ]
     )
     show_metric_explainers(
         [
             {
                 "metric": "Stage2 Market Score",
-                "definition": "Score de symptomes de phase 2 cote marche.",
-                "formula": "Somme de points sur h_negative, h_below_5, capture_ratio_pv_vs_ttl, days_spread_gt50",
-                "intuition": "Plus le score est eleve, plus les signatures de cannibalisation sont visibles.",
-                "interpretation": "Score >= seuil => bascule marche probable.",
-                "limits": "Seuils parametres, pas preuve causale.",
-                "dependencies": "qualite prix, seuils phase1_assumptions, mode HIST/SCEN.",
+                "definition": "Score de symptomes marche de phase 2.",
+                "formula": "Points sur h_negative, h_below_5, capture_ratio_pv_vs_ttl, spread journalier",
+                "intuition": "Plus le score monte, plus la pression de cannibalisation est visible.",
+                "interpretation": "Score eleve + stress physique eleve => bascule robuste.",
+                "limits": "Seuils parametriques et non causaux.",
+                "dependencies": "qualite prix, seuils hypotheses, regime_coherence.",
             },
             {
                 "metric": "Stress physique",
-                "definition": "Etat du systeme selon surplus/absorption/rigidite.",
+                "definition": "Etat du systeme selon SR/FAR/IR.",
                 "formula": "Combinaison de SR, FAR et IR",
-                "intuition": "Distingue surplus present, absorbe ou non absorbe.",
-                "interpretation": "Stress eleve + score marche eleve = bascule plus robuste.",
-                "limits": "Depend du perimetre must-run/flex.",
-                "dependencies": "nrl, surplus, exports, psh, must-run config.",
+                "intuition": "Distingue surplus absorbe vs non absorbe.",
+                "interpretation": "Stress eleve avec score marche eleve = bascule plus credibilisee.",
+                "limits": "Depend des conventions must-run/flex.",
+                "dependencies": "NRL, surplus, exports, PSH, BESS.",
             },
         ],
         title="Comment lire les KPI Q1",
+    )
+
+    st.markdown("## Ce que cette execution teste (historique + prospectif)")
+    st.dataframe(
+        _spec_table()[
+            [
+                "test_id",
+                "mode",
+                "title",
+                "what_is_tested",
+                "metric_rule",
+                "source_ref",
+            ]
+        ],
+        use_container_width=True,
     )
 
     annual = load_annual_metrics()
@@ -83,121 +108,111 @@ def render() -> None:
         st.info("Aucune metrique annuelle disponible.")
         return
 
-    mode_label = st.selectbox("Mode d'analyse", ["Historique", "Prospectif (Phase 2)"], index=0)
-    mode = "SCEN" if mode_label.startswith("Prospectif") else "HIST"
-    scenario_id: str | None = None
-    annual_source = annual
-    if mode == "SCEN":
-        try:
-            p2 = load_phase2_assumptions_table()
-            scenario_ids = sorted(p2["scenario_id"].dropna().astype(str).unique().tolist())
-        except Exception:
-            scenario_ids = []
-        if not scenario_ids:
-            st.warning("Aucun scenario_id trouve dans les hypotheses Phase 2.")
-            return
-        scenario_id = st.selectbox("Scenario ID", scenario_ids)
-        annual_source = load_scenario_annual_metrics_ui(scenario_id)
-        if annual_source.empty:
-            st.info("Aucun resultat prospectif disponible. Lance d'abord la page Scenarios Phase 2.")
-            return
-
-    countries = sorted(annual_source["country"].dropna().unique().tolist())
-    year_min = int(annual_source["year"].min())
-    year_max = int(annual_source["year"].max())
-
-    with st.form("q1_form"):
-        selected_countries = st.multiselect("Pays", countries, default=countries)
-        years = st.slider("Periode", min_value=year_min, max_value=year_max, value=(year_min, year_max))
-        run_submit = st.form_submit_button("Executer Q1", type="primary")
+    countries = sorted(annual["country"].dropna().astype(str).unique().tolist())
+    year_min = int(annual["year"].min())
+    year_max = int(annual["year"].max())
 
     st.markdown("## Hypotheses utilisees")
-    assumptions = assumptions_editor_for(Q1_PARAMS, "q1")
+    assumptions_phase1 = assumptions_editor_for(Q1_PARAMS, "q1_bundle")
+    assumptions_phase2 = load_phase2_assumptions_table()
+    scenario_options = sorted(set(assumptions_phase2["scenario_id"].dropna().astype(str).tolist()))
+    default_scen = [s for s in get_default_scenarios("Q1") if s in scenario_options]
 
-    scoped = annual_source[
-        annual_source["country"].isin(selected_countries) & annual_source["year"].between(years[0], years[1])
-    ].copy()
-    fail_count = int((scoped["quality_flag"] == "FAIL").sum()) if not scoped.empty else 0
-    if fail_count > 0:
-        st.error(f"{fail_count} ligne(s) quality_flag=FAIL dans la selection. Conclusions bloquees.")
+    with st.form("q1_bundle_form"):
+        selected_countries = st.multiselect("Pays", countries, default=countries)
+        years = st.slider("Periode historique", min_value=year_min, max_value=year_max, value=(year_min, year_max))
+        scenario_ids = st.multiselect("Scenarios prospectifs", scenario_options, default=default_scen or scenario_options[:2])
+        force_recompute = st.checkbox("Forcer recalcul complet (ignore cache bundle)", value=False)
+        run_submit = st.form_submit_button("Lancer l'analyse complete Q1", type="primary")
 
-    if run_submit and fail_count == 0 and not scoped.empty:
-        run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        sel = {
+    if run_submit:
+        selection = {
             "countries": selected_countries,
             "years": list(range(years[0], years[1] + 1)),
-            "mode": mode,
-            "scenario_id": scenario_id,
-            "horizon_year": years[1] if mode == "SCEN" else None,
+            "scenario_ids": scenario_ids,
+            "scenario_years": [2030, 2040],
         }
-        t0 = perf_counter()
-        res = run_q1(annual_source, assumptions, sel, run_id)
-        out_dir = export_module_result(res)
-        dt = perf_counter() - t0
-        st.session_state[RESULT_KEY] = {"res": res, "runtime_sec": dt, "out_dir": str(out_dir)}
+        bundle_hash = build_bundle_hash("Q1", selection, assumptions_phase1, assumptions_phase2)
+        cache_bust = datetime.utcnow().isoformat() if force_recompute else ""
+        with st.spinner("Execution Q1 complete (historique + prospectif) en cours..."):
+            bundle = run_question_bundle_cached("Q1", bundle_hash, selection, cache_bust=cache_bust)
+        out_dir = export_question_bundle(bundle)
+        st.session_state[RESULT_KEY] = {"bundle": bundle, "out_dir": str(out_dir), "bundle_hash": bundle_hash}
 
     payload = st.session_state.get(RESULT_KEY)
     if not payload:
         return
 
-    res = payload["res"]
-    panel = res.tables["Q1_year_panel"]
-    summary = res.tables["Q1_country_summary"]
-
+    bundle = payload["bundle"]
+    render_status_banner(bundle.checks)
     st.markdown("## Tests empiriques")
-    with st.expander("Voir details techniques", expanded=False):
-        st.dataframe(
-            panel[
-                [
-                    "country",
-                    "year",
-                    "phase_market",
-                    "stress_phys_state",
-                    "stage2_market_score",
-                    "flag_h_negative_stage2",
-                    "flag_capture_stage2",
-                    "flag_sr_stress",
-                    "flag_far_tension",
-                ]
-            ],
-            use_container_width=True,
-        )
+    render_test_ledger(bundle.test_ledger)
 
-    st.markdown("## Resultats et interpretation")
+    st.markdown("## Resultats synthese")
+    hist_summary = bundle.hist_result.tables.get("Q1_country_summary", pd.DataFrame())
     show_kpi_cards(
         [
-            ("Pays analyses", res.kpis.get("n_countries", 0), "Nombre de pays pris en compte."),
-            ("Bascules marche", res.kpis.get("n_bascule_market", 0), "Nombre de pays avec bascule marche detectee."),
-            ("Temps calcul (s)", f"{payload['runtime_sec']:.2f}", "Temps de calcul de ce module."),
+            ("Pays analyses (hist)", int(hist_summary["country"].nunique()) if not hist_summary.empty else 0, "Pays historiques analyses."),
+            ("Scenarios executes", len(bundle.scen_results), "Nombre de scenarios prospectifs executes."),
+            ("Run ID", bundle.run_id, "Identifiant run unifie."),
         ]
     )
 
-    st.dataframe(summary, use_container_width=True)
+    tab_syn, tab_hist, tab_scen, tab_comp, tab_tech = st.tabs(
+        ["Synthese", "Historique", "Prospectif", "Comparaison", "Details techniques"]
+    )
 
-    if not panel.empty:
-        st.plotly_chart(
-            px.scatter(panel, x="sr_energy", y="capture_ratio_pv_vs_ttl", color="country", title="Capture ratio PV vs SR"),
-            use_container_width=True,
-        )
-        st.plotly_chart(
-            px.scatter(panel, x="sr_hours", y="h_negative_obs", color="country", title="Heures negatives vs SR heures"),
-            use_container_width=True,
-        )
+    with tab_syn:
+        st.markdown(bundle.narrative_md)
+        render_robustness_panel(bundle.test_ledger)
+        if not hist_summary.empty:
+            st.dataframe(hist_summary, use_container_width=True)
 
-    st.markdown("### Lecture simple")
-    st.markdown(res.narrative_md)
+    with tab_hist:
+        panel = bundle.hist_result.tables.get("Q1_year_panel", pd.DataFrame())
+        if panel.empty:
+            st.info("Aucun resultat historique.")
+        else:
+            st.dataframe(panel, use_container_width=True)
+            st.plotly_chart(
+                px.scatter(panel, x="sr_energy", y="capture_ratio_pv_vs_ttl", color="country", title="Historique: capture ratio PV vs SR"),
+                use_container_width=True,
+            )
+            st.plotly_chart(
+                px.scatter(panel, x="sr_hours", y="h_negative_obs", color="country", title="Historique: heures negatives vs SR heures"),
+                use_container_width=True,
+            )
+
+    with tab_scen:
+        if not bundle.scen_results:
+            st.info("Aucun resultat prospectif disponible.")
+        else:
+            scen_sel = st.selectbox("Scenario", sorted(bundle.scen_results.keys()), key="q1_bundle_scenario")
+            scen_res = bundle.scen_results[scen_sel]
+            st.markdown(f"**Scenario:** `{scen_sel}`")
+            st.dataframe(scen_res.tables.get("Q1_country_summary", pd.DataFrame()), use_container_width=True)
+            st.dataframe(scen_res.tables.get("Q1_year_panel", pd.DataFrame()), use_container_width=True)
+
+    with tab_comp:
+        render_hist_scen_comparison(bundle.comparison_table)
+
+    with tab_tech:
+        st.markdown("### Checks")
+        show_checks_summary(bundle.checks)
+        if bundle.warnings:
+            st.warning(" | ".join(bundle.warnings))
+        st.markdown("### Exports")
+        st.code(payload["out_dir"])
 
     show_limitations(
         [
             "La bascule reste un diagnostic empirique, pas une preuve causale.",
-            "Les seuils et le perimetre must-run influencent le verdict.",
-            "Un regime_coherence faible rend l'interpretation plus fragile.",
-            "Les conclusions sont bloquees si quality_flag=FAIL.",
+            "Les seuils Q1 influencent le verdict et doivent etre audites.",
+            "Les scenarios prospectifs sont mecanistes, pas un modele d'equilibre.",
+            "Les tests NON_TESTABLE sont explicites et ne doivent pas etre ignores.",
         ]
     )
 
     st.markdown("## Checks & exports")
-    show_checks_summary(res.checks)
-    if res.warnings:
-        st.warning(" | ".join(res.warnings))
+    show_checks_summary(bundle.checks)
     st.code(payload["out_dir"])

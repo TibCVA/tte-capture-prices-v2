@@ -8,6 +8,9 @@ import pandas as pd
 import streamlit as st
 
 from src.config_loader import load_countries, load_phase2_assumptions
+from src.hash_utils import hash_object
+from src.modules.bundle_result import QuestionBundleResult
+from src.modules.question_bundle_runner import run_question_bundle
 from src.pipeline import build_country_year, load_assumptions_table
 from src.scenario.phase2_engine import run_phase2_scenario
 from src.storage import (
@@ -305,3 +308,88 @@ def assumptions_editor_for(param_names: list[str], key_prefix: str) -> pd.DataFr
         return merged_df
 
     return df
+
+
+def _phase1_signature(df: pd.DataFrame) -> list[dict[str, str]]:
+    if df is None or df.empty:
+        return []
+    req = [c for c in ["param_name", "param_value"] if c in df.columns]
+    if not req:
+        return []
+    out = df[req].copy()
+    out["param_name"] = out["param_name"].astype(str)
+    out = out.sort_values("param_name")
+    return out.to_dict(orient="records")
+
+
+def _phase2_signature(df: pd.DataFrame, selection: dict) -> list[dict]:
+    if df is None or df.empty:
+        return []
+    scenarios = [str(s) for s in selection.get("scenario_ids", [])]
+    countries = [str(c) for c in selection.get("countries", [])]
+    years = [int(y) for y in selection.get("scenario_years", [])]
+    scoped = df.copy()
+    if scenarios:
+        scoped = scoped[scoped["scenario_id"].astype(str).isin(scenarios)]
+    if countries:
+        scoped = scoped[scoped["country"].astype(str).isin(countries)]
+    if years:
+        scoped = scoped[pd.to_numeric(scoped["year"], errors="coerce").isin(years)]
+    keep_cols = [
+        c
+        for c in [
+            "scenario_id",
+            "country",
+            "year",
+            "demand_total_twh",
+            "cap_pv_gw",
+            "cap_wind_on_gw",
+            "must_run_min_output_factor",
+            "interconnection_export_gw",
+            "export_coincidence_factor",
+            "bess_power_gw",
+            "bess_energy_gwh",
+            "co2_eur_per_t",
+            "gas_eur_per_mwh_th",
+            "marginal_tech",
+        ]
+        if c in scoped.columns
+    ]
+    if not keep_cols:
+        return []
+    scoped = scoped[keep_cols].sort_values([c for c in ["scenario_id", "country", "year"] if c in keep_cols])
+    return scoped.to_dict(orient="records")
+
+
+def build_bundle_hash(question_id: str, selection: dict, assumptions_phase1: pd.DataFrame, assumptions_phase2: pd.DataFrame) -> str:
+    payload = {
+        "question_id": str(question_id).upper(),
+        "selection": selection,
+        "phase1_signature": _phase1_signature(assumptions_phase1),
+        "phase2_signature": _phase2_signature(assumptions_phase2, selection),
+    }
+    return hash_object(payload)
+
+
+@st.cache_data(show_spinner=False)
+def run_question_bundle_cached(question_id: str, bundle_hash: str, selection: dict, cache_bust: str = "") -> QuestionBundleResult:
+    _ = bundle_hash
+    _ = cache_bust
+    annual_hist = load_annual_metrics()
+    assumptions_phase1 = load_assumptions_table()
+    assumptions_phase2 = load_phase2_assumptions()
+    countries = [str(c) for c in selection.get("countries", [])]
+    if not countries and not annual_hist.empty:
+        countries = sorted(annual_hist["country"].dropna().astype(str).unique().tolist())
+    hist_years = list(range(2018, 2025))
+    hourly_hist_map = collect_hourly_map(countries, hist_years)
+    run_id = f"{str(question_id).upper()}_{bundle_hash[:12]}"
+    return run_question_bundle(
+        question_id=question_id,
+        annual_hist=annual_hist,
+        hourly_hist_map=hourly_hist_map,
+        assumptions_phase1=assumptions_phase1,
+        assumptions_phase2=assumptions_phase2,
+        selection=selection,
+        run_id=run_id,
+    )

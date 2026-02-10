@@ -126,3 +126,53 @@ def show_limitations(lines: list[str]) -> None:
     st.markdown("## Limites")
     for line in lines:
         st.markdown(f"- {line}")
+
+
+def render_status_banner(checks: list[dict[str, Any]]) -> None:
+    statuses = [str(c.get("status", "")).upper() for c in checks]
+    if "FAIL" in statuses:
+        st.error("Statut global: FAIL. Des points critiques restent a corriger.")
+    elif "WARN" in statuses:
+        st.warning("Statut global: WARN. Resultats exploitables avec prudence.")
+    else:
+        st.success("Statut global: PASS. Aucun echec critique detecte.")
+
+
+def render_test_ledger(test_ledger: pd.DataFrame) -> None:
+    st.markdown("### Ce que cette execution teste (historique + prospectif)")
+    if test_ledger is None or test_ledger.empty:
+        st.info("Aucun test ledger disponible.")
+        return
+    cols = [
+        "test_id",
+        "mode",
+        "scenario_id",
+        "title",
+        "status",
+        "value",
+        "threshold",
+        "interpretation",
+        "source_ref",
+    ]
+    keep = [c for c in cols if c in test_ledger.columns]
+    st.dataframe(test_ledger[keep], use_container_width=True)
+
+
+def render_hist_scen_comparison(comparison_table: pd.DataFrame) -> None:
+    st.markdown("### Comparaison historique vs prospectif")
+    if comparison_table is None or comparison_table.empty:
+        st.info("Aucune comparaison disponible pour cette selection.")
+        return
+    st.dataframe(comparison_table, use_container_width=True)
+
+
+def render_robustness_panel(test_ledger: pd.DataFrame) -> None:
+    st.markdown("### Robustesse vs fragilite")
+    if test_ledger is None or test_ledger.empty:
+        st.info("Pas de statut de robustesse disponible.")
+        return
+    status_counts = test_ledger["status"].astype(str).value_counts(dropna=False).rename_axis("status").reset_index(name="n")
+    st.dataframe(status_counts, use_container_width=True)
+    n_nt = int((test_ledger["status"].astype(str) == "NON_TESTABLE").sum())
+    if n_nt > 0:
+        st.info(f"{n_nt} test(s) NON_TESTABLE: donnee ou scenario manquant, sans silence.")

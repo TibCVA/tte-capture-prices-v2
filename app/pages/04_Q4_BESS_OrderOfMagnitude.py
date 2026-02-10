@@ -1,7 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
-from time import perf_counter
 
 import pandas as pd
 import plotly.express as px
@@ -9,263 +8,207 @@ import streamlit as st
 
 from app.page_utils import (
     assumptions_editor_for,
+    build_bundle_hash,
     country_year_selector,
-    load_annual_metrics,
-    load_hourly_safe,
     load_phase2_assumptions_table,
-    load_scenario_annual_metrics_ui,
-    load_scenario_hourly_safe,
+    run_question_bundle_cached,
 )
 from app.ui_components import (
     guided_header,
     inject_theme,
+    render_hist_scen_comparison,
+    render_robustness_panel,
+    render_status_banner,
+    render_test_ledger,
     show_checks_summary,
     show_definitions,
     show_kpi_cards,
     show_limitations,
 )
+from src.modules.bundle_result import export_question_bundle
+from src.modules.q4_bess import Q4_PARAMS
+from src.modules.test_registry import get_default_scenarios, get_question_tests
 
 try:
     from app.ui_components import show_metric_explainers
-except ImportError:  # Backward-compatible fallback if cloud cache serves an older ui_components module.
+except ImportError:  # pragma: no cover
     def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
         return None
-from src.modules.q4_bess import Q4_PARAMS, run_q4
-from src.modules.result import export_module_result
 
 
-RESULT_KEY = "q4_last_result"
+RESULT_KEY = "q4_bundle_result"
 DEFAULT_POWER_GRID = [0.0, 200.0, 500.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0]
 DEFAULT_DURATION_GRID = [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
 
 
-def _mode_label(mode: str) -> str:
-    return {
-        "SURPLUS_FIRST": "Vue systeme (surplus d'abord)",
-        "PRICE_ARBITRAGE_SIMPLE": "Vue actif BESS (arbitrage simple)",
-        "PV_COLOCATED": "Vue actif PV+Storage (co-localise)",
-    }.get(mode, mode)
+def _spec_table() -> pd.DataFrame:
+    return pd.DataFrame([s.to_dict() for s in get_question_tests("Q4")])
 
 
 def render() -> None:
     inject_theme()
     guided_header(
         title="Q4 - Batteries: ordres de grandeur et impact",
-        purpose="Estimer le niveau de stockage necessaire et son impact sur les indicateurs systeme et valeur PV.",
-        step_now="Q4: quantifier l'effet BESS",
-        step_next="Q5: tester l'impact CO2/gaz sur l'ancre thermique",
+        purpose="Run unifie historique + prospectif avec tests systeme et actif pour le stockage.",
+        step_now="Q4: executer tests batteries historique/prospectif",
+        step_next="Q5: sensibilite CO2/gaz et ancre thermique",
     )
 
     st.markdown("## Question business")
-    st.markdown("Quel niveau de batteries (avec solaire) permet de stopper la degradation et sous quelles conditions ?")
+    st.markdown("Quel niveau de batteries permet de reduire le stress surplus et d'ameliorer la valeur captee ?")
 
     show_definitions(
         [
-            ("Puissance BESS (MW)", "Debit maximal de charge/decharge."),
-            ("Energie BESS (MWh)", "Capacite maximale stockable."),
-            ("Duree (h)", "Energie / puissance, indicateur de stockage court vs long."),
-            ("Price-taker", "La batterie ne modifie pas les prix de marche dans ce module."),
+            ("Puissance BESS", "Debut maximal charge/decharge en MW."),
+            ("Energie BESS", "Capacite stockable en MWh."),
+            ("Duree", "Energie / puissance en heures."),
+            ("Price-taker", "Le module Q4 ne reboucle pas le prix sur le dispatch."),
         ]
     )
     show_metric_explainers(
         [
             {
                 "metric": "FAR avant/apres",
-                "definition": "Part du surplus absorbee avant et apres ajout BESS.",
-                "formula": "FAR = surplus_absorbed_energy / surplus_energy",
-                "intuition": "Mesure l'efficacite systeme du stockage sur l'absorption.",
-                "interpretation": "FAR en hausse = stress surplus mieux gere.",
-                "limits": "Ne modelise pas l'effet prix endogene.",
-                "dependencies": "surplus profile, puissance/energie BESS, mode dispatch.",
+                "definition": "Part du surplus absorbee avant/apres ajout BESS.",
+                "formula": "FAR = surplus_absorbed / surplus_total",
+                "intuition": "Mesure l'efficacite physique du stockage.",
+                "interpretation": "Hausse de FAR = stress surplus mieux absorbe.",
+                "limits": "Ne modelise pas effet endogene sur prix.",
+                "dependencies": "surplus profile, puissance/energie, dispatch mode.",
             },
             {
-                "metric": "required_bess_power_mw / required_bess_duration_h",
-                "definition": "Dimensionnement minimal pour atteindre l'objectif.",
-                "formula": "Recherche sur grille (power x duration) avec critere objectif",
+                "metric": "Sizing minimal",
+                "definition": "Plus petite combinaison puissance/duree atteignant l'objectif.",
+                "formula": "Recherche sur grille power x duration",
                 "intuition": "Donne un ordre de grandeur actionnable.",
-                "interpretation": "Besoin long (>8h) => stockage courte duree possiblement insuffisant.",
+                "interpretation": "Duree >8h => besoin potentiel de stockage long.",
                 "limits": "Resolution limitee a la grille testee.",
-                "dependencies": "objective, grille saisie, dispatch mode, annee selectionnee.",
+                "dependencies": "objectif FAR/surplus, grille, mode dispatch.",
             },
         ],
         title="Comment lire les KPI Q4",
     )
 
-    mode_label = st.selectbox("Mode d'analyse", ["Historique", "Prospectif (Phase 2)"], index=0)
-    mode = "SCEN" if mode_label.startswith("Prospectif") else "HIST"
-    scenario_id: str | None = None
-    if mode == "HIST":
-        country, year = country_year_selector()
-    else:
-        try:
-            p2 = load_phase2_assumptions_table()
-            scenario_ids = sorted(p2["scenario_id"].dropna().astype(str).unique().tolist())
-        except Exception:
-            scenario_ids = []
-        if not scenario_ids:
-            st.warning("Aucun scenario_id trouve dans les hypotheses Phase 2.")
-            return
-        scenario_id = st.selectbox("Scenario ID", scenario_ids)
-        annual_scen = load_scenario_annual_metrics_ui(scenario_id)
-        if annual_scen.empty:
-            st.info("Aucun resultat prospectif disponible. Lance d'abord la page Scenarios Phase 2.")
-            return
-        countries = sorted(annual_scen["country"].dropna().astype(str).unique().tolist())
-        country = st.selectbox("Pays", countries)
-        years = sorted(annual_scen[annual_scen["country"] == country]["year"].dropna().astype(int).unique().tolist())
-        year = st.selectbox("Annee", years)
+    st.markdown("## Ce que cette execution teste (historique + prospectif)")
+    st.dataframe(
+        _spec_table()[["test_id", "mode", "title", "what_is_tested", "metric_rule", "source_ref"]],
+        use_container_width=True,
+    )
 
-    annual = load_scenario_annual_metrics_ui(scenario_id) if mode == "SCEN" else load_annual_metrics()
-    annual_row = annual[(annual["country"] == country) & (annual["year"] == year)] if not annual.empty else pd.DataFrame()
-    if not annual_row.empty and str(annual_row.iloc[0].get("quality_flag", "OK")) == "FAIL":
-        st.error("quality_flag=FAIL pour ce pays/annee. Conclusions bloquees.")
-        return
-
-    hourly = load_scenario_hourly_safe(scenario_id, country, year) if mode == "SCEN" else load_hourly_safe(country, year)
-    if hourly is None or hourly.empty:
-        st.info("Construis d'abord la table horaire dans Donnees & Qualite.")
-        return
-
-    with st.form("q4_form"):
-        dispatch_mode = st.selectbox(
-            "Mode d'analyse",
-            ["SURPLUS_FIRST", "PRICE_ARBITRAGE_SIMPLE", "PV_COLOCATED"],
-            format_func=_mode_label,
-        )
-        objective = st.selectbox("Objectif sizing", ["FAR_TARGET", "SURPLUS_UNABS_TARGET"])
-
-        with st.expander("Parametres avances (grille complete par defaut)", expanded=False):
-            power_grid = st.multiselect("Puissances testees (MW)", DEFAULT_POWER_GRID, default=DEFAULT_POWER_GRID)
-            duration_grid = st.multiselect("Durees testees (h)", DEFAULT_DURATION_GRID, default=DEFAULT_DURATION_GRID)
-            force_recompute = st.checkbox("Forcer recalcul Q4", value=False)
-
-        run_submit = st.form_submit_button("Executer Q4", type="primary")
+    country, year = country_year_selector()
 
     st.markdown("## Hypotheses utilisees")
-    assumptions = assumptions_editor_for(Q4_PARAMS, "q4")
+    assumptions_phase1 = assumptions_editor_for(Q4_PARAMS, "q4_bundle")
+    assumptions_phase2 = load_phase2_assumptions_table()
+    scenario_options = sorted(set(assumptions_phase2["scenario_id"].dropna().astype(str).tolist()))
+    default_scen = [s for s in get_default_scenarios("Q4") if s in scenario_options]
+
+    with st.form("q4_bundle_form"):
+        objective = st.selectbox("Objectif sizing", ["FAR_TARGET", "SURPLUS_UNABS_TARGET"])
+        horizon_year = st.selectbox("Horizon prospectif", [2030, 2040], index=1)
+        scenario_ids = st.multiselect("Scenarios prospectifs", scenario_options, default=default_scen or scenario_options[:2])
+        with st.expander("Parametres avances (grilles Q4)", expanded=False):
+            power_grid = st.multiselect("Puissances (MW)", DEFAULT_POWER_GRID, default=DEFAULT_POWER_GRID)
+            duration_grid = st.multiselect("Durees (h)", DEFAULT_DURATION_GRID, default=DEFAULT_DURATION_GRID)
+            force_recompute = st.checkbox("Forcer recalcul complet (ignore cache bundle)", value=False)
+        run_submit = st.form_submit_button("Lancer l'analyse complete Q4", type="primary")
 
     if run_submit:
-        run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        progress_bar = st.progress(0)
-        progress_text = st.empty()
-
-        def _cb(msg: str, frac: float) -> None:
-            progress_text.info(msg)
-            progress_bar.progress(min(100, max(0, int(frac * 100))))
-
-        sel = {
+        selection = {
             "country": country,
-            "year": year,
+            "countries": [country],
+            "year": int(year),
+            "years": [int(year)],
+            "horizon_year": int(horizon_year),
+            "scenario_years": [int(horizon_year)],
             "objective": objective,
             "power_grid": power_grid or DEFAULT_POWER_GRID,
             "duration_grid": duration_grid or DEFAULT_DURATION_GRID,
-            "force_recompute": force_recompute,
-            "mode": mode,
-            "scenario_id": scenario_id,
-            "horizon_year": int(year),
+            "scenario_ids": scenario_ids,
         }
-
-        t0 = perf_counter()
-        res = run_q4(
-            hourly,
-            assumptions,
-            sel,
-            run_id,
-            dispatch_mode=dispatch_mode,
-            progress_callback=_cb,
-        )
-        dt = perf_counter() - t0
-        out_dir = export_module_result(res)
-
-        progress_bar.progress(100)
-        progress_text.success("Q4 termine")
-
-        st.session_state[RESULT_KEY] = {
-            "res": res,
-            "runtime_sec": dt,
-            "out_dir": str(out_dir),
-            "country": country,
-            "year": year,
-            "mode": dispatch_mode,
-        }
+        bundle_hash = build_bundle_hash("Q4", selection, assumptions_phase1, assumptions_phase2)
+        cache_bust = datetime.utcnow().isoformat() if force_recompute else ""
+        with st.spinner("Execution Q4 complete (historique + prospectif) en cours..."):
+            bundle = run_question_bundle_cached("Q4", bundle_hash, selection, cache_bust=cache_bust)
+        out_dir = export_question_bundle(bundle)
+        st.session_state[RESULT_KEY] = {"bundle": bundle, "out_dir": str(out_dir), "bundle_hash": bundle_hash}
 
     payload = st.session_state.get(RESULT_KEY)
     if not payload:
         return
 
-    res = payload["res"]
-    summary = res.tables["Q4_sizing_summary"]
-    frontier = res.tables["Q4_bess_frontier"]
-
+    bundle = payload["bundle"]
+    render_status_banner(bundle.checks)
     st.markdown("## Tests empiriques")
-    with st.expander("Voir details techniques", expanded=False):
-        st.dataframe(frontier, use_container_width=True)
+    render_test_ledger(bundle.test_ledger)
 
-    st.markdown("## Resultats et interpretation")
-    cache_hit = bool(res.kpis.get("cache_hit", False))
+    st.markdown("## Resultats synthese")
+    hist_summary = bundle.hist_result.tables.get("Q4_sizing_summary", pd.DataFrame())
     show_kpi_cards(
         [
-            ("Mode", _mode_label(str(payload.get("mode", ""))), "Perspective choisie pour la simulation."),
-            ("Temps calcul (s)", f"{payload['runtime_sec']:.2f}", "Temps de calcul de ce run."),
-            ("Cache", "HIT" if cache_hit else "MISS", "HIT = resultat charge depuis cache persistant Q4."),
+            ("Scenario hist", "SURPLUS_FIRST + 2 modes", "Le run historique inclut aussi PRICE_ARBITRAGE_SIMPLE et PV_COLOCATED."),
+            ("Scenarios executes", len(bundle.scen_results), "Nombre de scenarios prospectifs executes."),
+            ("Run ID", bundle.run_id, "Identifiant run unifie."),
         ]
     )
 
-    st.dataframe(summary, use_container_width=True)
+    tab_syn, tab_hist, tab_scen, tab_comp, tab_tech = st.tabs(
+        ["Synthese", "Historique", "Prospectif", "Comparaison", "Details techniques"]
+    )
 
-    if not frontier.empty:
-        st.plotly_chart(
-            px.line(
-                frontier.sort_values("required_bess_power_mw"),
-                x="required_bess_power_mw",
-                y="far_after",
-                color="required_bess_duration_h",
-                title="Impact systeme: FAR apres vs puissance BESS",
-            ),
-            use_container_width=True,
-        )
-        st.plotly_chart(
-            px.line(
-                frontier.sort_values("required_bess_energy_mwh"),
-                x="required_bess_energy_mwh",
-                y="surplus_unabs_energy_after",
-                color="required_bess_duration_h",
-                title="Impact systeme: surplus non absorbe apres vs energie BESS",
-            ),
-            use_container_width=True,
-        )
-        st.plotly_chart(
-            px.line(
-                frontier.sort_values("required_bess_duration_h"),
-                x="required_bess_duration_h",
-                y="pv_capture_price_after",
-                color="required_bess_power_mw",
-                title="Impact actif PV: capture price apres vs duree BESS",
-            ),
-            use_container_width=True,
-        )
+    with tab_syn:
+        st.markdown(bundle.narrative_md)
+        render_robustness_panel(bundle.test_ledger)
+        if not hist_summary.empty:
+            st.dataframe(hist_summary, use_container_width=True)
 
-    if payload.get("mode") == "SURPLUS_FIRST":
-        st.info("Lecture systeme: l'objectif principal est la reduction du surplus non absorbe et l'amelioration du FAR.")
-    elif payload.get("mode") == "PV_COLOCATED":
-        st.info("Lecture actif PV: la batterie charge sur production PV et deplace l'energie vers les heures plus valorisees.")
-    else:
-        st.info("Lecture actif BESS: l'arbitrage simple donne un ordre de grandeur du revenu price-taker.")
+    with tab_hist:
+        frontier = bundle.hist_result.tables.get("Q4_bess_frontier", pd.DataFrame())
+        summary = bundle.hist_result.tables.get("Q4_sizing_summary", pd.DataFrame())
+        if summary.empty:
+            st.info("Aucun resultat historique Q4.")
+        else:
+            st.dataframe(summary, use_container_width=True)
+        if not frontier.empty:
+            st.dataframe(frontier, use_container_width=True)
+            st.plotly_chart(
+                px.line(frontier.sort_values("required_bess_power_mw"), x="required_bess_power_mw", y="far_after", color="required_bess_duration_h", title="Historique: FAR apres vs puissance"),
+                use_container_width=True,
+            )
+            st.plotly_chart(
+                px.line(frontier.sort_values("required_bess_energy_mwh"), x="required_bess_energy_mwh", y="surplus_unabs_energy_after", color="required_bess_duration_h", title="Historique: surplus non absorbe apres vs energie"),
+                use_container_width=True,
+            )
 
-    st.markdown("### Lecture simple")
-    st.markdown(res.narrative_md)
+    with tab_scen:
+        if not bundle.scen_results:
+            st.info("Aucun resultat prospectif disponible.")
+        else:
+            scen_sel = st.selectbox("Scenario", sorted(bundle.scen_results.keys()), key="q4_bundle_scenario")
+            scen_res = bundle.scen_results[scen_sel]
+            st.dataframe(scen_res.tables.get("Q4_sizing_summary", pd.DataFrame()), use_container_width=True)
+            st.dataframe(scen_res.tables.get("Q4_bess_frontier", pd.DataFrame()), use_container_width=True)
+
+    with tab_comp:
+        render_hist_scen_comparison(bundle.comparison_table)
+
+    with tab_tech:
+        st.markdown("### Checks")
+        show_checks_summary(bundle.checks)
+        if bundle.warnings:
+            st.warning(" | ".join(bundle.warnings))
+        st.markdown("### Exports")
+        st.code(payload["out_dir"])
 
     show_limitations(
         [
-            "Le module reste price-taker, sans effet endogene du BESS sur les prix.",
-            "Aucune contrainte reseau intra-zone n'est modelisee.",
-            "Le dispatch est volontairement simple (pas d'optimiseur MILP).",
-            "L'analyse economique complete CAPEX/OPEX est a completer hors Q4 historique.",
+            "Q4 reste price-taker: pas de rebouclage endogene des prix.",
+            "Les contraintes reseau fines intra-zone ne sont pas modelisees.",
+            "Le dispatch est volontairement simple et auditable.",
+            "Les tests NON_TESTABLE sont signales explicitement.",
         ]
     )
 
     st.markdown("## Checks & exports")
-    show_checks_summary(res.checks)
-    if res.warnings:
-        st.warning(" | ".join(res.warnings))
+    show_checks_summary(bundle.checks)
     st.code(payload["out_dir"])

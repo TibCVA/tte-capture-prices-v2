@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 from app.ui_components import guided_header, inject_theme
@@ -34,6 +35,24 @@ def _extract_summary_block(content: str) -> str:
     return tail if end < 0 else tail[:end]
 
 
+def _combined_runs() -> list[Path]:
+    root = Path("outputs/combined")
+    if not root.exists():
+        return []
+    runs = [p for p in root.iterdir() if p.is_dir()]
+    return sorted(runs, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _combined_question_table(run_dir: Path, question_id: str) -> pd.DataFrame:
+    p = run_dir / question_id / "test_ledger.csv"
+    if not p.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(p)
+    except Exception:
+        return pd.DataFrame()
+
+
 def render() -> None:
     inject_theme()
     guided_header(
@@ -44,8 +63,27 @@ def render() -> None:
     )
 
     reports = sorted(Path("reports").glob("conclusions_v2*_*.md"), reverse=True)
+    combined = _combined_runs()
+
+    st.markdown("## Resultats combines (source prioritaire)")
+    if not combined:
+        st.info("Aucun run combine detecte dans `outputs/combined`.")
+    else:
+        comb_labels = [f"{p.name}" for p in combined]
+        comb_sel = st.selectbox("Run combine", comb_labels, index=0)
+        comb_dir = combined[comb_labels.index(comb_sel)]
+        q = st.selectbox("Question", ["Q1", "Q2", "Q3", "Q4", "Q5"], index=0)
+        ledger = _combined_question_table(comb_dir, q)
+        if ledger.empty:
+            st.info(f"Aucun test ledger combine pour {q} dans {comb_dir.name}.")
+        else:
+            st.dataframe(ledger, use_container_width=True)
+            status_counts = ledger["status"].astype(str).value_counts(dropna=False).rename_axis("status").reset_index(name="n")
+            st.dataframe(status_counts, use_container_width=True)
+
+    st.markdown("## Rapport Markdown")
     if not reports:
-        st.info("Aucun rapport conclusions disponible pour le moment.")
+        st.info("Aucun rapport markdown disponible pour le moment.")
         return
 
     labels = [f"{_extract_run_id(r)} | {r.name}" for r in reports]

@@ -1,7 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
-from time import perf_counter
 
 import pandas as pd
 import plotly.express as px
@@ -9,121 +8,89 @@ import streamlit as st
 
 from app.page_utils import (
     assumptions_editor_for,
+    build_bundle_hash,
     load_annual_metrics,
-    load_commodity_daily_ui,
-    load_hourly_safe,
     load_phase2_assumptions_table,
-    load_scenario_annual_metrics_ui,
-    load_scenario_hourly_safe,
+    run_question_bundle_cached,
 )
 from app.ui_components import (
     guided_header,
     inject_theme,
+    render_hist_scen_comparison,
+    render_robustness_panel,
+    render_status_banner,
+    render_test_ledger,
     show_checks_summary,
     show_definitions,
     show_kpi_cards,
     show_limitations,
 )
+from src.config_loader import load_countries
+from src.modules.bundle_result import export_question_bundle
+from src.modules.q5_thermal_anchor import Q5_PARAMS
+from src.modules.test_registry import get_default_scenarios, get_question_tests
 
 try:
     from app.ui_components import show_metric_explainers
-except ImportError:  # Backward-compatible fallback if cloud cache serves an older ui_components module.
+except ImportError:  # pragma: no cover
     def show_metric_explainers(*args, **kwargs):  # type: ignore[no-redef]
         return None
-from src.config_loader import load_countries
-from src.modules.q5_thermal_anchor import Q5_PARAMS, run_q5
-from src.modules.result import export_module_result
 
 
-RESULT_KEY = "q5_last_result"
+RESULT_KEY = "q5_bundle_result"
 
 
-def _load_hourly_range(country: str, years: list[int], scenario_id: str | None = None) -> pd.DataFrame:
-    chunks: list[pd.DataFrame] = []
-    for y in years:
-        h = load_scenario_hourly_safe(scenario_id, country, y) if scenario_id else load_hourly_safe(country, y)
-        if h is None or h.empty:
-            continue
-        hx = h.copy()
-        hx["year"] = y
-        chunks.append(hx)
-    if not chunks:
-        return pd.DataFrame()
-    return pd.concat(chunks, axis=0).sort_index()
-
-
-def _commodity_from_phase2(scenario_id: str, country: str, years: list[int]) -> pd.DataFrame | None:
-    try:
-        p2 = load_phase2_assumptions_table()
-    except Exception:
-        return None
-    scoped = p2[
-        (p2["scenario_id"].astype(str) == str(scenario_id))
-        & (p2["country"].astype(str) == str(country))
-        & (pd.to_numeric(p2["year"], errors="coerce").isin(years))
-    ].copy()
-    if scoped.empty:
-        return None
-    rows: list[pd.DataFrame] = []
-    for _, row in scoped.iterrows():
-        y = int(row["year"])
-        idx = pd.date_range(f"{y}-01-01", f"{y}-12-31", freq="D")
-        rows.append(
-            pd.DataFrame(
-                {
-                    "date": idx,
-                    "gas_price_eur_mwh_th": float(row.get("gas_eur_per_mwh_th", float("nan"))),
-                    "co2_price_eur_t": float(row.get("co2_eur_per_t", float("nan"))),
-                }
-            )
-        )
-    if not rows:
-        return None
-    out = pd.concat(rows, ignore_index=True)
-    return out.dropna(subset=["gas_price_eur_mwh_th", "co2_price_eur_t"])
+def _spec_table() -> pd.DataFrame:
+    return pd.DataFrame([s.to_dict() for s in get_question_tests("Q5")])
 
 
 def render() -> None:
     inject_theme()
     guided_header(
         title="Q5 - Impact CO2 / Gaz sur ancre thermique",
-        purpose="Mesurer comment CO2 et gaz deplacent l'ancre thermique et estimer un CO2 requis pour une cible TTL.",
-        step_now="Q5: sensibilite ancre thermique",
-        step_next="Conclusions: synthese complete des modules",
+        purpose="Execution unifiee historique + prospectif sur sensibilites TCA/TTL et CO2 requis.",
+        step_now="Q5: executer tests CO2/gaz historique/prospectif",
+        step_next="Scenarios et conclusions consolidees",
     )
 
     st.markdown("## Question business")
-    st.markdown("En quoi le CO2 et le gaz impactent-ils l'ancre thermique et quel CO2 est requis pour remonter le haut de courbe ?")
+    st.markdown("Comment CO2 et gaz deplacent-ils l'ancre thermique, et quel CO2 est requis pour relever le haut de courbe ?")
 
     show_definitions(
         [
-            ("TCA", "Ancre cout thermique simplifiee: fuel/eff + CO2*EF/eff + VOM."),
-            ("TTL", "Q95 des prix sur regimes C/D (hors surplus)."),
-            ("alpha", "Ecart TTL observe - TCA Q95."),
+            ("TCA", "Ancre cout thermique simplifiee."),
+            ("TTL", "Q95 des prix hors surplus (regimes C/D)."),
+            ("alpha", "Ecart entre TTL observe et TCA Q95."),
         ]
     )
     show_metric_explainers(
         [
             {
-                "metric": "TCA",
-                "definition": "Approximation cout variable marginal thermique.",
-                "formula": "TCA = fuel/eff + CO2*(EF/eff) + VOM",
-                "intuition": "Relie commodites et niveau de prix hors surplus.",
-                "interpretation": "Hausse gaz/CO2 deplace l'ancre vers le haut.",
-                "limits": "Choix techno marginale simplifie la realite.",
-                "dependencies": "gas_price, co2_price, efficiency, emission_factor, VOM.",
+                "metric": "dTCA/dCO2 et dTCA/dGas",
+                "definition": "Sensibilites analytiques de l'ancre thermique aux commodites.",
+                "formula": "dTCA/dGas = 1/eff ; dTCA/dCO2 = EF/eff",
+                "intuition": "Mesure l'effet mecanique des commodites sur l'ancre.",
+                "interpretation": "Plus eleve = ancre plus sensible.",
+                "limits": "Depend du choix techno marginale.",
+                "dependencies": "efficiency, emission factor, VOM.",
             },
             {
-                "metric": "CO2 requis pour TTL cible",
-                "definition": "Prix CO2 implicite necessaire pour atteindre un TTL cible.",
-                "formula": "Resolution numerique ttl_target ≈ alpha + Q95(TCA_scenario)",
-                "intuition": "Donne un ordre de grandeur policy/commodites.",
-                "interpretation": "Valeur elevee = cible difficile sans autre levier.",
+                "metric": "CO2 requis",
+                "definition": "Prix CO2 implicite pour atteindre un TTL cible.",
+                "formula": "resolution ttl_target ≈ alpha + Q95(TCA_scenario)",
+                "intuition": "Ordre de grandeur policy/commodites.",
+                "interpretation": "Valeur elevee = cible difficile sans autres leviers.",
                 "limits": "Suppose alpha relativement stable.",
-                "dependencies": "ttl_target, gas scenario, techno marginale, corr prix-TCA.",
+                "dependencies": "ttl_target, techno marginale, scenario gaz.",
             },
         ],
         title="Comment lire les KPI Q5",
+    )
+
+    st.markdown("## Ce que cette execution teste (historique + prospectif)")
+    st.dataframe(
+        _spec_table()[["test_id", "mode", "title", "what_is_tested", "metric_rule", "source_ref"]],
+        use_container_width=True,
     )
 
     annual = load_annual_metrics()
@@ -131,135 +98,121 @@ def render() -> None:
         st.info("Aucune metrique annuelle disponible.")
         return
 
-    mode_label = st.selectbox("Mode d'analyse", ["Historique", "Prospectif (Phase 2)"], index=0)
-    mode = "SCEN" if mode_label.startswith("Prospectif") else "HIST"
-    scenario_id: str | None = None
-    annual_source = annual
-    if mode == "SCEN":
-        try:
-            p2 = load_phase2_assumptions_table()
-            scenario_ids = sorted(p2["scenario_id"].dropna().astype(str).unique().tolist())
-        except Exception:
-            scenario_ids = []
-        if not scenario_ids:
-            st.warning("Aucun scenario_id trouve dans les hypotheses Phase 2.")
-            return
-        scenario_id = st.selectbox("Scenario ID", scenario_ids)
-        annual_source = load_scenario_annual_metrics_ui(scenario_id)
-        if annual_source.empty:
-            st.info("Aucun resultat prospectif disponible. Lance d'abord la page Scenarios Phase 2.")
-            return
-
-    countries = sorted(annual_source["country"].dropna().unique().tolist())
+    countries = sorted(annual["country"].dropna().astype(str).unique().tolist())
+    y_min = int(annual["year"].min())
+    y_max = int(annual["year"].max())
     countries_cfg = load_countries().get("countries", {})
 
-    y_min = int(annual_source["year"].min())
-    y_max = int(annual_source["year"].max())
+    st.markdown("## Hypotheses utilisees")
+    assumptions_phase1 = assumptions_editor_for(Q5_PARAMS, "q5_bundle")
+    assumptions_phase2 = load_phase2_assumptions_table()
+    scenario_options = sorted(set(assumptions_phase2["scenario_id"].dropna().astype(str).tolist()))
+    scenario_options = sorted(set(scenario_options + ["HIGH_BOTH"]))
+    default_scen = [s for s in get_default_scenarios("Q5") if s in scenario_options]
 
-    with st.form("q5_form"):
+    with st.form("q5_bundle_form"):
         country = st.selectbox("Pays", countries)
         year_range = st.slider("Periode historique", min_value=y_min, max_value=y_max, value=(max(y_min, 2021), y_max))
-        default_marginal = str(countries_cfg.get(country, {}).get("thermal", {}).get("marginal_tech", "CCGT")).upper()
-        marginal = st.selectbox("Technologie marginale", ["CCGT", "COAL"], index=0 if default_marginal == "CCGT" else 1)
+        default_tech = str(countries_cfg.get(country, {}).get("thermal", {}).get("marginal_tech", "CCGT")).upper()
+        marginal_tech = st.selectbox("Technologie marginale", ["CCGT", "COAL"], index=0 if default_tech == "CCGT" else 1)
         ttl_target = st.number_input("TTL cible (EUR/MWh)", value=120.0, step=5.0)
+        scenario_ids = st.multiselect("Scenarios prospectifs", scenario_options, default=default_scen or scenario_options[:2])
+        force_recompute = st.checkbox("Forcer recalcul complet (ignore cache bundle)", value=False)
+        run_submit = st.form_submit_button("Lancer l'analyse complete Q5", type="primary")
 
-        gas_override_enabled = st.checkbox("Override gaz")
-        gas_override_val = st.number_input("Gaz override (EUR/MWh_th)", value=40.0, step=1.0) if gas_override_enabled else None
-
-        co2_override_enabled = st.checkbox("Override CO2")
-        co2_override_val = st.number_input("CO2 override (EUR/t)", value=80.0, step=1.0) if co2_override_enabled else None
-
-        run_submit = st.form_submit_button("Executer Q5", type="primary")
-
-    st.markdown("## Hypotheses utilisees")
-    assumptions = assumptions_editor_for(Q5_PARAMS, "q5")
-
-    years = list(range(year_range[0], year_range[1] + 1))
-    scoped = annual_source[(annual_source["country"] == country) & (annual_source["year"].isin(years))]
-    fail_count = int((scoped["quality_flag"] == "FAIL").sum()) if not scoped.empty else 0
-    if fail_count > 0:
-        st.error(f"{fail_count} ligne(s) quality_flag=FAIL. Conclusions bloquees.")
-
-    if run_submit and fail_count == 0:
-        hourly = _load_hourly_range(country, years, scenario_id=scenario_id if mode == "SCEN" else None)
-        if hourly.empty:
-            st.info("Donnees horaires absentes pour la periode selectionnee.")
-            return
-
-        commodities = _commodity_from_phase2(scenario_id, country, years) if mode == "SCEN" else load_commodity_daily_ui()
-        if commodities is None or commodities.empty:
-            st.warning("Serie commodities absente ou invalide: Q5 fonctionne en mode desactive avec diagnostics seulement.")
-
-        run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        t0 = perf_counter()
-        res = run_q5(
-            hourly_df=hourly,
-            assumptions_df=assumptions,
-            selection={
-                "country": country,
-                "marginal_tech": marginal,
-                "mode": mode,
-                "scenario_id": scenario_id,
-                "horizon_year": years[-1] if years else None,
-            },
-            run_id=run_id,
-            commodity_daily=commodities,
-            ttl_target_eur_mwh=float(ttl_target),
-            gas_override_eur_mwh_th=gas_override_val,
-            co2_override_eur_t=co2_override_val,
-        )
-        out_dir = export_module_result(res)
-        dt = perf_counter() - t0
-        st.session_state[RESULT_KEY] = {"res": res, "runtime_sec": dt, "out_dir": str(out_dir)}
+    if run_submit:
+        selection = {
+            "country": country,
+            "countries": [country],
+            "years": list(range(year_range[0], year_range[1] + 1)),
+            "scenario_ids": scenario_ids,
+            "scenario_years": [2030, 2040],
+            "marginal_tech": marginal_tech,
+            "ttl_target_eur_mwh": float(ttl_target),
+        }
+        bundle_hash = build_bundle_hash("Q5", selection, assumptions_phase1, assumptions_phase2)
+        cache_bust = datetime.utcnow().isoformat() if force_recompute else ""
+        with st.spinner("Execution Q5 complete (historique + prospectif) en cours..."):
+            bundle = run_question_bundle_cached("Q5", bundle_hash, selection, cache_bust=cache_bust)
+        out_dir = export_question_bundle(bundle)
+        st.session_state[RESULT_KEY] = {"bundle": bundle, "out_dir": str(out_dir), "bundle_hash": bundle_hash}
 
     payload = st.session_state.get(RESULT_KEY)
     if not payload:
         return
 
-    res = payload["res"]
-    summary = res.tables["Q5_summary"]
-
+    bundle = payload["bundle"]
+    render_status_banner(bundle.checks)
     st.markdown("## Tests empiriques")
-    with st.expander("Voir details techniques", expanded=False):
-        st.dataframe(summary, use_container_width=True)
+    render_test_ledger(bundle.test_ledger)
 
-    st.markdown("## Resultats et interpretation")
+    st.markdown("## Resultats synthese")
+    hist_summary = bundle.hist_result.tables.get("Q5_summary", pd.DataFrame())
     show_kpi_cards(
         [
-            ("TTL observe", f"{res.kpis.get('ttl_obs', float('nan')):.2f}", "Q95 prix sur regimes C/D."),
-            ("Corr prix-TCA", f"{res.kpis.get('corr_cd', float('nan')):.3f}", "Cohesion empirique entre prix et ancre thermique."),
-            ("Temps calcul (s)", f"{payload['runtime_sec']:.2f}", "Temps de calcul du module."),
+            ("Scenarios executes", len(bundle.scen_results), "Nombre de scenarios prospectifs executes."),
+            ("Run ID", bundle.run_id, "Identifiant run unifie."),
+            ("Pays", bundle.selection.get("country", ""), "Pays de l'analyse Q5."),
         ]
     )
 
-    if not summary.empty:
-        row = summary.iloc[0]
-        dco2 = float(row.get("dTCA_dCO2", float("nan")))
-        dgas = float(row.get("dTCA_dGas", float("nan")) )
-        st.info(f"Sensibilite immediate: +10 EUR/t CO2 => +{10*dco2:.2f} EUR/MWh | +10 EUR/MWh_th gaz => +{10*dgas:.2f} EUR/MWh")
+    tab_syn, tab_hist, tab_scen, tab_comp, tab_tech = st.tabs(
+        ["Synthese", "Historique", "Prospectif", "Comparaison", "Details techniques"]
+    )
 
-        plot_df = pd.DataFrame(
-            {
-                "variable": ["ttl_obs", "tca_q95", "alpha"],
-                "value": [float(row.get("ttl_obs", float("nan"))), float(row.get("tca_q95", float("nan"))), float(row.get("alpha", float("nan")))],
-            }
-        )
-        st.plotly_chart(px.bar(plot_df, x="variable", y="value", title="TTL observe, TCA Q95 et alpha"), use_container_width=True)
+    with tab_syn:
+        st.markdown(bundle.narrative_md)
+        render_robustness_panel(bundle.test_ledger)
+        if not hist_summary.empty:
+            st.dataframe(hist_summary, use_container_width=True)
 
-    st.markdown("### Lecture simple")
-    st.markdown(res.narrative_md)
+    with tab_hist:
+        out = bundle.hist_result.tables.get("Q5_summary", pd.DataFrame())
+        if out.empty:
+            st.info("Aucun resultat historique Q5.")
+        else:
+            row = out.iloc[0]
+            st.dataframe(out, use_container_width=True)
+            dco2 = float(row.get("dTCA_dCO2", float("nan")))
+            dgas = float(row.get("dTCA_dGas", float("nan")))
+            if pd.notna(dco2) and pd.notna(dgas):
+                st.info(f"+10 EUR/t CO2 => +{10*dco2:.2f} EUR/MWh | +10 EUR/MWh_th gaz => +{10*dgas:.2f} EUR/MWh")
+            fig_df = pd.DataFrame(
+                {
+                    "variable": ["ttl_obs", "tca_q95", "alpha"],
+                    "value": [float(row.get("ttl_obs", float("nan"))), float(row.get("tca_q95", float("nan"))), float(row.get("alpha", float("nan")))],
+                }
+            )
+            st.plotly_chart(px.bar(fig_df, x="variable", y="value", title="Historique: TTL, TCA Q95, alpha"), use_container_width=True)
+
+    with tab_scen:
+        if not bundle.scen_results:
+            st.info("Aucun resultat prospectif disponible.")
+        else:
+            scen_sel = st.selectbox("Scenario", sorted(bundle.scen_results.keys()), key="q5_bundle_scenario")
+            scen_res = bundle.scen_results[scen_sel]
+            st.dataframe(scen_res.tables.get("Q5_summary", pd.DataFrame()), use_container_width=True)
+
+    with tab_comp:
+        render_hist_scen_comparison(bundle.comparison_table)
+
+    with tab_tech:
+        st.markdown("### Checks")
+        show_checks_summary(bundle.checks)
+        if bundle.warnings:
+            st.warning(" | ".join(bundle.warnings))
+        st.markdown("### Exports")
+        st.code(payload["out_dir"])
 
     show_limitations(
         [
-            "Resultat en ordre de grandeur, sensible au choix de techno marginale.",
-            "L'hypothese alpha stable simplifie la realite des regimes de prix.",
-            "Une corr prix-TCA faible fragilise l'estimation du CO2 requis.",
-            "Les effets hydro/interconnexions/contraintes reseau ne sont pas explicitement modeles.",
+            "Le pass-through commodites->prix reste imparfait en pratique.",
+            "Le choix techno marginale influence fortement l'interpretation.",
+            "L'hypothese alpha stable est une simplification explicite.",
+            "Les tests NON_TESTABLE sont traces explicitement.",
         ]
     )
 
     st.markdown("## Checks & exports")
-    show_checks_summary(res.checks)
-    if res.warnings:
-        st.warning(" | ".join(res.warnings))
+    show_checks_summary(bundle.checks)
     st.code(payload["out_dir"])
