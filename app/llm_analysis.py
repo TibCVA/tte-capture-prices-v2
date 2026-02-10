@@ -221,18 +221,22 @@ def _dict_to_markdown_sections(data: dict[str, Any], indent: int = 0) -> str:
     return "\n".join(lines)
 
 
-def build_analysis_prompt(question_id: str, bundle_data: dict[str, Any]) -> list[dict[str, str]]:
-    """Build the 3-message prompt for the LLM call."""
+def build_analysis_prompt(question_id: str, bundle_data: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+    """Build instructions + input items for the Responses API.
+
+    Returns (instructions, input_items) where:
+    - instructions = system-level guidance
+    - input_items = list of user messages (methodology context + data)
+    """
     qid = question_id.upper()
 
-    # Message 1: System
-    system_msg = {"role": "system", "content": SYSTEM_PROMPT}
+    # Instructions (replaces system message in Responses API)
+    instructions = SYSTEM_PROMPT
 
-    # Message 2: Methodology context
+    # Methodology context
     methodology = get_full_methodology_context(qid)
-    methodology_msg = {"role": "user", "content": methodology}
 
-    # Message 3: Data + sub-questions
+    # Data + sub-questions
     bq = bundle_data.get("business_question", "")
     defs = "\n".join(f"- {d}" for d in bundle_data.get("definitions", []))
     selection = bundle_data.get("selection", {})
@@ -336,9 +340,12 @@ Produis ton rapport en suivant le format defini. Cite systematiquement les donne
 (pays, annee, valeur) pour chaque affirmation.
 """
 
-    data_msg = {"role": "user", "content": user_content}
+    input_items = [
+        {"role": "user", "content": methodology},
+        {"role": "user", "content": user_content},
+    ]
 
-    return [system_msg, methodology_msg, data_msg]
+    return instructions, input_items
 
 
 # ---------------------------------------------------------------------------
@@ -374,32 +381,31 @@ def run_llm_analysis(
     bundle_hash: str,
     bundle_data: dict[str, Any],
 ) -> dict[str, Any]:
-    """Call OpenAI API and return the report dict. Saves to disk on success."""
+    """Call OpenAI Responses API and return the report dict. Saves to disk on success."""
     client = get_openai_client()
     if client is None:
         return {"error": "Cle API OpenAI non configuree. Ajouter OPENAI_API_KEY dans .env ou Streamlit secrets."}
 
-    messages = build_analysis_prompt(question_id, bundle_data)
+    instructions, input_items = build_analysis_prompt(question_id, bundle_data)
 
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model=MODEL,
-            messages=messages,
-            max_completion_tokens=MAX_COMPLETION_TOKENS,
-            temperature=1,
-            reasoning_effort=REASONING_EFFORT,
+            instructions=instructions,
+            input=input_items,
+            max_output_tokens=MAX_COMPLETION_TOKENS,
+            reasoning={"effort": REASONING_EFFORT},
         )
     except Exception as exc:
         return {"error": f"Erreur API OpenAI: {exc}"}
 
-    choice = response.choices[0] if response.choices else None
-    if not choice or not choice.message:
+    report_md = getattr(response, "output_text", None) or ""
+    if not report_md:
         return {"error": "Reponse API vide."}
 
-    report_md = choice.message.content or ""
-    usage = response.usage
-    tokens_in = usage.prompt_tokens if usage else 0
-    tokens_out = usage.completion_tokens if usage else 0
+    usage = getattr(response, "usage", None)
+    tokens_in = getattr(usage, "input_tokens", 0) if usage else 0
+    tokens_out = getattr(usage, "output_tokens", 0) if usage else 0
 
     selection = bundle_data.get("selection", {})
     countries = selection.get("countries", [selection.get("country", "?")])
