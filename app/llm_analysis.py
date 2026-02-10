@@ -144,8 +144,19 @@ ecarts par rapport aux hypotheses methodologiques)
 # ---------------------------------------------------------------------------
 # Dynamic methodology context from AUDIT_METHODS_Q1_Q5.md
 # ---------------------------------------------------------------------------
+def _ensure_audit_methods_fresh() -> None:
+    """Regenerate AUDIT_METHODS_Q1_Q5.md if any source file is newer."""
+    try:
+        from scripts.generate_audit_methods import is_stale, write
+        if is_stale():
+            write()
+    except Exception:
+        pass  # non-blocking — use existing .md if generation fails
+
+
 def _load_audit_methods() -> str:
-    """Read AUDIT_METHODS_Q1_Q5.md at runtime so changes are picked up automatically."""
+    """Ensure freshness then read AUDIT_METHODS_Q1_Q5.md."""
+    _ensure_audit_methods_fresh()
     if not AUDIT_METHODS_PATH.exists():
         return "(fichier AUDIT_METHODS_Q1_Q5.md introuvable)"
     return AUDIT_METHODS_PATH.read_text(encoding="utf-8")
