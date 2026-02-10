@@ -3,7 +3,7 @@
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import country_year_selector, load_hourly_safe
+from app.page_utils import country_year_selector, load_hourly_safe, to_plot_frame
 from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
 
 
@@ -48,7 +48,7 @@ def render() -> None:
     )
 
     st.markdown("## Resultats et interpretation")
-    view = df.reset_index().tail(168)
+    view = to_plot_frame(df).tail(168)
     st.plotly_chart(
         px.line(view, x="timestamp_utc", y=["nrl_mw", "surplus_mw", "flex_effective_mw"], title="Dernieres 168h: NRL, surplus, flex"),
         use_container_width=True,

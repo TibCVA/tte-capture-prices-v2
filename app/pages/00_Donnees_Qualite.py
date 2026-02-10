@@ -3,7 +3,7 @@
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import country_year_selector, load_hourly_safe, load_validation_findings, run_pipeline_ui
+from app.page_utils import country_year_selector, load_hourly_safe, load_validation_findings, run_pipeline_ui, to_plot_frame
 from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
 
 
@@ -56,10 +56,11 @@ def render() -> None:
     )
 
     st.markdown("## Resultats et interpretation")
-    fig_price = px.line(df.reset_index(), x="timestamp_utc", y="price_da_eur_mwh", title="Prix day-ahead (NaN visibles)")
+    plot_df = to_plot_frame(df)
+    fig_price = px.line(plot_df, x="timestamp_utc", y="price_da_eur_mwh", title="Prix day-ahead (NaN visibles)")
     st.plotly_chart(fig_price, use_container_width=True)
 
-    fig_nrl = px.line(df.reset_index(), x="timestamp_utc", y=["nrl_mw", "surplus_mw"], title="NRL et surplus")
+    fig_nrl = px.line(plot_df, x="timestamp_utc", y=["nrl_mw", "surplus_mw"], title="NRL et surplus")
     st.plotly_chart(fig_nrl, use_container_width=True)
 
     findings = load_validation_findings(country, year)

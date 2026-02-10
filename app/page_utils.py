@@ -110,6 +110,30 @@ def load_commodity_daily_ui() -> pd.DataFrame | None:
     return df.dropna(subset=["date"])
 
 
+def to_plot_frame(df: pd.DataFrame, timestamp_col: str = "timestamp_utc") -> pd.DataFrame:
+    """Return a plotting-safe dataframe with a single timestamp column.
+
+    Handles common case where `timestamp_utc` exists both as index name and as column.
+    """
+    out = df.copy()
+
+    if timestamp_col in out.columns:
+        # Avoid duplicate insertion when index shares the same name.
+        return out.reset_index(drop=True)
+
+    if isinstance(out.index, pd.DatetimeIndex):
+        out = out.reset_index()
+        first_col = str(out.columns[0])
+        if first_col != timestamp_col:
+            out = out.rename(columns={first_col: timestamp_col})
+        return out
+
+    out = out.reset_index(drop=False)
+    if timestamp_col not in out.columns:
+        out[timestamp_col] = out.index
+    return out
+
+
 def assumptions_editor() -> pd.DataFrame:
     df = load_assumptions_table()
     st.subheader("Hypotheses Phase 1")
