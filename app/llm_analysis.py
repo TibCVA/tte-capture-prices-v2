@@ -65,7 +65,7 @@ QUESTION_SUB_QUESTIONS: dict[str, str] = {
 5. Le choix de technologie marginale (CCGT vs COAL) change-t-il significativement les conclusions ?""",
 }
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_TEMPLATE = """\
 Tu es un consultant senior en strategie energetique specialise dans les marches europeens \
 de l'electricite et les capture prices des energies renouvelables (PV, eolien).
 
@@ -73,7 +73,12 @@ Tu produis des rapports d'analyse ultra-rigoureux, precis et structures pour des
 d'infrastructure. Ton style est factuel, argumente par les donnees, et tu ne specules jamais \
 sans le signaler explicitement.
 
-Tu as recu en contexte la METHODOLOGIE COMPLETE de l'outil TTE Capture Prices V2 : \
+IMPORTANT — PERIMETRE STRICT :
+Tu analyses UNIQUEMENT la question {qid} qui t'est soumise. \
+Ne traite PAS les autres questions (Q1-Q5). Ne reponds qu'aux sous-questions \
+listees dans le message utilisateur. Tout le rapport doit porter exclusivement sur {qid}.
+
+Tu as recu en contexte la METHODOLOGIE de l'outil TTE Capture Prices V2 pour la question {qid} : \
 les slides de methode originales (definitions, hypotheses, tests empiriques, scenarios, \
 limites et livrables attendus) ainsi que les regles de calcul normatives (SPEC_0). \
 Tu DOIS t'y referer systematiquement dans ton analyse.
@@ -86,8 +91,9 @@ REGLES :
 5. Si une donnee manque ou un test est NON_TESTABLE, dis-le explicitement.
 6. Detecte et signale tout probleme de logique, de coherence ou de qualite des donnees.
 7. Verifie que les resultats sont coherents avec les hypotheses de la methodologie slides.
-8. Cite les hypotheses (H1.1, H3.2, etc.) et tests (T3.1, T4.2, etc.) des slides quand pertinent.
+8. Cite les hypotheses et tests des slides quand pertinent.
 9. Signale si un livrable attendu (cf. slides) n'est pas couvert par les donnees disponibles.
+10. Ne fais AUCUNE reference aux autres questions (Q1-Q5) sauf si les donnees fournies y font explicitement reference.
 
 FORMAT DU RAPPORT :
 ## 1. Resume executif (5-10 lignes)
@@ -231,7 +237,7 @@ def build_analysis_prompt(question_id: str, bundle_data: dict[str, Any]) -> tupl
     qid = question_id.upper()
 
     # Instructions (replaces system message in Responses API)
-    instructions = SYSTEM_PROMPT
+    instructions = SYSTEM_PROMPT_TEMPLATE.format(qid=qid)
 
     # Methodology context
     methodology = get_full_methodology_context(qid)
@@ -302,6 +308,8 @@ def build_analysis_prompt(question_id: str, bundle_data: dict[str, Any]) -> tupl
     sub_questions = QUESTION_SUB_QUESTIONS.get(qid, "")
 
     user_content = f"""\
+IMPORTANT : Tu analyses UNIQUEMENT la question {qid}. Ne traite aucune autre question.
+
 Voici les resultats complets de l'analyse {qid} pour l'outil TTE Capture Prices V2.
 
 **Question business**: {bq}
@@ -333,11 +341,11 @@ Resume: {summary_line}
 --- WARNINGS ---
 {warnings}
 
-SOUS-QUESTIONS AUXQUELLES TU DOIS REPONDRE :
+SOUS-QUESTIONS AUXQUELLES TU DOIS REPONDRE (exclusivement pour {qid}) :
 {sub_questions}
 
-Produis ton rapport en suivant le format defini. Cite systematiquement les donnees \
-(pays, annee, valeur) pour chaque affirmation.
+Produis ton rapport en suivant le format defini. Porte UNIQUEMENT sur {qid}. \
+Cite systematiquement les donnees (pays, annee, valeur) pour chaque affirmation.
 """
 
     input_items = [
