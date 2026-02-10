@@ -6,13 +6,29 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import (
-    assumptions_editor_for,
-    build_bundle_hash,
-    load_annual_metrics,
-    load_phase2_assumptions_table,
-    run_question_bundle_cached,
-)
+_PAGE_UTILS_IMPORT_ERROR: Exception | None = None
+try:
+    from app.page_utils import (
+        assumptions_editor_for,
+        build_bundle_hash,
+        load_annual_metrics,
+        load_phase2_assumptions_table,
+        run_question_bundle_cached,
+    )
+except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud stale caches
+    _PAGE_UTILS_IMPORT_ERROR = exc
+
+    def _page_utils_unavailable(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError(
+            "app.page_utils indisponible sur cette instance (cache/deploiement partiel). "
+            "Rebooter l'app puis vider le cache Streamlit Cloud."
+        )
+
+    assumptions_editor_for = _page_utils_unavailable  # type: ignore[assignment]
+    build_bundle_hash = _page_utils_unavailable  # type: ignore[assignment]
+    load_annual_metrics = _page_utils_unavailable  # type: ignore[assignment]
+    load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
+    run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
 from app.ui_components import (
     guided_header,
     inject_theme,
@@ -45,6 +61,12 @@ def _spec_table() -> pd.DataFrame:
 
 
 def render() -> None:
+    if _PAGE_UTILS_IMPORT_ERROR is not None:
+        st.error("Impossible de charger les utilitaires de page (page_utils).")
+        st.code(str(_PAGE_UTILS_IMPORT_ERROR))
+        st.info("Action recommandee: Streamlit Cloud > Manage app > Reboot app, puis Clear cache.")
+        return
+
     inject_theme()
     guided_header(
         title="Q1 - Passage Phase 1 vers Phase 2",
