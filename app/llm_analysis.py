@@ -19,6 +19,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from app.llm_slides_context import get_full_methodology_context
 from src.modules.bundle_result import QuestionBundleResult
 from src.reporting.interpretation_rules import QUESTION_BUSINESS_TEXT, QUESTION_DEFINITIONS
 
@@ -29,16 +30,6 @@ MODEL = "gpt-5.2-pro"
 REASONING_EFFORT = "high"
 MAX_COMPLETION_TOKENS = 16_000
 LLM_REPORTS_DIR = Path("outputs/llm_reports")
-AUDIT_METHODS_PATH = Path(__file__).resolve().parents[1] / "AUDIT_METHODS_Q1_Q5.md"
-
-# Mapping question -> section header in AUDIT_METHODS_Q1_Q5.md
-_Q_SECTION_HEADERS: dict[str, str] = {
-    "Q1": "## 4.1 Q1",
-    "Q2": "## 4.2 Q2",
-    "Q3": "## 4.3 Q3",
-    "Q4": "## 4.4 Q4",
-    "Q5": "## 4.5 Q5",
-}
 
 QUESTION_SUB_QUESTIONS: dict[str, str] = {
     "Q1": """\
@@ -138,77 +129,6 @@ ecarts par rapport aux hypotheses methodologiques)
    (1 ligne par pays avec verdict et KPI cles)
 ## Recommandations et prochaines etapes
 ## Limites de cette analyse
-"""
-
-
-# ---------------------------------------------------------------------------
-# Dynamic methodology context from AUDIT_METHODS_Q1_Q5.md
-# ---------------------------------------------------------------------------
-def _load_audit_methods() -> str:
-    """Read AUDIT_METHODS_Q1_Q5.md at runtime so changes are picked up automatically."""
-    if not AUDIT_METHODS_PATH.exists():
-        return "(fichier AUDIT_METHODS_Q1_Q5.md introuvable)"
-    return AUDIT_METHODS_PATH.read_text(encoding="utf-8")
-
-
-def _extract_common_sections(full_text: str) -> str:
-    """Extract sections 1-3 (purpose, data sources, formulas) and 5-8 (engine, outputs, limitations)."""
-    lines = full_text.splitlines()
-    sections: list[str] = []
-    current: list[str] = []
-    current_header = ""
-    for line in lines:
-        if line.startswith("## ") and not line.startswith("## 4."):
-            if current and current_header:
-                sections.append("\n".join(current))
-            current = [line]
-            current_header = line
-        elif line.startswith("## 4."):
-            if current and current_header:
-                sections.append("\n".join(current))
-            current = []
-            current_header = ""
-        else:
-            if current_header:
-                current.append(line)
-    if current and current_header:
-        sections.append("\n".join(current))
-    return "\n\n".join(sections)
-
-
-def _extract_question_section(full_text: str, question_id: str) -> str:
-    """Extract the specific Q section (e.g. ## 4.1 Q1 ... until next ## 4.x or ## 5)."""
-    qid = question_id.upper()
-    header = _Q_SECTION_HEADERS.get(qid, "")
-    if not header:
-        return ""
-    lines = full_text.splitlines()
-    capturing = False
-    result: list[str] = []
-    for line in lines:
-        if line.startswith(header):
-            capturing = True
-            result.append(line)
-        elif capturing and (line.startswith("## 4.") or line.startswith("## 5")):
-            break
-        elif capturing:
-            result.append(line)
-    return "\n".join(result)
-
-
-def get_methodology_context(question_id: str) -> str:
-    """Build methodology context for a question by reading AUDIT_METHODS_Q1_Q5.md dynamically."""
-    full_text = _load_audit_methods()
-    common = _extract_common_sections(full_text)
-    q_section = _extract_question_section(full_text, question_id)
-    return f"""\
-=== METHODOLOGIE ET REGLES DE CALCUL ===
-
-{common}
-
-=== LOGIQUE ANALYTIQUE SPECIFIQUE {question_id.upper()} ===
-
-{q_section}
 """
 
 
@@ -342,7 +262,7 @@ def build_analysis_prompt(question_id: str, bundle_data: dict[str, Any]) -> tupl
     instructions = SYSTEM_PROMPT_TEMPLATE.format(qid=qid)
 
     # Methodology context
-    methodology = get_methodology_context(qid)
+    methodology = get_full_methodology_context(qid)
 
     # Data + sub-questions
     bq = bundle_data.get("business_question", "")
