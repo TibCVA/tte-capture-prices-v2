@@ -43,3 +43,28 @@ def test_conclusions_page_helpers_and_complete_run_filter(tmp_path: Path, monkey
     assert paths["executive"].exists()
     assert ns["_safe_read_text"](paths["detailed"]).startswith("#")
 
+
+def test_conclusions_can_assemble_from_fragments(tmp_path: Path, monkeypatch) -> None:
+    base = tmp_path / "outputs" / "combined"
+    for q in ["Q1", "Q2", "Q3", "Q4", "Q5"]:
+        run_dir = build_fake_combined_run(base, run_id=f"FRAG_{q}", include_all_questions=True)
+        for other in ["Q1", "Q2", "Q3", "Q4", "Q5"]:
+            if other != q:
+                import shutil
+
+                shutil.rmtree(run_dir / other)
+
+    monkeypatch.chdir(tmp_path)
+
+    ns = runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[1]
+            / "app"
+            / "pages"
+            / "99_Conclusions.py"
+        )
+    )
+    run_dir = ns["assemble_complete_run_from_fragments"](Path("outputs/combined"), run_id="ASSM_01")
+    assert run_dir.exists()
+    complete = discover_complete_runs(Path("outputs/combined"))
+    assert any(p.name == "ASSM_01" for p in complete)

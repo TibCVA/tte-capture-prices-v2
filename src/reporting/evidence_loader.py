@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import json
+import shutil
 
 import pandas as pd
 
@@ -56,6 +58,74 @@ def discover_complete_runs(base_dir: Path = Path("outputs/combined")) -> list[Pa
         return []
     runs = [p for p in base_dir.iterdir() if p.is_dir() and is_complete_run(p)]
     return sorted(runs, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def discover_question_fragments(base_dir: Path = Path("outputs/combined")) -> dict[str, list[Path]]:
+    fragments: dict[str, list[Path]] = {q: [] for q in REQUIRED_QUESTIONS}
+    if not base_dir.exists():
+        return fragments
+    for run_dir in base_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
+        for q in REQUIRED_QUESTIONS:
+            q_dir = question_dir(run_dir, q)
+            if not q_dir.exists():
+                continue
+            if (q_dir / "summary.json").exists() and (q_dir / "test_ledger.csv").exists() and (q_dir / "comparison_hist_vs_scen.csv").exists():
+                fragments[q].append(q_dir)
+    for q in REQUIRED_QUESTIONS:
+        fragments[q] = sorted(fragments[q], key=lambda p: p.stat().st_mtime, reverse=True)
+    return fragments
+
+
+def latest_fragment_per_question(base_dir: Path = Path("outputs/combined")) -> dict[str, Path]:
+    frags = discover_question_fragments(base_dir=base_dir)
+    out: dict[str, Path] = {}
+    for q, items in frags.items():
+        if items:
+            out[q] = items[0]
+    return out
+
+
+def can_assemble_complete_run(base_dir: Path = Path("outputs/combined")) -> bool:
+    latest = latest_fragment_per_question(base_dir=base_dir)
+    return all(q in latest for q in REQUIRED_QUESTIONS)
+
+
+def assemble_complete_run_from_fragments(
+    base_dir: Path = Path("outputs/combined"),
+    run_id: str | None = None,
+    overwrite: bool = False,
+) -> Path:
+    latest = latest_fragment_per_question(base_dir=base_dir)
+    missing = [q for q in REQUIRED_QUESTIONS if q not in latest]
+    if missing:
+        raise ValueError(f"Cannot assemble complete run, missing fragments for: {missing}")
+
+    if run_id is None:
+        run_id = "ASSEMBLED_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_dir = base_dir / run_id
+    if run_dir.exists():
+        if overwrite:
+            shutil.rmtree(run_dir)
+        else:
+            raise FileExistsError(f"Run dir already exists: {run_dir}")
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    provenance: dict[str, str] = {}
+    for q in REQUIRED_QUESTIONS:
+        src_q_dir = latest[q]
+        dst_q_dir = run_dir / q
+        shutil.copytree(src_q_dir, dst_q_dir)
+        provenance[q] = str(src_q_dir)
+
+    meta = {
+        "assembled_run_id": run_id,
+        "assembled_at_utc": datetime.now(timezone.utc).isoformat(),
+        "provenance": provenance,
+    }
+    (run_dir / "_assembled_from.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return run_dir
 
 
 def resolve_run_dir(
@@ -201,4 +271,3 @@ def build_checks_catalog(run_dir: Path, blocks: dict[str, QuestionTestResultBloc
                 }
             )
     return pd.DataFrame(rows)
-

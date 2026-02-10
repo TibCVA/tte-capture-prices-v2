@@ -7,7 +7,12 @@ import pandas as pd
 import streamlit as st
 
 from app.ui_components import guided_header, inject_theme
-from src.reporting.evidence_loader import REQUIRED_QUESTIONS, discover_complete_runs
+from src.reporting.evidence_loader import (
+    REQUIRED_QUESTIONS,
+    assemble_complete_run_from_fragments,
+    discover_complete_runs,
+    latest_fragment_per_question,
+)
 
 
 def _safe_read_text(path: Path) -> str:
@@ -68,7 +73,34 @@ def render() -> None:
     st.markdown("## Run combiné complet")
     complete_runs = discover_complete_runs(Path("outputs/combined"))
     if not complete_runs:
-        st.error("Aucun run combiné complet (Q1..Q5) n'est disponible dans `outputs/combined`.")
+        st.warning("Aucun run combiné complet (Q1..Q5) n'est disponible dans `outputs/combined`.")
+        fragments = latest_fragment_per_question(Path("outputs/combined"))
+        st.markdown("### Fragments détectés par question")
+        frag_rows = []
+        for q in REQUIRED_QUESTIONS:
+            p = fragments.get(q)
+            frag_rows.append(
+                {
+                    "question": q,
+                    "disponible": p is not None,
+                    "source_fragment": str(p) if p is not None else "",
+                }
+            )
+        st.dataframe(pd.DataFrame(frag_rows), use_container_width=True)
+
+        missing = [q for q in REQUIRED_QUESTIONS if q not in fragments]
+        if missing:
+            st.error(f"Impossible d'assembler automatiquement un run complet. Questions manquantes: {missing}")
+            st.info("Lance au moins une analyse complète sur chaque page Q1..Q5, puis reviens ici.")
+            return
+
+        if st.button("Assembler un run complet à partir des derniers fragments Q1..Q5", type="primary"):
+            try:
+                run_dir = assemble_complete_run_from_fragments(Path("outputs/combined"))
+                st.success(f"Run assemblé: {run_dir.name}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Echec assemblage run complet: {exc}")
         return
 
     labels = [p.name for p in complete_runs if _run_has_all_questions(p)]
@@ -137,4 +169,3 @@ def render() -> None:
                 st.success("Verdict qualité: PASS")
             else:
                 st.warning(f"Verdict qualité: {verdict}")
-
