@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from app.ui_components import guided_header, inject_theme, show_definitions, show_limitations
@@ -15,9 +16,14 @@ def render() -> None:
     inject_theme()
     guided_header(
         title="Mode d'emploi",
-        purpose="Guide rapide pour lire correctement les modules et eviter les sur-interpretations.",
+        purpose="Guide complet, pedagogique et autoportant pour comprendre definitions, hypotheses, tests et limites.",
         step_now="Mode d'emploi: poser le cadre",
         step_next="Donnees & Qualite: verifier la base avant toute conclusion",
+    )
+
+    st.markdown("## Question business")
+    st.markdown(
+        "Comment lire l'outil correctement, sans confusion entre physique et marche, et sans sur-interpreter les resultats ?"
     )
 
     st.markdown("## Methode en 4 points")
@@ -28,6 +34,65 @@ def render() -> None:
         "4. **Audit-first**: chaque resultat est exportable avec hypotheses et checks."
     )
 
+    st.markdown("## Conventions normatives (SPEC 0)")
+    conventions = pd.DataFrame(
+        [
+            {
+                "Bloc": "Temps",
+                "Regle": "Calcul interne strictement horaire en UTC (8760/8784 heures).",
+                "Pourquoi c'est critique": "Evite les biais DST et les erreurs d'aggregation.",
+            },
+            {
+                "Bloc": "Unites",
+                "Regle": "Puissance en MW, energie en MWh/TWh, prix en EUR/MWh.",
+                "Pourquoi c'est critique": "Evite les comparaisons fausses entre pays/annees.",
+            },
+            {
+                "Bloc": "Signes",
+                "Regle": "Net position > 0 = export net ; < 0 = import net.",
+                "Pourquoi c'est critique": "Conditionne FAR et interpretation du surplus.",
+            },
+            {
+                "Bloc": "Anti-circularite",
+                "Regle": "Les regimes physiques A/B/C/D ne sont jamais definis par le prix.",
+                "Pourquoi c'est critique": "Evite un raisonnement tautologique.",
+            },
+            {
+                "Bloc": "Donnees manquantes",
+                "Regle": "Pas d'imputation silencieuse des trous critiques.",
+                "Pourquoi c'est critique": "Preserve l'auditabilite et la reproductibilite.",
+            },
+        ]
+    )
+    st.dataframe(conventions, use_container_width=True, hide_index=True)
+
+    st.markdown("## Mode HIST vs Mode SCEN")
+    mode_table = pd.DataFrame(
+        [
+            {
+                "Mode": "HIST (historique)",
+                "Ce que l'on utilise": "Donnees observees ENTSO-E",
+                "Ce que cela apporte": "Constats empiriques et signatures observees",
+                "Limite principale": "Ne dit pas directement ce qui se passera demain",
+            },
+            {
+                "Mode": "SCEN (prospectif)",
+                "Ce que l'on utilise": "Hypotheses scenario x pays x annee + moteur mecaniste",
+                "Ce que cela apporte": "Sensibilites et ordres de grandeur conditionnels",
+                "Limite principale": "Ce n'est pas un modele d'equilibre complet",
+            },
+        ]
+    )
+    st.dataframe(mode_table, use_container_width=True, hide_index=True)
+
+    st.markdown("## Phases structurelles (PS1/PS2/PS3)")
+    st.markdown(
+        "- **PS1**: surplus rare ou facilement absorbe, peu d'heures negatives, capture ratio relativement stable.\n"
+        "- **PS2**: surplus frequent, cannibalisation active, hausse des heures basses/negatives.\n"
+        "- **PS3**: adaptation systeme (flex, curtailment, demande, exports), la degradation cesse d'empirer ou s'inverse."
+    )
+
+    st.markdown("## Definitions obligatoires")
     show_definitions(
         [
             ("NRL", "Load - VRE - MustRun."),
@@ -74,7 +139,7 @@ def render() -> None:
                 "formula": "TTL = Q95(price_da_eur_mwh | regime in {C,D})",
                 "intuition": "Approxime la valeur des heures thermiques/tendues.",
                 "interpretation": "TTL eleve peut relever l'ancre de valeur hors surplus.",
-                "limits": "Ce n'est pas un cout marginal; demande un nombre minimal d'heures C/D.",
+                "limits": "Ce n'est pas un cout marginal; demande un minimum d'heures C/D.",
                 "dependencies": "regime_phys, prix observes, seuil regime D.",
             },
             {
@@ -98,11 +163,40 @@ def render() -> None:
         "- **D**: tension (NRL eleve)."
     )
 
-    st.markdown("## Lecture des resultats")
+    st.markdown("## Exemple calcule - 1 heure")
     st.markdown(
-        "- Commencer par le flag qualite (`quality_flag`).\n"
-        "- Lire les checks PASS/WARN/FAIL avant la narrative.\n"
-        "- Separer ce qui est observe (historique) de ce qui est simule."
+        "Exemple pedagogique (heure t): `Load=50 000 MW`, `VRE=18 000 MW`, `MustRun=34 000 MW`.\n"
+        "- `NRL = 50 000 - 18 000 - 34 000 = -2 000 MW`\n"
+        "- `Surplus = max(0, 2 000) = 2 000 MW`\n"
+        "- Si flex observee = 1 500 MW, alors `surplus_unabsorbed = 500 MW` et regime `A`."
+    )
+
+    st.markdown("## Exemple calcule - 1 annee")
+    st.markdown(
+        "Exemple pedagogique simplifie:\n"
+        "- Surplus annuel = `12 TWh`\n"
+        "- Generation primaire = `480 TWh`\n"
+        "- Surplus absorbe = `9 TWh`\n"
+        "On obtient:\n"
+        "- `SR = 12 / 480 = 2.5%`\n"
+        "- `FAR = 9 / 12 = 75%`\n"
+        "Lecture: le surplus est materialise et partiellement absorbe, donc tension potentielle sur les prix en heures de surplus."
+    )
+
+    st.markdown("## Checklist de lecture (anti-surinterpretation)")
+    st.markdown(
+        "1. Verifier d'abord `quality_flag`, `completeness` et les checks ERROR/WARN.\n"
+        "2. Distinguer explicitement observation historique et simulation prospective.\n"
+        "3. Lire les tests un par un (valeur, seuil, statut, interpretation).\n"
+        "4. Verifier les limites avant toute conclusion business.\n"
+        "5. Ne jamais deduire une causalite forte d'une seule correlation."
+    )
+
+    st.markdown("## Hypotheses et gouvernance")
+    st.markdown(
+        "- Les hypotheses sont versionnees dans `data/assumptions/phase1_assumptions.csv` et `data/assumptions/phase2/phase2_scenario_country_year.csv`.\n"
+        "- Toute execution doit etre tracable via un `run_id` et des exports explicites (tables, checks, narrative).\n"
+        "- Les secrets (ENTSO-E) ne sont jamais commits et restent hors code."
     )
 
     show_limitations(

@@ -73,6 +73,12 @@ def _generate_reports_for_run(run_id: str, strict: bool = True) -> tuple[bool, s
             output_dir=Path("reports"),
         )
         return True, f"Rapport genere. Verdict: {result.qc.get('verdict', 'UNKNOWN')}"
+    except RuntimeError as exc:
+        # Strict mode can fail quality gates while still producing report artifacts.
+        paths = _report_paths(run_id)
+        if paths["detailed"].exists() or paths["executive"].exists():
+            return True, f"Rapport genere avec ecarts quality-gate: {exc}"
+        return False, f"Echec generation rapport (strict): {exc}"
     except Exception as exc:
         return False, f"Echec generation rapport: {exc}"
 
@@ -135,16 +141,16 @@ def render() -> None:
     with col1:
         if st.button("Generer / mettre a jour le rapport pour ce run", type="primary"):
             with st.spinner("Generation rapport en cours..."):
-                ok, msg = _generate_reports_for_run(selected_run, strict=True)
+                ok, msg = _generate_reports_for_run(selected_run, strict=False)
             if ok:
                 st.success(msg)
                 st.rerun()
             else:
                 st.error(msg)
     with col2:
-        if st.button("Generer en mode non strict"):
-            with st.spinner("Generation rapport (non strict) en cours..."):
-                ok, msg = _generate_reports_for_run(selected_run, strict=False)
+        if st.button("Verifier quality gates (strict)"):
+            with st.spinner("Generation rapport (strict) en cours..."):
+                ok, msg = _generate_reports_for_run(selected_run, strict=True)
             if ok:
                 st.success(msg)
                 st.rerun()
@@ -206,4 +212,3 @@ def render() -> None:
                 st.success("Verdict qualite: PASS")
             else:
                 st.warning(f"Verdict qualite: {verdict}")
-

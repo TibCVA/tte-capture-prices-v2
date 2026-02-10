@@ -1,9 +1,30 @@
 ﻿from __future__ import annotations
 
+import calendar
+from typing import Any
+
+import numpy as np
+import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import country_year_selector, load_hourly_safe, load_validation_findings, run_pipeline_ui, to_plot_frame
+_PAGE_UTILS_IMPORT_ERROR: Exception | None = None
+try:
+    from app.page_utils import country_year_selector, load_hourly_safe, load_validation_findings, run_pipeline_ui, to_plot_frame
+except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud stale caches
+    _PAGE_UTILS_IMPORT_ERROR = exc
+
+    def _page_utils_unavailable(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError(
+            "app.page_utils indisponible sur cette instance (cache/deploiement partiel). "
+            "Rebooter l'app puis vider le cache Streamlit Cloud."
+        )
+
+    country_year_selector = _page_utils_unavailable  # type: ignore[assignment]
+    load_hourly_safe = _page_utils_unavailable  # type: ignore[assignment]
+    load_validation_findings = _page_utils_unavailable  # type: ignore[assignment]
+    run_pipeline_ui = _page_utils_unavailable  # type: ignore[assignment]
+    to_plot_frame = _page_utils_unavailable  # type: ignore[assignment]
 from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
 
 try:
@@ -13,22 +34,97 @@ except ImportError:  # Backward-compatible fallback if cloud cache serves an old
         return None
 
 
+CRITICAL_COLS = [
+    "price_da_eur_mwh",
+    "load_mw",
+    "gen_vre_mw",
+    "gen_must_run_mw",
+    "nrl_mw",
+    "surplus_mw",
+    "regime_phys",
+]
+
+
+def _expected_hours(year: int) -> int:
+    return 8784 if calendar.isleap(int(year)) else 8760
+
+
+def _missing_share(series: pd.Series) -> float:
+    if series is None or len(series) == 0:
+        return 1.0
+    return float(series.isna().mean())
+
+
+def _quality_decision(
+    completeness: float,
+    hard_error_count: int,
+    continuity_ok: bool,
+    duplicate_timestamps: int,
+    critical_missing_cols: list[str],
+) -> tuple[str, list[str], list[str]]:
+    reasons: list[str] = []
+    actions: list[str] = []
+
+    if hard_error_count > 0:
+        reasons.append(f"{hard_error_count} check(s) ERROR dans validation findings")
+        actions.append("Corriger les erreurs du pipeline avant toute conclusion")
+    if not continuity_ok:
+        reasons.append("Continuite temporelle non conforme (trous ou nombre d'heures incorrect)")
+        actions.append("Rebuild du pays-annee et verification timezone/index")
+    if duplicate_timestamps > 0:
+        reasons.append(f"{duplicate_timestamps} timestamp(s) duplique(s)")
+        actions.append("Dedoublonner la serie source puis relancer le pipeline")
+    if completeness < 0.98:
+        reasons.append(f"Completeness insuffisante ({100*completeness:.2f}% < 98.00%)")
+        actions.append("Verifier disponibilite prix/load/generation et completer la source")
+    if critical_missing_cols:
+        reasons.append("Colonnes critiques manquantes: " + ", ".join(critical_missing_cols))
+        actions.append("Verifier le mapping ENTSO-E et les colonnes canoniques du socle")
+
+    if reasons:
+        if hard_error_count > 0 or not continuity_ok or duplicate_timestamps > 0:
+            return "FAIL", reasons, actions
+        return "WARN", reasons, actions
+
+    return "PASS", ["Qualite suffisante pour interpretation business"], ["Vous pouvez passer aux modules Q1..Q5"]
+
+
+def _findings_error_warn(df_findings: pd.DataFrame) -> tuple[int, int]:
+    if df_findings.empty:
+        return 0, 0
+    sev_col = "severity" if "severity" in df_findings.columns else ("status" if "status" in df_findings.columns else "")
+    if not sev_col:
+        return 0, 0
+    sev = df_findings[sev_col].astype(str).str.upper()
+    n_error = int(sev.isin(["ERROR", "FAIL"]).sum())
+    n_warn = int(sev.isin(["WARN", "WARNING"]).sum())
+    return n_error, n_warn
+
+
 def render() -> None:
+    if _PAGE_UTILS_IMPORT_ERROR is not None:
+        st.error("Impossible de charger les utilitaires de page (page_utils).")
+        st.code(str(_PAGE_UTILS_IMPORT_ERROR))
+        st.info("Action recommandee: Streamlit Cloud > Manage app > Reboot app, puis Clear cache.")
+        return
+
     inject_theme()
     guided_header(
         title="Donnees & Qualite",
-        purpose="Charger/recalculer un pays-annee et verifier la qualite des donnees avant toute analyse.",
+        purpose="Diagnostiquer de facon exhaustive la qualite des donnees avant toute analyse historique ou prospective.",
         step_now="Donnees & Qualite: consolider la base",
         step_next="Socle Physique: verifier NRL, surplus et flex",
     )
 
     st.markdown("## Question business")
-    st.markdown("Les donnees sont-elles suffisamment completes et coherentes pour tirer des conclusions ?")
+    st.markdown("Les donnees sont-elles suffisamment completes, coherentes et auditables pour tirer des conclusions robustes ?")
 
     show_definitions(
         [
             ("Completeness", "Part d'heures sans manque critique (prix/load/generation)."),
-            ("Validation findings", "Resultats des checks automatiques PASS/WARN/ERROR."),
+            ("Hard checks", "Invariants physiques/comptables qui ne doivent jamais etre violes."),
+            ("Reality checks", "Tests de coherence marche/physique (warnings interpretables)."),
+            ("Go/No-Go", "Decision explicite PASS/WARN/FAIL avant d'ouvrir les modules Q1..Q5."),
             ("Load net mode", "Regle appliquee pour traiter le pompage PSH dans la charge."),
         ]
     )
@@ -39,18 +135,18 @@ def render() -> None:
                 "definition": "Part des heures sans manque critique.",
                 "formula": "1 - mean(q_missing_price OR q_missing_load OR q_missing_generation)",
                 "intuition": "Mesure la fiabilite brute des donnees d'entree.",
-                "interpretation": "Sous le seuil qualite, conclusions fragiles.",
+                "interpretation": "Sous 98%, les conclusions deviennent fragiles.",
                 "limits": "N'indique pas a lui seul la coherence economique.",
                 "dependencies": "disponibilite prix/load/gen et pipeline de normalisation.",
             },
             {
                 "metric": "Validation findings",
-                "definition": "Liste des checks automatiques (PASS/WARN/ERROR).",
-                "formula": "Evaluation des invariants et reality checks du socle",
+                "definition": "Liste des checks automatiques PASS/WARN/ERROR.",
+                "formula": "Evaluation des invariants physiques + reality checks",
                 "intuition": "Evite les conclusions sur donnees incoherentes.",
-                "interpretation": "ERROR = correction obligatoire avant analyse.",
-                "limits": "Un WARN peut etre explicable mais doit etre argumente.",
-                "dependencies": "validation_report et quality flags.",
+                "interpretation": "ERROR/FAIL = blocage des conclusions analytiques.",
+                "limits": "Un WARN peut etre explicable, mais doit etre argumente.",
+                "dependencies": "validation_report, quality_flag, coverage horaire.",
             },
         ],
         title="Comment lire les indicateurs qualite",
@@ -68,23 +164,94 @@ def render() -> None:
         return
 
     st.markdown("## Tests empiriques")
-    missing_any = df[["q_missing_price", "q_missing_load", "q_missing_generation"]].any(axis=1)
-    completeness = 1.0 - float(missing_any.mean())
+
+    missing_cols = [c for c in CRITICAL_COLS if c not in df.columns]
+    present_critical = [c for c in CRITICAL_COLS if c in df.columns]
+
+    if {"q_missing_price", "q_missing_load", "q_missing_generation"}.issubset(df.columns):
+        missing_any = df[["q_missing_price", "q_missing_load", "q_missing_generation"]].any(axis=1)
+        completeness = 1.0 - float(missing_any.mean())
+    else:
+        if present_critical:
+            completeness = 1.0 - float(df[present_critical].isna().any(axis=1).mean())
+        else:
+            completeness = 0.0
+
     n_hours = int(len(df))
+    expected_hours = _expected_hours(year)
+
+    idx = df.index if isinstance(df.index, pd.DatetimeIndex) else pd.to_datetime(df.get("timestamp_utc"), errors="coerce", utc=True)
+    if isinstance(idx, pd.Series):
+        idx = pd.DatetimeIndex(idx.dropna())
+    duplicate_timestamps = int(idx.duplicated().sum()) if isinstance(idx, pd.DatetimeIndex) else 0
+    continuity_ok = bool(n_hours == expected_hours and duplicate_timestamps == 0)
 
     load_mode = "n/a"
     if "load_net_mode" in df.columns and not df["load_net_mode"].empty:
         load_mode = str(df["load_net_mode"].iloc[0])
 
+    findings = load_validation_findings(country, year)
+    n_error, n_warn = _findings_error_warn(findings)
+
+    go_no_go, reasons, actions = _quality_decision(
+        completeness=completeness,
+        hard_error_count=n_error,
+        continuity_ok=continuity_ok,
+        duplicate_timestamps=duplicate_timestamps,
+        critical_missing_cols=missing_cols,
+    )
+
     show_kpi_cards(
         [
             ("Completeness", f"{100*completeness:.2f}%", "Part d'heures sans manque critique."),
-            ("Heures", n_hours, "Nombre de lignes horaires presentes."),
+            ("Heures observees", n_hours, "Nombre de lignes horaires presentes."),
+            ("Heures attendues", expected_hours, "8760 ou 8784 selon annee."),
             ("Load net mode", load_mode, "Mode de calcul de la charge nette."),
         ]
     )
 
+    st.markdown("## Decision Go / No-Go")
+    if go_no_go == "PASS":
+        st.success("PASS - Donnees suffisamment solides pour lancer les analyses Q1..Q5.")
+    elif go_no_go == "WARN":
+        st.warning("WARN - Analyses possibles mais avec prudence et justification explicite.")
+    else:
+        st.error("FAIL - Ne pas conclure tant que les erreurs critiques ne sont pas corrigees.")
+
+    st.markdown("### Raisons")
+    for r in reasons:
+        st.markdown(f"- {r}")
+    st.markdown("### Actions correctives recommandees")
+    for a in actions:
+        st.markdown(f"- {a}")
+
     st.markdown("## Resultats et interpretation")
+
+    quality_rows: list[dict[str, Any]] = []
+    for col in CRITICAL_COLS:
+        if col in df.columns:
+            miss = _missing_share(df[col])
+            quality_rows.append(
+                {
+                    "colonne": col,
+                    "presente": True,
+                    "missing_share_pct": round(100.0 * miss, 4),
+                    "statut": "OK" if miss <= 0.02 else "WARN",
+                }
+            )
+        else:
+            quality_rows.append(
+                {
+                    "colonne": col,
+                    "presente": False,
+                    "missing_share_pct": 100.0,
+                    "statut": "FAIL",
+                }
+            )
+    quality_matrix = pd.DataFrame(quality_rows)
+    st.markdown("### Matrice de qualite des colonnes critiques")
+    st.dataframe(quality_matrix, use_container_width=True, hide_index=True)
+
     plot_df = to_plot_frame(df)
     fig_price = px.line(plot_df, x="timestamp_utc", y="price_da_eur_mwh", title="Prix day-ahead (NaN visibles)")
     st.plotly_chart(fig_price, use_container_width=True)
@@ -92,21 +259,36 @@ def render() -> None:
     fig_nrl = px.line(plot_df, x="timestamp_utc", y=["nrl_mw", "surplus_mw"], title="NRL et surplus")
     st.plotly_chart(fig_nrl, use_container_width=True)
 
-    findings = load_validation_findings(country, year)
-    st.markdown("### Top findings")
-    st.dataframe(findings.head(15), use_container_width=True)
-
-    st.markdown("## Limites")
-    st.markdown(
-        "- Un pays-annee avec donnees manquantes peut rester lisible mais moins robuste.\n"
-        "- Les checks WARN n'invalident pas automatiquement l'analyse mais exigent prudence.\n"
-        "- Les modules Q1..Q5 doivent etre lances seulement apres verification qualite."
-    )
-
-    st.markdown("## Checks & exports")
+    st.markdown("### Findings automatiques")
     if findings.empty:
         st.info("Aucun finding disponible pour cette selection.")
     else:
-        st.caption("Les findings complets sont exportes dans `data/metrics/validation_findings.parquet`.")
-        with st.expander("Voir details techniques", expanded=False):
-            st.dataframe(findings, use_container_width=True)
+        st.dataframe(findings.head(20), use_container_width=True)
+
+    st.markdown("## Limites")
+    st.markdown(
+        "- Une bonne completeness n'exclut pas tous les biais de mapping techno.\n"
+        "- Certains reality checks WARN peuvent etre rationnels dans des cas systeme atypiques.\n"
+        "- Les analyses prospectives restent conditionnelles aux hypotheses scenario."
+    )
+
+    st.markdown("## Checks & exports")
+    st.caption("Exports qualite: `data/metrics/validation_findings.parquet` et `data/processed/hourly/{country}/{year}.parquet`.")
+
+    with st.expander("Voir details techniques complets", expanded=False):
+        st.markdown("### Continuite temporelle")
+        st.json(
+            {
+                "country": country,
+                "year": int(year),
+                "n_hours": n_hours,
+                "expected_hours": expected_hours,
+                "duplicate_timestamps": duplicate_timestamps,
+                "continuity_ok": continuity_ok,
+                "go_no_go": go_no_go,
+            }
+        )
+        st.markdown("### Findings complets")
+        st.dataframe(findings, use_container_width=True)
+        st.markdown("### Apercu brut (10 lignes)")
+        st.dataframe(df.head(10), use_container_width=True)

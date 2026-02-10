@@ -1,10 +1,10 @@
 # Compliance Evidence Index
 
-- Run ID: `20260210_100903`
+- Run ID: `20260210_133946`
 - Matrix: `C:\Users\cval-tlacour\OneDrive - CVA corporate value associate GmbH\Desktop\automation-stack\projects\tte-capture-prices-v2\reports\compliance_matrix_full.csv`
 - Slides: `C:\Users\cval-tlacour\OneDrive - CVA corporate value associate GmbH\Desktop\automation-stack\projects\tte-capture-prices-v2\reports\slides_coverage_detailed.csv`
 - Pytest: `PASS` -> -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-- Q4 perf: cold=1.667s warm=0.048s cold_cache=False warm_cache=True
+- Q4 perf: cold=0.586s warm=0.014s cold_cache=False warm_cache=True
 
 ## SPEC_0
 - Counts: OK=15 PARTIEL=0 MANQUANT=0
@@ -23,7 +23,7 @@
 - `S0-012` [OK] (high) :: TTL calcule en Q95 sur regimes C/D. -> `src/metrics.py:134`
 - `S0-013` [OK] (critical) :: Batterie de tests unitaires/integration/reality executee. -> `python -m pytest -q :: -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html`
 - `S0-014` [OK] (medium) :: Explicabilite KPI complete (definition + formule + intuition + limites + dependances) partout. -> `app/ui_components.py:75`
-- `S0-015` [OK] (high) :: Separation explicite mode HIST vs SCEN dans pages Q1..Q5. -> `app/pages/01_Q1_Phase1_to_Phase2.py:82`
+- `S0-015` [OK] (high) :: Separation explicite mode HIST vs SCEN dans pages Q1..Q5. -> `app/pages/01_Q1_Phase1_to_Phase2.py`
 
 ## SPEC_1
 - Counts: OK=22 PARTIEL=0 MANQUANT=0
@@ -40,8 +40,8 @@
 - `S1-010` [OK] (critical) :: Validation findings hard+reality disponibles. -> `data/metrics/validation_findings.parquet`
 - `S1-011` [OK] (critical) :: KPIs annuels de base presents (SR/FAR/IR/TTL/capture/prix stress/quality). -> `data/metrics/annual_metrics.parquet`
 - `S1-012` [OK] (high) :: Tests socle imposes presents. -> `tests/test_time_normalization.py; tests/test_physical_formulas.py; tests/test_schema_stability.py`
-- `S1-013` [OK] (medium) :: Page Donnees & Qualite disponible. -> `app/pages/00_Donnees_Qualite.py:19`
-- `S1-014` [OK] (medium) :: Page Socle Physique disponible. -> `app/pages/00_Socle_Physique.py:7`
+- `S1-013` [OK] (medium) :: Page Donnees & Qualite disponible. -> `app/pages/00_Donnees_Qualite.py:119`
+- `S1-014` [OK] (medium) :: Page Socle Physique disponible. -> `app/pages/00_Socle_Physique.py:21`
 - `S1-015` [OK] (critical) :: Execution historique complete 7 pays x 2018-2024. -> `hourly files: 49/49`
 - `S1-016` [OK] (critical) :: Panel annuel complet pour fenetre historique verrouillee. -> `data/metrics/annual_metrics.parquet rows for 7x2018-2024`
 - `S1-017` [OK] (critical) :: Jeux TYNDP 2024 raw+normalized integres. -> `data/external/raw/tyndp2024/* ; data/external/normalized/tyndp2024_*.csv`
@@ -60,18 +60,18 @@
 - `S2-004` [OK] (critical) :: 5 pages Streamlit Q1..Q5 presentes. -> `app/pages/01_Q1...py .. 05_Q5...py`
 - `S2-005` [OK] (high) :: Sections fixes obligatoires sur pages Q1..Q5. -> `tests/test_ui_pages_contract.py`
 - `S2-006` [OK] (high) :: Calculs lourds declenches via form submit. -> `tests/test_ui_pages_contract.py::test_q_pages_use_form_submit_for_heavy_runs`
-- `S2-007` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q1). -> `app/pages/01_Q1_Phase1_to_Phase2.py:115`
-- `S2-008` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q2). -> `app/pages/02_Q2_Phase2_Slope.py:125`
-- `S2-009` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q3). -> `app/pages/03_Q3_Exit_Phase2.py:122`
-- `S2-010` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q4). -> `app/pages/04_Q4_BESS_OrderOfMagnitude.py:115`
-- `S2-011` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q5). -> `app/pages/05_Q5_CO2_Gas_Anchor.py:174`
+- `S2-007` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q1). -> `app/pages/01_Q1_Phase1_to_Phase2.py`
+- `S2-008` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q2). -> `app/pages/02_Q2_Phase2_Slope.py`
+- `S2-009` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q3). -> `app/pages/03_Q3_Exit_Phase2.py`
+- `S2-010` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q4). -> `app/pages/04_Q4_BESS_OrderOfMagnitude.py`
+- `S2-011` [OK] (high) :: Blocage conclusions si quality_flag=FAIL (Q5). -> `app/pages/05_Q5_CO2_Gas_Anchor.py`
 - `S2-012` [OK] (high) :: Q1 score marche + stress physique + annee de bascule. -> `src/modules/q1_transition.py:78`
 - `S2-013` [OK] (high) :: Q2 pente OLS + robustesse n>=3 + ranking drivers. -> `src/modules/q2_slope.py:10`
 - `S2-014` [OK] (high) :: Q3 tendances + contre-factuels demande/must-run/flex. -> `src/modules/q3_exit.py:26`
 - `S2-015` [OK] (critical) :: Q4 dispatch BESS 3 modes (SURPLUS_FIRST/ARBITRAGE/PV_COLOCATED). -> `src/modules/q4_bess.py:105`
 - `S2-016` [OK] (high) :: Q5 TCA/TTL + sensibilites + CO2 requis. -> `src/modules/q5_thermal_anchor.py:55`
 - `S2-017` [OK] (critical) :: Table hypotheses Phase2 scenario x pays x annee. -> `data/assumptions/phase2/phase2_scenario_country_year.csv`
-- `S2-018` [OK] (critical) :: Moteur scenario phase2 implemente. -> `src/scenario/phase2_engine.py:237`
+- `S2-018` [OK] (critical) :: Moteur scenario phase2 implemente. -> `src/scenario/phase2_engine.py:348`
 - `S2-019` [OK] (critical) :: Couverture scenario complete sur scenarios x 7 pays x 2030/2040. -> `scenario hourly files: 84/84`
 - `S2-020` [OK] (high) :: Execution scenario minimum 2 scenarios x 3 pays x 2 horizons. -> `data/processed/scenario/*/annual_metrics.parquet`
 - `S2-021` [OK] (high) :: Suite tests modules Q1..Q5 + integration. -> `tests/test_q1_transition.py; test_q2_slope.py; test_q3_exit.py; test_q4_bess.py; test_q5_thermal_anchor.py; test_phase1_modules_integration.py`
@@ -80,12 +80,12 @@
 ## V2.1
 - Counts: OK=10 PARTIEL=0 MANQUANT=0
 
-- `V21-001` [OK] (high) :: Cache streamlit applique sur chargements lourds. -> `app/page_utils.py:26`
-- `V21-002` [OK] (high) :: Forms submit pour eviter reruns lourds. -> `app/page_utils.py:62`
+- `V21-001` [OK] (high) :: Cache streamlit applique sur chargements lourds. -> `app/page_utils.py:29`
+- `V21-002` [OK] (high) :: Forms submit pour eviter reruns lourds. -> `app/page_utils.py:65`
 - `V21-003` [OK] (critical) :: Cache persistant Q4 par hash hypotheses/grille/mode. -> `src/modules/q4_bess.py:26`
 - `V21-004` [OK] (high) :: Diagnostics Q4: compute_time_sec/cache_hit/engine_version. -> `src/modules/q4_bess.py:359`
-- `V21-005` [OK] (high) :: SLO Q4 cold <35s. -> `Q4 cold wall=1.667s`
-- `V21-006` [OK] (high) :: SLO Q4 warm <3s. -> `Q4 warm wall=0.048s`
+- `V21-005` [OK] (high) :: SLO Q4 cold <35s. -> `Q4 cold wall=0.586s`
+- `V21-006` [OK] (high) :: SLO Q4 warm <3s. -> `Q4 warm wall=0.014s`
 - `V21-007` [OK] (high) :: Cache hit/miss verifiable entre run1 et run2. -> `cold_cache_hit=False warm_cache_hit=True`
 - `V21-008` [OK] (medium) :: Navigation guidee accueil->mode emploi->donnees->socle->Q1..Q5->conclusions. -> `streamlit_app.py:10`
 - `V21-009` [OK] (medium) :: Header etape actuelle/etape suivante sur pages. -> `app/ui_components.py:55`
@@ -95,7 +95,7 @@
 - Counts: OK=2 PARTIEL=0 MANQUANT=0
 
 - `REP-001` [OK] (high) :: Rapport final detaille present en markdown versionne. -> `reports/conclusions_v2_detailed_*.md`
-- `REP-002` [OK] (high) :: Page Conclusions charge rapport et resume executif. -> `app/pages/99_Conclusions.py:52`
+- `REP-002` [OK] (high) :: Page Conclusions charge rapport et resume executif. -> `app/pages/99_Conclusions.py`
 
 ## SLIDES
 - Counts: OK=33 PARTIEL=0 MANQUANT=0

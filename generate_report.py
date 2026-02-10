@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
@@ -27,26 +27,16 @@ DEFAULT_DOCX_PATHS = [
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate dense and traceable final report.")
+    parser = argparse.ArgumentParser(description="Generate detailed and traceable final report.")
     parser.add_argument("--run-id", type=str, default=None, help="Combined run id from outputs/combined/<run_id>.")
-    parser.add_argument("--strict", action="store_true", help="Enable strict quality gates (fails on unmet criteria).")
-    parser.add_argument(
-        "--country-scope",
-        type=str,
-        default="",
-        help="Comma-separated country list for report header (default from assumptions).",
-    )
-    parser.add_argument(
-        "--docx-path",
-        action="append",
-        default=[],
-        help="Additional docx path(s) for slides requirements extraction.",
-    )
-    parser.add_argument("--output-dir", type=str, default="reports", help="Output directory for report artifacts.")
+    parser.add_argument("--strict", action="store_true", help="Enable strict quality gates.")
+    parser.add_argument("--country-scope", type=str, default="", help="Comma-separated country list for report header.")
+    parser.add_argument("--docx-path", action="append", default=[], help="Additional docx path(s) for slide requirement extraction.")
+    parser.add_argument("--output-dir", type=str, default="reports", help="Output directory.")
     return parser.parse_args()
 
 
-def _series_to_markdown_table(df: pd.DataFrame, max_rows: int = 30) -> str:
+def _table_md(df: pd.DataFrame, max_rows: int = 30) -> str:
     if df.empty:
         return "_Aucune ligne._"
     preview = df.head(max_rows).copy()
@@ -58,78 +48,69 @@ def _series_to_markdown_table(df: pd.DataFrame, max_rows: int = 30) -> str:
         sep = "| " + " | ".join(["---"] * len(cols)) + " |"
         rows: list[str] = []
         for _, row in preview.iterrows():
-            cells = [str(row.get(c, "")) for c in preview.columns]
-            rows.append("| " + " | ".join(cells) + " |")
+            rows.append("| " + " | ".join([str(row.get(c, "")) for c in preview.columns]) + " |")
         return "\n".join([header, sep] + rows)
 
 
-def _build_cover_page(
-    run_id: str,
-    run_dir: Path,
-    countries: list[str],
-    blocks: dict[str, Any],
-) -> str:
+def _cover_page(run_id: str, run_dir: Path, countries: list[str], blocks: dict[str, Any]) -> str:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    scenario_map: dict[str, list[str]] = {}
-    for q in REQUIRED_QUESTIONS:
-        block = blocks[q]
-        scenario_map[q] = sorted([str(s) for s in block.summary.get("scenarios", [])])
-
     lines = [
-        f"# Rapport Final V2.3 — Run `{run_id}`",
+        f"# Rapport Final V2.3 - Run `{run_id}`",
         "",
         "## 1. Page de garde",
-        f"- Date de génération: `{generated_at}`",
-        f"- Run combiné source: `{run_dir}`",
-        f"- Périmètre pays déclaré: `{', '.join(countries) if countries else 'non renseigné'}`",
-        "- Fenêtre historique de référence: `2018–2024`",
-        "- Horizons prospectifs de référence: `2030/2040`",
+        f"- Date de generation: `{generated_at}`",
+        f"- Run combine source: `{run_dir}`",
+        f"- Perimetre pays declare: `{', '.join(countries) if countries else 'non renseigne'}`",
+        "- Fenetre historique de reference: `2018-2024`",
+        "- Horizons prospectifs de reference: `2030/2040`",
         "- Questions couvertes: `Q1, Q2, Q3, Q4, Q5`",
-        "- Avertissement méthodologique: ce rapport n'est pas un modèle d'équilibre complet, "
-        "mais une analyse empirique et scénarisée, auditable et explicitement bornée.",
+        "- Avertissement methodologique: cette analyse est empirique et scenarisee; ce n'est pas un modele d'equilibre complet.",
         "",
-        "### Scénarios exécutés par question",
+        "### Scenarios executes par question",
     ]
     for q in REQUIRED_QUESTIONS:
-        lines.append(f"- `{q}`: {', '.join(scenario_map[q]) if scenario_map[q] else 'aucun scénario'}")
+        scenarios = sorted([str(s) for s in blocks[q].summary.get("scenarios", [])])
+        lines.append(f"- `{q}`: {', '.join(scenarios) if scenarios else 'aucun scenario'}")
     return "\n".join(lines)
 
 
-def _build_methodology_section() -> str:
-    lines = [
-        "## 2. Méthode et gouvernance",
-        "",
-        "### 2.1 Conventions et garde-fous (SPEC 0)",
-        "- Index interne horaire en UTC, conventions de signe et unités harmonisées.",
-        "- Classification physique des régimes sans utilisation du prix (anti-circularité).",
-        "- Distinction stricte entre observations historiques et simulations prospectives.",
-        "",
-        "### 2.2 Observé vs simulé",
-        "- Historique: données ENTSO-E, métriques et tests empiriques sur années observées.",
-        "- Prospectif: mêmes métriques appliquées à des chroniques scénarisées, avec hypothèses explicites.",
-        "",
-        "### 2.3 Qualité des données et limites structurantes",
-        "- Un résultat n'est jugé robuste que s'il ne contredit aucun FAIL et explicite tout WARN.",
-        "- Tout NON_TESTABLE est conservé comme zone d'incertitude, jamais masqué.",
-        "- Les conclusions sont formulées au niveau des preuves disponibles, sans extrapolation hors périmètre.",
-    ]
-    return "\n".join(lines)
+def _methodology_section() -> str:
+    return "\n".join(
+        [
+            "## 2. Methode et gouvernance",
+            "",
+            "### 2.1 Conventions SPEC 0",
+            "- Index horaire UTC et conventions de signe harmonisees.",
+            "- Regimes physiques A/B/C/D definis sans prix (anti-circularite).",
+            "- Distinction stricte entre observe (HIST) et simule (SCEN).",
+            "",
+            "### 2.2 Qualite des donnees",
+            "- Les hard checks invalident une conclusion en cas de FAIL.",
+            "- Les WARN sont conserves et interpretes explicitement.",
+            "- Les NON_TESTABLE restent visibles et ne sont jamais masques.",
+            "",
+            "### 2.3 Cadre d'interpretation",
+            "- Une correlation est un signal explicatif, pas une preuve causale automatique.",
+            "- Toute conclusion est bornee au perimetre pays/periode/scenario execute.",
+        ]
+    )
 
 
-def _build_question_sections(blocks: dict[str, Any], countries: list[str]) -> tuple[str, dict[str, dict[str, Any]]]:
-    lines: list[str] = ["## 3. Analyses détaillées par question", ""]
+def _question_sections(blocks: dict[str, Any], countries: list[str]) -> tuple[str, dict[str, dict[str, Any]]]:
+    lines: list[str] = ["## 3. Analyses detaillees par question", ""]
     narrative_qc: dict[str, dict[str, Any]] = {}
+
     for q in REQUIRED_QUESTIONS:
-        block = blocks[q]
-        narrative = build_question_narrative(block, country_scope=countries)
-        qc = narrative_quality_checks(narrative, block)
+        narrative = build_question_narrative(blocks[q], country_scope=countries)
+        qc = narrative_quality_checks(narrative, blocks[q])
         narrative_qc[q] = qc
         lines.append(narrative.markdown.strip())
         lines.append("")
+
     return "\n".join(lines), narrative_qc
 
 
-def _build_appendix_section(
+def _appendix_section(
     blocks: dict[str, Any],
     evidence_catalog: pd.DataFrame,
     checks_catalog: pd.DataFrame,
@@ -137,69 +118,59 @@ def _build_appendix_section(
     slides_traceability: pd.DataFrame,
 ) -> str:
     lines = [
-        "## 4. Annexes de preuve et traçabilité",
+        "## 4. Annexes de preuve et tracabilite",
         "",
         "### 4.1 Ledger complet des tests",
     ]
+
     for q in REQUIRED_QUESTIONS:
         lines.append(f"#### {q}")
-        lines.append(_series_to_markdown_table(blocks[q].ledger, max_rows=80))
+        lines.append(_table_md(blocks[q].ledger, max_rows=200))
         lines.append("")
 
     lines.extend(
         [
-            "### 4.2 Checks et warnings consolidés",
-            _series_to_markdown_table(checks_catalog, max_rows=120),
+            "### 4.2 Checks et warnings consolides",
+            _table_md(checks_catalog, max_rows=250),
             "",
-            "### 4.3 Traçabilité tests -> sources",
-            _series_to_markdown_table(test_traceability, max_rows=160),
+            "### 4.3 Tracabilite tests -> sources",
+            _table_md(test_traceability, max_rows=250),
             "",
             "### 4.4 Couverture Slides/SPECS -> preuves",
-            _series_to_markdown_table(slides_traceability, max_rows=200),
+            _table_md(slides_traceability, max_rows=400),
             "",
-            "### 4.5 Dictionnaire de preuves",
-            _series_to_markdown_table(evidence_catalog, max_rows=200),
+            "### 4.5 Catalogue de preuves",
+            _table_md(evidence_catalog, max_rows=400),
         ]
     )
+
     return "\n".join(lines)
 
 
-def _build_executive_summary(
-    run_id: str,
-    narrative_qc: dict[str, dict[str, Any]],
-    slides_traceability: pd.DataFrame,
-    qc_verdict: str,
-) -> str:
+def _executive_summary(run_id: str, narrative_qc: dict[str, dict[str, Any]], slides_traceability: pd.DataFrame, verdict: str) -> str:
     missing_slides = int((slides_traceability["covered"].astype(str) == "no").sum()) if not slides_traceability.empty else 0
     lines = [
-        f"# Executive Summary — Run `{run_id}`",
+        f"# Executive Summary - Run `{run_id}`",
         "",
-        f"Verdict qualité global: **{qc_verdict}**.",
+        f"Verdict qualite global: **{verdict}**.",
         f"Exigences slides non couvertes: **{missing_slides}**.",
         "",
-        "## Contrôles narratifs par question",
+        "## Controles narratifs par question",
     ]
+
     for q in REQUIRED_QUESTIONS:
         qqc = narrative_qc.get(q, {})
         lines.append(
-            f"- `{q}`: words={qqc.get('word_count', 0)} "
-            f"(min={qqc.get('min_words_required', 0)}), "
-            f"word_ok={qqc.get('word_count_ok', False)}, "
-            f"all_test_refs={qqc.get('all_test_ids_referenced', False)}"
+            f"- `{q}`: words={qqc.get('word_count', 0)} / min={qqc.get('min_words_required', 0)}, "
+            f"word_ok={qqc.get('word_count_ok', False)}, all_test_refs={qqc.get('all_test_ids_referenced', False)}"
         )
+
     lines.append("")
-    lines.append(
-        "Ce résumé ne remplace pas le rapport détaillé; il sert à vérifier rapidement la complétude et la traçabilité."
-    )
+    lines.append("Le detail complet (preuves, tests, limites, interpretation) se trouve dans le rapport detaille.")
     return "\n".join(lines)
 
 
-def _quality_checks(
-    blocks: dict[str, Any],
-    narrative_qc: dict[str, dict[str, Any]],
-    slides_traceability: pd.DataFrame,
-) -> dict[str, Any]:
-    # 1) Numeric consistency: delta = scen - hist where finite.
+def _quality_checks(blocks: dict[str, Any], narrative_qc: dict[str, dict[str, Any]], slides_traceability: pd.DataFrame) -> dict[str, Any]:
     numeric_issues: list[dict[str, Any]] = []
     for q in REQUIRED_QUESTIONS:
         cmp_df = blocks[q].comparison
@@ -212,22 +183,17 @@ def _quality_checks(
                 d = float(row.get("delta"))
             except Exception:
                 continue
-            if pd.notna(h) and pd.notna(s) and pd.notna(d):
-                if abs((s - h) - d) > 1e-6:
-                    numeric_issues.append(
-                        {
-                            "question_id": q,
-                            "metric": str(row.get("metric", "")),
-                            "country": str(row.get("country", "")),
-                            "scenario_id": str(row.get("scenario_id", "")),
-                            "hist_value": h,
-                            "scen_value": s,
-                            "delta": d,
-                            "expected_delta": s - h,
-                        }
-                    )
+            if pd.notna(h) and pd.notna(s) and pd.notna(d) and abs((s - h) - d) > 1e-6:
+                numeric_issues.append(
+                    {
+                        "question_id": q,
+                        "metric": str(row.get("metric", "")),
+                        "hist": h,
+                        "scen": s,
+                        "delta": d,
+                    }
+                )
 
-    # 2) Logic coherence: if FAIL in ledger, it must appear in checks/warnings context.
     logic_issues: list[dict[str, Any]] = []
     for q in REQUIRED_QUESTIONS:
         ledger = blocks[q].ledger
@@ -241,25 +207,20 @@ def _quality_checks(
             if not checks_df.empty and "status" in checks_df.columns:
                 has_fail_check = (checks_df["status"].astype(str).str.upper() == "FAIL").any()
             if not has_fail_check:
-                logic_issues.append(
-                    {"question_id": q, "issue": "FAIL ledger sans FAIL check consolidé", "n_fail": n_fail}
-                )
+                logic_issues.append({"question_id": q, "issue": "FAIL ledger sans FAIL check consolide", "n_fail": n_fail})
 
-    # 3) Narrative quality gates
     narrative_issues: list[dict[str, Any]] = []
     for q in REQUIRED_QUESTIONS:
         qqc = narrative_qc.get(q, {})
         if not qqc.get("word_count_ok", False):
-            narrative_issues.append({"question_id": q, "issue": "densité insuffisante", **qqc})
+            narrative_issues.append({"question_id": q, "issue": "densite insuffisante", **qqc})
         if not qqc.get("all_test_ids_referenced", False):
-            narrative_issues.append({"question_id": q, "issue": "tests non référencés", **qqc})
+            narrative_issues.append({"question_id": q, "issue": "tests non references", **qqc})
 
     slide_missing = int((slides_traceability["covered"].astype(str) == "no").sum()) if not slides_traceability.empty else 0
-
     all_pass = not numeric_issues and not logic_issues and not narrative_issues and slide_missing == 0
-    verdict = "PASS" if all_pass else "NON_COMPLET"
     return {
-        "verdict": verdict,
+        "verdict": "PASS" if all_pass else "NON_COMPLET",
         "numeric_issues": numeric_issues,
         "logic_issues": logic_issues,
         "narrative_issues": narrative_issues,
@@ -268,19 +229,13 @@ def _quality_checks(
     }
 
 
-def generate_report(
-    run_id: str | None,
-    strict: bool,
-    country_scope: list[str],
-    docx_paths: list[Path],
-    output_dir: Path,
-) -> ReportBuildResult:
+def generate_report(run_id: str | None, strict: bool, country_scope: list[str], docx_paths: list[Path], output_dir: Path) -> ReportBuildResult:
     if strict and not run_id:
         raise ValueError("Strict mode requires --run-id to avoid accidental cross-run interpretation.")
 
     resolved_run_id, run_dir, blocks = load_combined_run(run_id=run_id, strict=True)
-
     output_dir.mkdir(parents=True, exist_ok=True)
+
     evidence_catalog = build_evidence_catalog(run_dir, blocks)
     test_traceability = build_test_traceability(run_dir, blocks)
     checks_catalog = build_checks_catalog(run_dir, blocks)
@@ -288,18 +243,16 @@ def generate_report(
     requirements = extract_requirements(docx_paths)
     slides_traceability = map_requirements_to_evidence(requirements, evidence_catalog)
 
-    cover = _build_cover_page(resolved_run_id, run_dir, country_scope, blocks)
-    method = _build_methodology_section()
-    question_sections, narrative_qc = _build_question_sections(blocks, country_scope)
-    appendix = _build_appendix_section(blocks, evidence_catalog, checks_catalog, test_traceability, slides_traceability)
-
+    cover = _cover_page(resolved_run_id, run_dir, country_scope, blocks)
+    method = _methodology_section()
+    question_sections, narrative_qc = _question_sections(blocks, country_scope)
+    appendix = _appendix_section(blocks, evidence_catalog, checks_catalog, test_traceability, slides_traceability)
     qc = _quality_checks(blocks, narrative_qc, slides_traceability)
-    verdict = qc["verdict"]
 
-    if verdict != "PASS":
-        gap_lines = ["## 5. Écarts restants (obligatoire)", ""]
+    if qc["verdict"] != "PASS":
+        gap_lines = ["## 5. Ecarts restants (obligatoire)", ""]
         if qc["slides_missing_count"] > 0:
-            gap_lines.append(f"- Couverture slides incomplète: `{qc['slides_missing_count']}` exigences non couvertes.")
+            gap_lines.append(f"- Couverture slides incomplete: `{qc['slides_missing_count']}` exigence(s) non couverte(s).")
         for issue in qc["numeric_issues"]:
             gap_lines.append(f"- Numeric issue: {issue}")
         for issue in qc["logic_issues"]:
@@ -308,10 +261,10 @@ def generate_report(
             gap_lines.append(f"- Narrative issue: {issue.get('question_id')}: {issue.get('issue')}")
         gaps = "\n".join(gap_lines)
     else:
-        gaps = "## 5. Écarts restants (obligatoire)\n\nAucun écart critique détecté par les quality gates.\n"
+        gaps = "## 5. Ecarts restants (obligatoire)\n\nAucun ecart critique detecte par les quality gates.\n"
 
     detailed_text = "\n\n".join([cover, method, question_sections, appendix, gaps]).strip() + "\n"
-    executive_text = _build_executive_summary(resolved_run_id, narrative_qc, slides_traceability, verdict)
+    executive_text = _executive_summary(resolved_run_id, narrative_qc, slides_traceability, qc["verdict"])
 
     detailed_path = output_dir / f"conclusions_v2_detailed_{resolved_run_id}.md"
     executive_path = output_dir / f"conclusions_v2_executive_{resolved_run_id}.md"
@@ -327,7 +280,7 @@ def generate_report(
     slides_traceability.to_csv(slides_trace_path, index=False)
     qc_path.write_text(json.dumps(qc, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    if strict and verdict != "PASS":
+    if strict and qc["verdict"] != "PASS":
         raise RuntimeError(f"Strict report quality gate failed for run {resolved_run_id}. See {qc_path}.")
 
     return ReportBuildResult(

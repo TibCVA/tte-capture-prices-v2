@@ -1,4 +1,4 @@
-"""Extract and map slide requirements to test evidence."""
+﻿"""Extract and map slide requirements to evidence rows."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import zipfile
 import pandas as pd
 
 
-_SLIDE_SPLIT_RE = re.compile(r"(Slide\s+(\d+)\s*[—-])", flags=re.IGNORECASE)
+_SLIDE_MARKER_RE = re.compile(r"\bSlide\s+(\d+)\s*(?:-|:|--)\s*", flags=re.IGNORECASE)
 
 
 def _read_docx_text(docx_path: Path) -> str:
@@ -37,7 +37,9 @@ def _slide_to_question(slide_id: int) -> str:
 
 
 def _atomize_requirements(slide_id: int, slide_text: str) -> list[dict[str, str]]:
-    clean = slide_text.strip()
+    clean = re.sub(r"\s+", " ", str(slide_text)).strip()
+    if not clean:
+        return []
     parts = [p.strip() for p in re.split(r"[.;:]\s+", clean) if p.strip()]
     rows: list[dict[str, str]] = []
     for idx, part in enumerate(parts, start=1):
@@ -54,17 +56,18 @@ def _atomize_requirements(slide_id: int, slide_text: str) -> list[dict[str, str]
 
 
 def extract_requirements_from_docx(docx_path: Path) -> pd.DataFrame:
+    cols = ["slide_id", "requirement_id", "question_id", "source_ref", "requirement_text", "docx"]
     if not docx_path.exists():
-        return pd.DataFrame(columns=["slide_id", "requirement_id", "question_id", "source_ref", "requirement_text", "docx"])
+        return pd.DataFrame(columns=cols)
 
     text = _read_docx_text(docx_path)
-    matches = list(_SLIDE_SPLIT_RE.finditer(text))
+    matches = list(_SLIDE_MARKER_RE.finditer(text))
     if not matches:
-        return pd.DataFrame(columns=["slide_id", "requirement_id", "question_id", "source_ref", "requirement_text", "docx"])
+        return pd.DataFrame(columns=cols)
 
     rows: list[dict[str, str]] = []
     for i, m in enumerate(matches):
-        slide_id = int(m.group(2))
+        slide_id = int(m.group(1))
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         body = text[start:end].strip()
@@ -72,14 +75,15 @@ def extract_requirements_from_docx(docx_path: Path) -> pd.DataFrame:
             row["docx"] = str(docx_path)
             rows.append(row)
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=cols)
 
 
 def extract_requirements(docx_paths: list[Path]) -> pd.DataFrame:
+    cols = ["slide_id", "requirement_id", "question_id", "source_ref", "requirement_text", "docx"]
     frames = [extract_requirements_from_docx(p) for p in docx_paths]
     frames = [f for f in frames if not f.empty]
     if not frames:
-        return pd.DataFrame(columns=["slide_id", "requirement_id", "question_id", "source_ref", "requirement_text", "docx"])
+        return pd.DataFrame(columns=cols)
     out = pd.concat(frames, ignore_index=True)
     out["slide_id"] = pd.to_numeric(out["slide_id"], errors="coerce").astype("Int64")
     out = out.sort_values(["slide_id", "requirement_id"]).reset_index(drop=True)
@@ -89,32 +93,36 @@ def extract_requirements(docx_paths: list[Path]) -> pd.DataFrame:
 def _extract_slide_ids_from_source_ref(source_ref: str) -> set[int]:
     ref = str(source_ref)
     out: set[int] = set()
+
     for m in re.finditer(r"[Ss]lides?\s+(\d+)\s*-\s*(\d+)", ref):
         a = int(m.group(1))
         b = int(m.group(2))
         lo, hi = (a, b) if a <= b else (b, a)
         out.update(range(lo, hi + 1))
+
     for m in re.finditer(r"[Ss]lides?\s+(\d+)", ref):
         out.add(int(m.group(1)))
+
     for m in re.finditer(r"[Ss]lide\s+(\d+)", ref):
         out.add(int(m.group(1)))
+
     return out
 
 
 def map_requirements_to_evidence(requirements: pd.DataFrame, evidence: pd.DataFrame) -> pd.DataFrame:
+    out_cols = [
+        "slide_id",
+        "requirement_id",
+        "question_id",
+        "requirement_text",
+        "covered",
+        "coverage_method",
+        "evidence_ref",
+        "test_id",
+        "report_section",
+    ]
     if requirements.empty:
-        return pd.DataFrame(
-            columns=[
-                "slide_id",
-                "requirement_id",
-                "question_id",
-                "requirement_text",
-                "covered",
-                "evidence_ref",
-                "test_id",
-                "report_section",
-            ]
-        )
+        return pd.DataFrame(columns=out_cols)
 
     ev = evidence.copy()
     if not ev.empty:
@@ -126,6 +134,7 @@ def map_requirements_to_evidence(requirements: pd.DataFrame, evidence: pd.DataFr
     for _, req in requirements.iterrows():
         slide_id = int(req["slide_id"])
         req_q = str(req.get("question_id", "")).upper()
+
         if not ev.empty:
             matches = ev[ev["slide_ids"].map(lambda s: slide_id in s if isinstance(s, set) else False)]
         else:
@@ -145,19 +154,18 @@ def map_requirements_to_evidence(requirements: pd.DataFrame, evidence: pd.DataFr
         covered = not matches.empty
         evidence_ref = "; ".join(matches["evidence_ref"].astype(str).unique()[:3]) if covered else ""
         test_id = "; ".join(matches["test_id"].astype(str).unique()[:5]) if covered else ""
-        report_section = str(req.get("question_id", "GLOBAL"))
         rows.append(
             {
                 "slide_id": slide_id,
-                "requirement_id": str(req["requirement_id"]),
+                "requirement_id": str(req.get("requirement_id", "")),
                 "question_id": str(req.get("question_id", "")),
                 "requirement_text": str(req.get("requirement_text", "")),
                 "covered": "yes" if covered else "no",
                 "coverage_method": coverage_method if covered else "none",
                 "evidence_ref": evidence_ref,
                 "test_id": test_id,
-                "report_section": report_section,
+                "report_section": str(req.get("question_id", "GLOBAL")),
             }
         )
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=out_cols)

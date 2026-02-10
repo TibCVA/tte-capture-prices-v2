@@ -13,7 +13,7 @@ S0-011,SPEC_0,metrics,OK,code,src/metrics.py:155,high,IR base sur P10(must-run)/
 S0-012,SPEC_0,metrics,OK,code,src/metrics.py:134,high,TTL calcule en Q95 sur regimes C/D.
 S0-013,SPEC_0,tests,OK,test,python -m pytest -q :: -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html,critical,Batterie de tests unitaires/integration/reality executee.
 S0-014,SPEC_0,ux,OK,ui,app/ui_components.py:75,medium,Explicabilite KPI complete (definition + formule + intuition + limites + dependances) partout.
-S0-015,SPEC_0,modes,OK,code,app/pages/01_Q1_Phase1_to_Phase2.py:82,high,Separation explicite mode HIST vs SCEN dans pages Q1..Q5.
+S0-015,SPEC_0,modes,OK,code,app/pages/01_Q1_Phase1_to_Phase2.py,high,Separation explicite mode HIST vs SCEN dans pages Q1..Q5.
 S1-001,SPEC_1,raw_cache,OK,runtime,data/raw/entsoe/*/{country}/{year}.parquet,critical,Cache freeze-first ENTSOE present (prices/load/generation/net_position/psh).
 S1-002,SPEC_1,raw_cache,OK,runtime,data/raw/entsoe/*/{country}/{year}.meta.json,high,Metadonnees .meta.json par dataset/pays/annee.
 S1-003,SPEC_1,schema,OK,runtime,data/processed/hourly/FR/2024.parquet,critical,Schema horaire canonique present.
@@ -26,8 +26,8 @@ S1-009,SPEC_1,metrics,OK,runtime,data/metrics/daily_metrics.parquet,high,Table j
 S1-010,SPEC_1,quality,OK,runtime,data/metrics/validation_findings.parquet,critical,Validation findings hard+reality disponibles.
 S1-011,SPEC_1,metrics,OK,runtime,data/metrics/annual_metrics.parquet,critical,KPIs annuels de base presents (SR/FAR/IR/TTL/capture/prix stress/quality).
 S1-012,SPEC_1,tests,OK,test,tests/test_time_normalization.py; tests/test_physical_formulas.py; tests/test_schema_stability.py,high,Tests socle imposes presents.
-S1-013,SPEC_1,ui,OK,ui,app/pages/00_Donnees_Qualite.py:19,medium,Page Donnees & Qualite disponible.
-S1-014,SPEC_1,ui,OK,ui,app/pages/00_Socle_Physique.py:7,medium,Page Socle Physique disponible.
+S1-013,SPEC_1,ui,OK,ui,app/pages/00_Donnees_Qualite.py:119,medium,Page Donnees & Qualite disponible.
+S1-014,SPEC_1,ui,OK,ui,app/pages/00_Socle_Physique.py:21,medium,Page Socle Physique disponible.
 S1-015,SPEC_1,runtime,OK,runtime,hourly files: 49/49,critical,Execution historique complete 7 pays x 2018-2024.
 S1-016,SPEC_1,runtime,OK,runtime,data/metrics/annual_metrics.parquet rows for 7x2018-2024,critical,Panel annuel complet pour fenetre historique verrouillee.
 S1-017,SPEC_1,external_data,OK,runtime,data/external/raw/tyndp2024/* ; data/external/normalized/tyndp2024_*.csv,critical,Jeux TYNDP 2024 raw+normalized integres.
@@ -42,34 +42,34 @@ S2-003,SPEC_2,q_modules,OK,code,src/modules/q1_transition.py; src/modules/q2_slo
 S2-004,SPEC_2,q_pages,OK,ui,app/pages/01_Q1...py .. 05_Q5...py,critical,5 pages Streamlit Q1..Q5 presentes.
 S2-005,SPEC_2,q_pages,OK,test,tests/test_ui_pages_contract.py,high,Sections fixes obligatoires sur pages Q1..Q5.
 S2-006,SPEC_2,q_pages,OK,test,tests/test_ui_pages_contract.py::test_q_pages_use_form_submit_for_heavy_runs,high,Calculs lourds declenches via form submit.
-S2-007,SPEC_2,quality_gate,OK,code,app/pages/01_Q1_Phase1_to_Phase2.py:115,high,Blocage conclusions si quality_flag=FAIL (Q1).
-S2-008,SPEC_2,quality_gate,OK,code,app/pages/02_Q2_Phase2_Slope.py:125,high,Blocage conclusions si quality_flag=FAIL (Q2).
-S2-009,SPEC_2,quality_gate,OK,code,app/pages/03_Q3_Exit_Phase2.py:122,high,Blocage conclusions si quality_flag=FAIL (Q3).
-S2-010,SPEC_2,quality_gate,OK,code,app/pages/04_Q4_BESS_OrderOfMagnitude.py:115,high,Blocage conclusions si quality_flag=FAIL (Q4).
-S2-011,SPEC_2,quality_gate,OK,code,app/pages/05_Q5_CO2_Gas_Anchor.py:174,high,Blocage conclusions si quality_flag=FAIL (Q5).
+S2-007,SPEC_2,quality_gate,OK,code,app/pages/01_Q1_Phase1_to_Phase2.py,high,Blocage conclusions si quality_flag=FAIL (Q1).
+S2-008,SPEC_2,quality_gate,OK,code,app/pages/02_Q2_Phase2_Slope.py,high,Blocage conclusions si quality_flag=FAIL (Q2).
+S2-009,SPEC_2,quality_gate,OK,code,app/pages/03_Q3_Exit_Phase2.py,high,Blocage conclusions si quality_flag=FAIL (Q3).
+S2-010,SPEC_2,quality_gate,OK,code,app/pages/04_Q4_BESS_OrderOfMagnitude.py,high,Blocage conclusions si quality_flag=FAIL (Q4).
+S2-011,SPEC_2,quality_gate,OK,code,app/pages/05_Q5_CO2_Gas_Anchor.py,high,Blocage conclusions si quality_flag=FAIL (Q5).
 S2-012,SPEC_2,q1,OK,code,src/modules/q1_transition.py:78,high,Q1 score marche + stress physique + annee de bascule.
 S2-013,SPEC_2,q2,OK,code,src/modules/q2_slope.py:10,high,Q2 pente OLS + robustesse n>=3 + ranking drivers.
 S2-014,SPEC_2,q3,OK,code,src/modules/q3_exit.py:26,high,Q3 tendances + contre-factuels demande/must-run/flex.
 S2-015,SPEC_2,q4,OK,code,src/modules/q4_bess.py:105,critical,Q4 dispatch BESS 3 modes (SURPLUS_FIRST/ARBITRAGE/PV_COLOCATED).
 S2-016,SPEC_2,q5,OK,code,src/modules/q5_thermal_anchor.py:55,high,Q5 TCA/TTL + sensibilites + CO2 requis.
 S2-017,SPEC_2,phase2,OK,runtime,data/assumptions/phase2/phase2_scenario_country_year.csv,critical,Table hypotheses Phase2 scenario x pays x annee.
-S2-018,SPEC_2,phase2,OK,code,src/scenario/phase2_engine.py:237,critical,Moteur scenario phase2 implemente.
+S2-018,SPEC_2,phase2,OK,code,src/scenario/phase2_engine.py:348,critical,Moteur scenario phase2 implemente.
 S2-019,SPEC_2,phase2,OK,runtime,scenario hourly files: 84/84,critical,Couverture scenario complete sur scenarios x 7 pays x 2030/2040.
 S2-020,SPEC_2,phase2,OK,runtime,data/processed/scenario/*/annual_metrics.parquet,high,Execution scenario minimum 2 scenarios x 3 pays x 2 horizons.
 S2-021,SPEC_2,tests,OK,test,tests/test_q1_transition.py; test_q2_slope.py; test_q3_exit.py; test_q4_bess.py; test_q5_thermal_anchor.py; test_phase1_modules_integration.py,high,Suite tests modules Q1..Q5 + integration.
 S2-022,SPEC_2,phase2_tests,OK,test,tests/test_phase2_engine.py; tests/test_phase2_validators.py,high,Tests moteur scenario et validations hypotheses Phase2.
-V21-001,V2.1,performance,OK,code,app/page_utils.py:26,high,Cache streamlit applique sur chargements lourds.
-V21-002,V2.1,performance,OK,code,app/page_utils.py:62,high,Forms submit pour eviter reruns lourds.
+V21-001,V2.1,performance,OK,code,app/page_utils.py:29,high,Cache streamlit applique sur chargements lourds.
+V21-002,V2.1,performance,OK,code,app/page_utils.py:65,high,Forms submit pour eviter reruns lourds.
 V21-003,V2.1,q4_perf,OK,code,src/modules/q4_bess.py:26,critical,Cache persistant Q4 par hash hypotheses/grille/mode.
 V21-004,V2.1,q4_perf,OK,code,src/modules/q4_bess.py:359,high,Diagnostics Q4: compute_time_sec/cache_hit/engine_version.
-V21-005,V2.1,q4_perf,OK,runtime,Q4 cold wall=1.667s,high,SLO Q4 cold <35s.
-V21-006,V2.1,q4_perf,OK,runtime,Q4 warm wall=0.048s,high,SLO Q4 warm <3s.
+V21-005,V2.1,q4_perf,OK,runtime,Q4 cold wall=0.586s,high,SLO Q4 cold <35s.
+V21-006,V2.1,q4_perf,OK,runtime,Q4 warm wall=0.014s,high,SLO Q4 warm <3s.
 V21-007,V2.1,q4_perf,OK,runtime,cold_cache_hit=False warm_cache_hit=True,high,Cache hit/miss verifiable entre run1 et run2.
 V21-008,V2.1,ux,OK,ui,streamlit_app.py:10,medium,Navigation guidee accueil->mode emploi->donnees->socle->Q1..Q5->conclusions.
 V21-009,V2.1,ux,OK,ui,app/ui_components.py:55,medium,Header etape actuelle/etape suivante sur pages.
 V21-010,V2.1,ux,OK,ui,app/ui_components.py:75,medium,UX neophyte completement didactique et non-obscurci sur toutes pages.
 REP-001,REPORTING,conclusions,OK,runtime,reports/conclusions_v2_detailed_*.md,high,Rapport final detaille present en markdown versionne.
-REP-002,REPORTING,conclusions,OK,ui,app/pages/99_Conclusions.py:52,high,Page Conclusions charge rapport et resume executif.
+REP-002,REPORTING,conclusions,OK,ui,app/pages/99_Conclusions.py,high,Page Conclusions charge rapport et resume executif.
 SLIDE-01,SLIDES,CONTEXTE,OK,ui,app/pages/00_Accueil.py,medium,Couverture explicite slide 1.
 SLIDE-02,SLIDES,Q1,OK,ui,src/modules/q1_transition.py:66,medium,Couverture explicite slide 2.
 SLIDE-03,SLIDES,Q1,OK,ui,src/modules/q1_transition.py:66,medium,Couverture explicite slide 3.

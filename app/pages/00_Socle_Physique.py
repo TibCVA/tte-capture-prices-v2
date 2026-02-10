@@ -3,7 +3,21 @@
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import country_year_selector, load_hourly_safe, to_plot_frame
+_PAGE_UTILS_IMPORT_ERROR: Exception | None = None
+try:
+    from app.page_utils import country_year_selector, load_hourly_safe, to_plot_frame
+except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud stale caches
+    _PAGE_UTILS_IMPORT_ERROR = exc
+
+    def _page_utils_unavailable(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError(
+            "app.page_utils indisponible sur cette instance (cache/deploiement partiel). "
+            "Rebooter l'app puis vider le cache Streamlit Cloud."
+        )
+
+    country_year_selector = _page_utils_unavailable  # type: ignore[assignment]
+    load_hourly_safe = _page_utils_unavailable  # type: ignore[assignment]
+    to_plot_frame = _page_utils_unavailable  # type: ignore[assignment]
 from app.ui_components import guided_header, inject_theme, show_definitions, show_kpi_cards
 
 try:
@@ -14,6 +28,12 @@ except ImportError:  # Backward-compatible fallback if cloud cache serves an old
 
 
 def render() -> None:
+    if _PAGE_UTILS_IMPORT_ERROR is not None:
+        st.error("Impossible de charger les utilitaires de page (page_utils).")
+        st.code(str(_PAGE_UTILS_IMPORT_ERROR))
+        st.info("Action recommandee: Streamlit Cloud > Manage app > Reboot app, puis Clear cache.")
+        return
+
     inject_theme()
     guided_header(
         title="Socle Physique",

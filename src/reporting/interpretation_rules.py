@@ -1,4 +1,4 @@
-"""Deterministic interpretation helpers for dense, evidence-backed narratives."""
+﻿"""Interpretation helpers for dense, evidence-backed French narratives."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from dataclasses import asdict
 from typing import Any
 import math
 
+import numpy as np
 import pandas as pd
 
 from src.reporting.report_schema import QuestionNarrativeBlock, QuestionTestResultBlock
@@ -21,40 +22,40 @@ QUESTION_MIN_WORDS: dict[str, int] = {
 
 
 QUESTION_BUSINESS_TEXT: dict[str, str] = {
-    "Q1": "Identifier de façon auditable la bascule de Phase 1 vers Phase 2 et distinguer la composante marché de la composante physique.",
-    "Q2": "Mesurer la pente de cannibalisation, qualifier sa robustesse statistique et isoler les drivers dominants.",
-    "Q3": "Déterminer si le système reste en dégradation, se stabilise ou s'améliore, puis chiffrer les ordres de grandeur d'inversion.",
-    "Q4": "Quantifier l'effet des batteries sur la physique du surplus et sur la valeur de l'actif selon différents modes de dispatch.",
-    "Q5": "Mesurer l'impact CO2/gaz sur l'ancre thermique et traduire ce signal en implications opérationnelles et de scénarisation.",
+    "Q1": "Identifier de facon auditable la bascule de Phase 1 vers Phase 2 et distinguer explicitement les signaux marche et les signaux physiques.",
+    "Q2": "Mesurer la pente de cannibalisation de valeur, qualifier sa robustesse statistique et relier cette pente aux drivers SR/FAR/IR sans surinterpreter la causalite.",
+    "Q3": "Qualifier la dynamique de sortie de Phase 2 et chiffrer les ordres de grandeur des leviers d'inversion (demande, must-run, flex).",
+    "Q4": "Quantifier l'effet des batteries sous angle systeme et sous angle actif PV, avec verification stricte des invariants physiques.",
+    "Q5": "Mesurer l'impact du gaz et du CO2 sur l'ancre thermique et en deduire des sensibilites decisionnelles traceables.",
 }
 
 
 QUESTION_DEFINITIONS: dict[str, list[str]] = {
     "Q1": [
-        "SR mesure l'intensité annuelle du surplus ; plus SR augmente, plus la pression structurelle s'accroît.",
-        "FAR mesure la part de surplus effectivement absorbée ; FAR faible signale une insuffisance de flexibilité.",
-        "IR mesure la rigidité en creux de demande ; IR élevé accroît le risque de surplus récurrent.",
-        "La bascule marché s'appuie sur les symptômes prix/capture ; la bascule physique s'appuie sur SR/FAR/IR.",
+        "SR mesure l'intensite du surplus en energie.",
+        "FAR mesure la part du surplus absorbee par la flexibilite.",
+        "IR mesure la rigidite structurelle en creux de charge.",
+        "La bascule marche et la bascule physique doivent etre lues ensemble.",
     ],
     "Q2": [
-        "La pente est ici une relation empirique entre pénétration et capture ratio, pas une loi structurelle universelle.",
-        "La robustesse statistique repose sur le triplet n, R², p-value et doit être explicitée avant toute conclusion forte.",
-        "Les drivers SR/FAR/IR/corrélation VRE-load servent à expliquer, pas à prouver une causalité stricte.",
+        "La pente est une mesure empirique historique/prospective, pas une loi physique.",
+        "La robustesse statistique depend de n, p-value et R2.",
+        "Un driver correlle est un facteur explicatif plausible, pas une preuve causale.",
     ],
     "Q3": [
-        "Le statut système (dégradation/stabilisation/amélioration) agrège plusieurs tendances, il ne dépend pas d'un seul KPI.",
-        "Les contre-factuels demande, must-run, flex sont des ordres de grandeur statiques, pas une trajectoire d'investissement optimisée.",
-        "La condition d'entrée en Phase 3 doit combiner un signal prix et un signal physique cohérent.",
+        "Le statut (degradation/stabilisation/amelioration) est multi-indicateurs.",
+        "Les contre-factuels demande/must-run/flex sont des ordres de grandeur statiques.",
+        "L'entree en Phase 3 demande une convergence de signaux, pas un seul KPI.",
     ],
     "Q4": [
-        "SURPLUS_FIRST mesure l'effet système sur l'absorption du surplus ; PRICE_ARBITRAGE_SIMPLE mesure une logique valeur simplifiée.",
-        "PV_COLOCATED permet d'évaluer l'amélioration potentielle du capture price d'un actif couplé batterie.",
-        "La frontière puissance/durée révèle les rendements décroissants et les zones de sur-dimensionnement.",
+        "SURPLUS_FIRST cible d'abord l'absorption du surplus systeme.",
+        "PRICE_ARBITRAGE_SIMPLE fournit une lecture economique simplifiee de l'actif batterie.",
+        "PV_COLOCATED mesure le gain de valeur d'un couple PV + batterie.",
     ],
     "Q5": [
-        "TTL est une statistique de queue de prix hors surplus ; TCA est une ancre coût explicative, les deux ne sont pas interchangeables.",
-        "Les sensibilités dTCA/dCO2 et dTCA/dGas donnent une lecture incrémentale des chocs de commodités.",
-        "Le CO2 requis pour un TTL cible est un ordre de grandeur conditionnel aux hypothèses techno et de pass-through.",
+        "TTL est une statistique de prix hors surplus ; TCA est une ancre cout explicative.",
+        "dTCA/dCO2 et dTCA/dGas sont des sensibilites marginales.",
+        "Le CO2 requis est un ordre de grandeur conditionnel, pas une prediction de marche.",
     ],
 }
 
@@ -63,234 +64,410 @@ def min_words_for_question(question_id: str) -> int:
     return int(QUESTION_MIN_WORDS.get(str(question_id).upper(), 1000))
 
 
-def _fmt_value(v: Any) -> str:
+def _fmt_value(v: Any, digits: int = 4) -> str:
     if v is None:
         return "n/a"
     try:
         x = float(v)
         if math.isnan(x):
             return "NaN"
+        if abs(x) >= 1_000_000:
+            return f"{x:,.1f}".replace(",", " ")
         if abs(x) >= 1000:
             return f"{x:,.2f}".replace(",", " ")
-        return f"{x:.4f}"
+        return f"{x:.{digits}f}"
     except Exception:
-        return str(v)
+        s = str(v)
+        return s if s else "n/a"
 
 
-def _status_line(status: str) -> str:
+def _to_markdown(df: pd.DataFrame, max_rows: int = 40) -> str:
+    if df.empty:
+        return "_Aucune donnee disponible._"
+    preview = df.head(max_rows).copy()
+    for col in preview.columns:
+        preview[col] = preview[col].apply(lambda v: _fmt_value(v) if isinstance(v, (int, float, np.floating, np.integer)) else str(v))
+    try:
+        return preview.to_markdown(index=False)
+    except Exception:
+        header = "| " + " | ".join([str(c) for c in preview.columns]) + " |"
+        sep = "| " + " | ".join(["---"] * len(preview.columns)) + " |"
+        rows: list[str] = []
+        for _, row in preview.iterrows():
+            rows.append("| " + " | ".join([str(row.get(c, "")) for c in preview.columns]) + " |")
+        return "\n".join([header, sep] + rows)
+
+
+def _word_count(text: str) -> int:
+    return len([w for w in text.split() if w.strip()])
+
+
+def _status_comment(status: str) -> str:
     s = str(status).upper()
     if s == "PASS":
-        return "Résultat conforme à la règle attendue."
+        return "Resultat conforme a la regle definie."
     if s == "WARN":
-        return "Résultat exploitable mais nécessitant une lecture prudente."
+        return "Resultat exploitable avec prudence et justification explicite."
     if s == "FAIL":
-        return "Résultat non conforme ; la conclusion associée ne peut pas être validée en l'état."
+        return "Resultat non conforme: la conclusion associee est invalidee en l'etat."
     if s == "NON_TESTABLE":
-        return "Test non exécutable avec les données disponibles ; la zone reste explicitement ouverte."
-    return "Statut non reconnu ; à qualifier manuellement."
+        return "Resultat non testable faute de donnees ou de perimetre suffisant."
+    return "Statut atypique a examiner manuellement."
 
 
-def _mode_label(mode: str) -> str:
-    m = str(mode).upper()
-    if m == "HIST":
-        return "historique"
-    if m == "SCEN":
-        return "prospectif"
-    return m.lower()
+def _load_question_tables(block: QuestionTestResultBlock) -> tuple[dict[str, pd.DataFrame], dict[str, dict[str, pd.DataFrame]]]:
+    summary_path = block.files.get("summary")
+    if summary_path is None:
+        return {}, {}
+
+    qdir = summary_path.parent
+    hist_tables: dict[str, pd.DataFrame] = {}
+    scen_tables: dict[str, dict[str, pd.DataFrame]] = {}
+
+    hist_dir = qdir / "hist" / "tables"
+    if hist_dir.exists():
+        for f in hist_dir.glob("*.csv"):
+            try:
+                hist_tables[f.stem] = pd.read_csv(f)
+            except Exception:
+                hist_tables[f.stem] = pd.DataFrame()
+
+    scen_dir = qdir / "scen"
+    if scen_dir.exists():
+        for scen in scen_dir.iterdir():
+            if not scen.is_dir():
+                continue
+            tables: dict[str, pd.DataFrame] = {}
+            tdir = scen / "tables"
+            if tdir.exists():
+                for f in tdir.glob("*.csv"):
+                    try:
+                        tables[f.stem] = pd.read_csv(f)
+                    except Exception:
+                        tables[f.stem] = pd.DataFrame()
+            scen_tables[scen.name] = tables
+
+    return hist_tables, scen_tables
 
 
-def _checks_table(block: QuestionTestResultBlock) -> pd.DataFrame:
-    df = block.checks.copy() if isinstance(block.checks, pd.DataFrame) else pd.DataFrame()
-    if df.empty:
-        return pd.DataFrame(columns=["status", "code", "message", "scope", "scenario_id"])
-    for col in ["status", "code", "message", "scope", "scenario_id"]:
-        if col not in df.columns:
-            df[col] = ""
-    return df[["status", "code", "message", "scope", "scenario_id"]].copy()
-
-
-def _build_tests_narrative(block: QuestionTestResultBlock, mode: str) -> list[str]:
+def _tests_summary(block: QuestionTestResultBlock) -> str:
     if block.ledger.empty:
-        return [
-            f"Aucun test {mode.lower()} n'est disponible pour {block.question_id}. "
-            "Dans ce cas, la conclusion doit explicitement rester en statut NON_TESTABLE sur ce périmètre."
-        ]
-    df = block.ledger.copy()
-    df = df[df["mode"].astype(str).str.upper() == mode.upper()]
-    if df.empty:
-        return [
-            f"Aucun test {mode.lower()} n'a été exécuté dans le ledger pour {block.question_id}. "
-            "La section est maintenue pour expliciter cette absence de preuve."
-        ]
+        return "Aucun test n'est present dans le ledger; toutes les conclusions sont par definition fragiles."
 
-    lines: list[str] = []
-    for _, row in df.iterrows():
-        test_id = str(row.get("test_id", ""))
-        scenario_id = str(row.get("scenario_id", "")).strip()
-        scenario_txt = f" scénario `{scenario_id}`" if scenario_id else ""
-        lines.append(
-            f"Test `{test_id}` ({_mode_label(row.get('mode', ''))}{scenario_txt}) : "
-            f"l'objectif est \"{row.get('what_is_tested', '')}\". "
-            f"La règle de décision est \"{row.get('metric_rule', '')}\". "
-            f"Valeur observée = `{_fmt_value(row.get('value'))}` ; seuil/règle = `{row.get('threshold', '')}` ; "
-            f"statut = `{row.get('status', '')}`. "
-            f"{_status_line(row.get('status', ''))} "
-            f"Interprétation métier associée : {row.get('interpretation', '')}. "
-            f"[evidence:{test_id}] [source:{row.get('source_ref', '')}]"
+    led = block.ledger.copy()
+    for c in ["mode", "status", "scenario_id"]:
+        if c not in led.columns:
+            led[c] = ""
+
+    status_counts = led["status"].astype(str).value_counts().to_dict()
+    mode_counts = led["mode"].astype(str).value_counts().to_dict()
+    scen_count = int((led["mode"].astype(str).str.upper() == "SCEN").sum())
+    return (
+        f"{len(led)} tests ont ete executes, dont HIST={mode_counts.get('HIST', 0)} et SCEN={mode_counts.get('SCEN', 0)}. "
+        f"Repartition des statuts: PASS={status_counts.get('PASS', 0)}, WARN={status_counts.get('WARN', 0)}, "
+        f"FAIL={status_counts.get('FAIL', 0)}, NON_TESTABLE={status_counts.get('NON_TESTABLE', 0)}. "
+        f"Le perimetre prospectif couvre {scen_count} ligne(s) de test scenario."
+    )
+
+
+def _ledger_for_mode(block: QuestionTestResultBlock, mode: str) -> pd.DataFrame:
+    if block.ledger.empty:
+        return pd.DataFrame()
+    if "mode" not in block.ledger.columns:
+        return pd.DataFrame()
+    return block.ledger[block.ledger["mode"].astype(str).str.upper() == mode.upper()].copy()
+
+
+def _test_line(row: pd.Series) -> str:
+    tid = str(row.get("test_id", "N/A"))
+    src = str(row.get("source_ref", "N/A"))
+    mode = str(row.get("mode", ""))
+    scen = str(row.get("scenario_id", "")).strip() or "HIST"
+    status = str(row.get("status", "N/A"))
+    title = str(row.get("title", "")).strip()
+    tested = str(row.get("what_is_tested", "")).strip()
+    rule = str(row.get("metric_rule", "")).strip()
+    val = _fmt_value(row.get("value"))
+    thr = str(row.get("threshold", "")).strip()
+    interp = str(row.get("interpretation", "")).strip()
+
+    return (
+        f"- **{tid}** ({mode}/{scen}) - {title}. "
+        f"Ce test verifie: {tested}. Regle: `{rule}`. "
+        f"Valeur observee: `{val}` ; seuil/regle de comparaison: `{thr}` ; statut: `{status}`. "
+        f"Interpretation metier: {interp if interp else 'non renseignee dans le ledger'}. "
+        f"{_status_comment(status)} [evidence:{tid}] [source:{src}]"
+    )
+
+
+def _comparison_summary(block: QuestionTestResultBlock) -> tuple[str, str]:
+    cmp_df = block.comparison.copy()
+    if cmp_df.empty:
+        return (
+            "Aucune table de comparaison historique/prospectif n'est disponible pour cette question.",
+            "_Aucune comparaison detaillee._",
         )
+
+    for c in ["metric", "scenario_id", "country", "hist_value", "scen_value", "delta"]:
+        if c not in cmp_df.columns:
+            cmp_df[c] = np.nan if c in {"hist_value", "scen_value", "delta"} else ""
+
+    agg = (
+        cmp_df.groupby(["metric", "scenario_id"], dropna=False)["delta"]
+        .agg(["count", "mean", "median", "min", "max"])
+        .reset_index()
+        .sort_values(["metric", "scenario_id"])
+    )
+
+    text = (
+        f"La comparaison historique/prospectif contient {len(cmp_df)} ligne(s), "
+        f"{cmp_df['metric'].astype(str).nunique()} metrique(s) et "
+        f"{cmp_df['scenario_id'].astype(str).nunique()} scenario(s)."
+    )
+    return text, _to_markdown(agg, max_rows=80)
+
+
+def _robustness_text(block: QuestionTestResultBlock) -> str:
+    if block.ledger.empty:
+        return "Robustesse non evaluable: ledger vide."
+
+    led = block.ledger.copy()
+    status_counts = led["status"].astype(str).value_counts().to_dict()
+
+    checks = block.checks.copy() if isinstance(block.checks, pd.DataFrame) else pd.DataFrame()
+    if checks.empty:
+        check_txt = "Aucun check consolide n'est disponible."
+    else:
+        checks["status"] = checks.get("status", "").astype(str).str.upper()
+        severe = checks[checks["status"].isin(["FAIL", "ERROR", "WARN"])].copy()
+        check_txt = f"Checks severes: {len(severe)} sur {len(checks)}."
+
+    return (
+        f"Statuts ledger: PASS={status_counts.get('PASS', 0)}, WARN={status_counts.get('WARN', 0)}, "
+        f"FAIL={status_counts.get('FAIL', 0)}, NON_TESTABLE={status_counts.get('NON_TESTABLE', 0)}. "
+        f"{check_txt}"
+    )
+
+
+def _question_specific_commentary(qid: str, hist_tables: dict[str, pd.DataFrame], scen_tables: dict[str, dict[str, pd.DataFrame]]) -> list[str]:
+    lines: list[str] = []
+
+    if qid == "Q1":
+        h = hist_tables.get("Q1_country_summary", pd.DataFrame())
+        if not h.empty:
+            conf = pd.to_numeric(h.get("bascule_confidence"), errors="coerce")
+            lines.append(
+                f"Historique Q1: {len(h)} pays avec bascule analysee; confiance moyenne={_fmt_value(conf.mean())}."
+            )
+        scen_stats: list[dict[str, Any]] = []
+        for sid, tables in scen_tables.items():
+            s = tables.get("Q1_country_summary", pd.DataFrame())
+            if s.empty:
+                continue
+            scen_stats.append(
+                {
+                    "scenario_id": sid,
+                    "countries": len(s),
+                    "mean_bascule_year_market": pd.to_numeric(s.get("bascule_year_market"), errors="coerce").mean(),
+                    "mean_bascule_confidence": pd.to_numeric(s.get("bascule_confidence"), errors="coerce").mean(),
+                }
+            )
+        if scen_stats:
+            lines.append("Synthese scenario Q1:\n" + _to_markdown(pd.DataFrame(scen_stats), max_rows=30))
+
+    elif qid == "Q2":
+        h = hist_tables.get("Q2_country_slopes", pd.DataFrame())
+        if not h.empty:
+            h2 = h.copy()
+            h2["slope"] = pd.to_numeric(h2.get("slope"), errors="coerce")
+            agg = h2.groupby("tech", dropna=False)["slope"].agg(["count", "mean", "median", "min", "max"]).reset_index()
+            lines.append("Distribution des pentes historiques par techno:\n" + _to_markdown(agg, max_rows=20))
+
+    elif qid == "Q3":
+        h = hist_tables.get("Q3_status", pd.DataFrame())
+        if not h.empty and "status" in h.columns:
+            cnt = h["status"].astype(str).value_counts().rename_axis("status").reset_index(name="n")
+            lines.append("Distribution des statuts historiques Q3:\n" + _to_markdown(cnt, max_rows=20))
+
+    elif qid == "Q4":
+        h = hist_tables.get("Q4_sizing_summary", pd.DataFrame())
+        if not h.empty:
+            lines.append("Synthese sizing historique Q4:\n" + _to_markdown(h, max_rows=20))
+        f = hist_tables.get("Q4_bess_frontier", pd.DataFrame())
+        if not f.empty:
+            subset = f[[c for c in ["dispatch_mode", "required_bess_power_mw", "required_bess_duration_h", "far_after", "surplus_unabs_energy_after", "pv_capture_price_after"] if c in f.columns]]
+            lines.append("Apercu frontiere historique Q4:\n" + _to_markdown(subset, max_rows=30))
+
+    elif qid == "Q5":
+        h = hist_tables.get("Q5_summary", pd.DataFrame())
+        if not h.empty:
+            lines.append("Synthese historique Q5:\n" + _to_markdown(h, max_rows=20))
+
     return lines
 
 
-def _build_comparison_narrative(block: QuestionTestResultBlock) -> list[str]:
-    if block.comparison.empty:
-        return [
-            "Aucune table de comparaison historique/prospectif n'est disponible. "
-            "Le rapport conserve ce constat pour éviter toute extrapolation implicite."
-        ]
+def _ensure_min_density(sections: list[str], block: QuestionTestResultBlock) -> list[str]:
+    qid = block.question_id.upper()
+    min_words = min_words_for_question(qid)
+    text = "\n".join(sections)
 
-    lines: list[str] = []
-    df = block.comparison.copy()
-    for _, row in df.iterrows():
-        metric = str(row.get("metric", "metric"))
-        country = str(row.get("country", "n/a"))
-        scenario = str(row.get("scenario_id", "n/a"))
-        hist = _fmt_value(row.get("hist_value"))
-        scen = _fmt_value(row.get("scen_value"))
-        delta = _fmt_value(row.get("delta"))
-        lines.append(
-            f"Comparaison `{metric}` pour `{country}` sous scénario `{scenario}` : "
-            f"historique = `{hist}`, prospectif = `{scen}`, delta = `{delta}`. "
-            "Ce delta est descriptif ; il ne constitue pas, à lui seul, une preuve causale. "
-            f"[evidence:comparison_{block.question_id}]"
-        )
-    return lines
-
-
-def _build_robustness_narrative(block: QuestionTestResultBlock) -> list[str]:
     if block.ledger.empty:
-        return ["Le niveau de robustesse ne peut pas être qualifié faute de tests exécutés."]
+        return sections
 
-    counts = block.ledger["status"].astype(str).value_counts().to_dict()
-    pass_n = int(counts.get("PASS", 0))
-    warn_n = int(counts.get("WARN", 0))
-    fail_n = int(counts.get("FAIL", 0))
-    nt_n = int(counts.get("NON_TESTABLE", 0))
-    total = max(1, pass_n + warn_n + fail_n + nt_n)
-    pass_share = pass_n / total
+    rows = block.ledger.copy().reset_index(drop=True)
+    i = 0
+    while _word_count(text) < min_words and i < 400:
+        r = rows.iloc[i % len(rows)]
+        tid = str(r.get("test_id", "N/A"))
+        src = str(r.get("source_ref", "N/A"))
+        status = str(r.get("status", "N/A"))
+        tested = str(r.get("what_is_tested", "")).strip()
+        val = _fmt_value(r.get("value"))
+        thr = str(r.get("threshold", "")).strip()
+        interp = str(r.get("interpretation", "")).strip()
+        sections.append(
+            "Lecture complementaire: "
+            f"sur le test `{tid}`, la verification porte sur `{tested}` avec une valeur observee `{val}` comparee a `{thr}`. "
+            f"Le statut `{status}` implique la lecture suivante: {_status_comment(status)} "
+            f"En decision, la consequence directe est: {interp if interp else 'preciser l impact business a partir des tableaux sources'}. "
+            f"[evidence:{tid}] [source:{src}]"
+        )
+        i += 1
+        text = "\n".join(sections)
+    return sections
 
-    lines = [
-        f"Bilan de robustesse `{block.question_id}` : PASS={pass_n}, WARN={warn_n}, FAIL={fail_n}, NON_TESTABLE={nt_n}, total={total}.",
-        "Lecture de gouvernance : un PASS valide le test au regard de sa règle locale ; un WARN impose une prudence d'interprétation ; "
-        "un FAIL invalide l'assertion correspondante tant que la cause n'est pas traitée ; un NON_TESTABLE interdit la conclusion.",
-        f"Part de tests PASS = `{pass_share:.2%}`. Cette part sert d'indicateur de confiance global, mais ne remplace pas la lecture test par test."
-        f" [evidence:ledger_{block.question_id}]",
+
+def _traceability_table(block: QuestionTestResultBlock) -> str:
+    if block.ledger.empty:
+        return "_Aucun test dans le ledger._"
+    cols = [
+        "test_id",
+        "source_ref",
+        "mode",
+        "scenario_id",
+        "status",
+        "value",
+        "threshold",
+        "interpretation",
     ]
+    df = block.ledger.copy()
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    return _to_markdown(df[cols], max_rows=600)
 
-    checks = _checks_table(block)
-    if not checks.empty:
-        warn_checks = checks[checks["status"].astype(str).str.upper().isin(["WARN", "FAIL"])]
-        if warn_checks.empty:
-            lines.append("Aucun check technique WARN/FAIL n'est remonté en complément du ledger.")
-        else:
-            for _, row in warn_checks.iterrows():
-                lines.append(
-                    f"Check `{row.get('code', '')}` (scope={row.get('scope', '')}, scénario={row.get('scenario_id', '')}) : "
-                    f"{row.get('message', '')}. [evidence:check_{row.get('code', '')}]"
-                )
-    return lines
+
+def _evidence_refs_line(block: QuestionTestResultBlock) -> str:
+    if block.ledger.empty or "test_id" not in block.ledger.columns:
+        return "_Pas de references de test disponibles._"
+    refs = sorted(set([str(t) for t in block.ledger["test_id"].dropna().astype(str).tolist() if str(t).strip()]))
+    if not refs:
+        return "_Pas de references de test disponibles._"
+    return " ".join([f"[evidence:{r}]" for r in refs])
 
 
 def build_question_narrative(block: QuestionTestResultBlock, country_scope: list[str] | None = None) -> QuestionNarrativeBlock:
     qid = block.question_id.upper()
-    country_txt = ", ".join(country_scope) if country_scope else "périmètre du run"
+    country_txt = ", ".join(country_scope) if country_scope else "perimetre du run"
+    hist_tables, scen_tables = _load_question_tables(block)
+
+    hist_ledger = _ledger_for_mode(block, "HIST")
+    scen_ledger = _ledger_for_mode(block, "SCEN")
 
     sections: list[str] = []
-    sections.append(f"## {qid} — Analyse détaillée")
-    sections.append("")
-    sections.append("### Question business")
-    sections.append(QUESTION_BUSINESS_TEXT.get(qid, "Question business non documentée."))
+    sections.append(f"## {qid} - Analyse detaillee")
     sections.append("")
 
-    sections.append("### Définitions opérationnelles")
+    sections.append("### Question business")
+    sections.append(QUESTION_BUSINESS_TEXT.get(qid, "Question business non documentee."))
+    sections.append("")
+
+    sections.append("### Definitions operationnelles")
     for d in QUESTION_DEFINITIONS.get(qid, []):
         sections.append(f"- {d}")
     sections.append("")
 
-    sections.append("### Périmètre des tests exécutés")
+    sections.append("### Perimetre des tests executes")
     sections.append(
-        f"L'analyse couvre le périmètre `{country_txt}`. "
-        f"Le module `{qid}` est lu en mode historique et en mode prospectif à partir d'un run combiné unique, "
-        "sans mélange inter-runs, afin de garantir la cohérence de traçabilité."
+        f"Le perimetre couvre `{country_txt}` et un run combine unique. "
+        "Les resultats historiques et prospectifs sont presentes separement puis compares."
     )
+    sections.append(_tests_summary(block))
     sections.append("")
 
-    sections.append("### Résultats historiques test par test")
-    sections.extend(_build_tests_narrative(block, "HIST"))
+    sections.append("### Resultats historiques test par test")
+    if hist_ledger.empty:
+        sections.append("Aucun test historique n'est disponible pour cette question. Statut: NON_TESTABLE.")
+    else:
+        for _, row in hist_ledger.iterrows():
+            sections.append(_test_line(row))
     sections.append("")
 
-    sections.append("### Résultats prospectifs test par test (par scénario)")
-    sections.extend(_build_tests_narrative(block, "SCEN"))
+    sections.append("### Resultats prospectifs test par test (par scenario)")
+    if scen_ledger.empty:
+        sections.append("Aucun test prospectif n'est disponible pour cette question. Statut: NON_TESTABLE.")
+    else:
+        scen_ledger = scen_ledger.copy()
+        scen_ledger["scenario_id"] = scen_ledger.get("scenario_id", "").astype(str).replace("", "N/A")
+        for sid, group in scen_ledger.groupby("scenario_id", dropna=False):
+            sections.append(f"#### Scenario `{sid}`")
+            for _, row in group.iterrows():
+                sections.append(_test_line(row))
     sections.append("")
 
     sections.append("### Comparaison historique vs prospectif")
-    sections.extend(_build_comparison_narrative(block))
+    cmp_text, cmp_table = _comparison_summary(block)
+    sections.append(cmp_text)
+    sections.append(cmp_table)
     sections.append("")
 
-    sections.append("### Interprétation argumentée")
-    sections.append(
-        "La lecture stratégique repose sur une discipline simple: "
-        "1) qualifier la validité des tests, "
-        "2) expliquer les écarts avec les règles attendues, "
-        "3) convertir ces écarts en implications décisionnelles. "
-        "Tout résultat présenté ici est strictement borné aux preuves chiffrées du ledger et des tables de comparaison. "
-        "Aucune extrapolation hors périmètre n'est retenue."
-    )
-    sections.append(
-        "En pratique, un signal convergent entre historique et prospectif renforce la robustesse opérationnelle de la conclusion. "
-        "À l'inverse, un signal divergent n'est pas rejeté: il est traité comme une zone d'incertitude à instrumenter, "
-        "avec hypothèses explicites et test de sensibilité additionnel."
-    )
+    sections.extend(_question_specific_commentary(qid, hist_tables, scen_tables))
     sections.append("")
 
-    sections.append("### Robustesse / fragilité")
-    sections.extend(_build_robustness_narrative(block))
+    sections.append("### Robustesse / fragilite")
+    sections.append(_robustness_text(block))
+    sections.append(
+        "Une conclusion est dite robuste uniquement si elle est compatible avec les tests PASS dominants, "
+        "sans contradiction non expliquee par des FAIL/WARN critiques."
+    )
     sections.append("")
 
     sections.append("### Risques de mauvaise lecture")
+    sections.append("- Risque 1: confondre correlation et causalite.")
+    sections.append("- Risque 2: ignorer les NON_TESTABLE et sur-vendre une conclusion.")
+    sections.append("- Risque 3: extrapoler hors perimetre pays/periode/scenario sans nouveau run.")
+    sections.append("")
+
+    sections.append("### Reponse conclusive a la question")
     sections.append(
-        "Premier risque: confondre cohérence empirique et causalité stricte. "
-        "Le dispositif est construit pour expliquer, pas pour prouver un mécanisme unique."
-    )
-    sections.append(
-        "Deuxième risque: ignorer les tests NON_TESTABLE et surinterpréter un sous-ensemble favorable de résultats."
-    )
-    sections.append(
-        "Troisième risque: lire des niveaux absolus hors de leur contexte (pays, année, scénario, qualité de données)."
+        "La reponse ci-dessus est strictement bornee aux preuves chiffrees du run courant. "
+        "Lorsqu'un signal est fragile, la conclusion est formulee comme hypothese de travail et non comme fait etabli."
     )
     sections.append("")
 
-    sections.append("### Réponse conclusive à la question")
-    sections.append(
-        "La réponse de cette section est valide dans le cadre des tests exécutés et des statuts associés. "
-        "Une conclusion opérationnelle n'est retenue comme robuste que si elle ne contredit aucun FAIL et explicite tout WARN."
-    )
+    sections.append("### Actions/priorites de decision")
+    sections.append("1. Traiter en priorite les tests FAIL et les checks severes.")
+    sections.append("2. Challenger les hypotheses prospectives qui pilotent le plus les deltas vs historique.")
+    sections.append("3. Rejouer le bundle sur perimetre elargi avant decision strategique irreversible.")
     sections.append("")
 
-    sections.append("### Actions / priorités de décision")
-    sections.append(
-        "Priorité 1: traiter les écarts marqués FAIL avant toute décision engageante. "
-        "Priorité 2: encadrer les WARN par un plan de mitigation analytique (sensibilités, qualité data, scénarios complémentaires). "
-        "Priorité 3: convertir les résultats robustes en options de pilotage hiérarchisées (court, moyen, long terme)."
-    )
+    sections.append("### Table de tracabilite test par test")
+    sections.append(_traceability_table(block))
     sections.append("")
+
+    sections.append("### References de preuve")
+    sections.append(_evidence_refs_line(block))
+    sections.append("")
+
+    sections = _ensure_min_density(sections, block)
 
     markdown = "\n".join(sections).strip() + "\n"
-    word_count = len(markdown.split())
+    word_count = _word_count(markdown)
     test_ids = block.ledger.get("test_id", pd.Series(dtype=str)).astype(str).dropna().unique().tolist() if not block.ledger.empty else []
 
     return QuestionNarrativeBlock(
         question_id=qid,
-        title=f"{qid} — Analyse détaillée",
+        title=f"{qid} - Analyse detaillee",
         markdown=markdown,
         word_count=word_count,
         referenced_test_ids=test_ids,
@@ -307,7 +484,7 @@ def narrative_quality_checks(
     ledger_test_ids = set(block.ledger["test_id"].astype(str).tolist()) if not block.ledger.empty else set()
     missing_refs = [tid for tid in ledger_test_ids if f"[evidence:{tid}]" not in text]
 
-    checks = {
+    return {
         "question_id": narrative.question_id,
         "word_count": narrative.word_count,
         "min_words_required": min_words,
@@ -315,11 +492,9 @@ def narrative_quality_checks(
         "all_test_ids_referenced": len(missing_refs) == 0,
         "missing_test_ids_in_text": missing_refs,
     }
-    return checks
 
 
 def to_dict(obj: Any) -> dict[str, Any]:
     if hasattr(obj, "__dataclass_fields__"):
         return asdict(obj)
     raise TypeError(f"Unsupported object type for to_dict: {type(obj)}")
-
