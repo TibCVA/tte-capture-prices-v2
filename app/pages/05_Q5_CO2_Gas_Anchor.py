@@ -47,6 +47,7 @@ from app.ui_components import (
     show_metric_explainers_tabbed,
 )
 from src.config_loader import load_countries
+from app.llm_analysis import render_llm_analysis_section
 from src.modules.bundle_result import export_question_bundle
 from src.modules.q5_thermal_anchor import Q5_PARAMS
 from src.modules.test_registry import get_default_scenarios, get_question_tests
@@ -129,23 +130,29 @@ def render() -> None:
     default_scen = [s for s in get_default_scenarios("Q5") if s in scenario_options]
 
     with st.form("q5_bundle_form"):
-        country = st.selectbox("Pays", countries)
+        selected_countries = st.multiselect("Pays", countries, default=["FR"] if "FR" in countries else countries[:1])
         year_range = st.slider("Periode historique", min_value=y_min, max_value=y_max, value=(max(y_min, 2021), y_max))
-        default_tech = str(countries_cfg.get(country, {}).get("thermal", {}).get("marginal_tech", "CCGT")).upper()
-        marginal_tech = st.selectbox("Technologie marginale", ["CCGT", "COAL"], index=0 if default_tech == "CCGT" else 1)
+        use_country_tech = st.checkbox("Utiliser techno marginale par pays (config)", value=True)
+        marginal_tech = st.selectbox("Technologie marginale (fallback)", ["CCGT", "COAL"], index=0)
         ttl_target = st.number_input("TTL cible (EUR/MWh)", value=120.0, step=5.0)
         scenario_ids = st.multiselect("Scenarios prospectifs", scenario_options, default=default_scen or scenario_options[:2])
         force_recompute = st.checkbox("Forcer recalcul complet (ignore cache bundle)", value=False)
         run_submit = st.form_submit_button("Lancer l'analyse complete Q5", type="primary")
 
     if run_submit:
+        countries_sel = selected_countries or (["FR"] if "FR" in countries else countries[:1])
+        tech_map = {
+            c: str(countries_cfg.get(c, {}).get("thermal", {}).get("marginal_tech", marginal_tech)).upper()
+            for c in countries_sel
+        } if use_country_tech else {c: str(marginal_tech).upper() for c in countries_sel}
         selection = {
-            "country": country,
-            "countries": [country],
+            "country": countries_sel[0],
+            "countries": countries_sel,
             "years": list(range(year_range[0], year_range[1] + 1)),
             "scenario_ids": scenario_ids,
             "scenario_years": [2030, 2040],
-            "marginal_tech": marginal_tech,
+            "marginal_tech": str(marginal_tech).upper(),
+            "marginal_tech_by_country": tech_map,
             "ttl_target_eur_mwh": float(ttl_target),
         }
         bundle_hash = build_bundle_hash("Q5", selection, assumptions_phase1, assumptions_phase2)
@@ -173,7 +180,7 @@ def render() -> None:
         [
             {"label": "Scenarios executes", "value": len(bundle.scen_results), "help": "Nombre de scenarios prospectifs executes."},
             {"label": "Run ID", "value": bundle.run_id, "help": "Identifiant run unifie."},
-            {"label": "Pays", "value": bundle.selection.get("country", ""), "help": "Pays de l'analyse Q5."},
+            {"label": "Pays analyses", "value": len(bundle.selection.get("countries", [])), "help": "Nombre de pays de l'analyse Q5."},
         ]
     )
 
@@ -193,20 +200,22 @@ def render() -> None:
         if out.empty:
             st.info("Aucun resultat historique Q5.")
         else:
-            row = out.iloc[0]
             st.dataframe(out, use_container_width=True)
-            dco2 = float(row.get("dTCA_dCO2", float("nan")))
-            dgas = float(row.get("dTCA_dGas", float("nan")))
+            dco2 = float(pd.to_numeric(out.get("dTCA_dCO2"), errors="coerce").median())
+            dgas = float(pd.to_numeric(out.get("dTCA_dGas"), errors="coerce").median())
             if pd.notna(dco2) and pd.notna(dgas):
-                st.info(f"+10 EUR/t CO2 => +{10*dco2:.2f} EUR/MWh | +10 EUR/MWh_th gaz => +{10*dgas:.2f} EUR/MWh")
-            fig_df = pd.DataFrame(
-                {
-                    "variable": ["ttl_obs", "tca_q95", "alpha"],
-                    "value": [float(row.get("ttl_obs", float("nan"))), float(row.get("tca_q95", float("nan"))), float(row.get("alpha", float("nan")))],
-                }
+                st.info(
+                    f"Mediane panel: +10 EUR/t CO2 => +{10*dco2:.2f} EUR/MWh | "
+                    f"+10 EUR/MWh_th gaz => +{10*dgas:.2f} EUR/MWh"
+                )
+            fig_df = out[["country", "ttl_obs", "tca_q95", "alpha"]].melt(
+                id_vars=["country"],
+                value_vars=["ttl_obs", "tca_q95", "alpha"],
+                var_name="variable",
+                value_name="value",
             )
-            fig = px.bar(fig_df, x="variable", y="value", title="Historique: TTL, TCA Q95, alpha")
-            fig.update_layout(xaxis_title="Variable", yaxis_title="EUR/MWh")
+            fig = px.bar(fig_df, x="country", y="value", color="variable", barmode="group", title="Historique: TTL, TCA Q95, alpha (par pays)")
+            fig.update_layout(xaxis_title="Pays", yaxis_title="EUR/MWh")
             render_plotly_styled(
                 fig,
                 "TTL = prix observe en queue haute. TCA = ancre theorique. Si alpha est stable, les sensibilites dTCA/dCO2 et dTCA/dGas sont exploitables.",
@@ -242,3 +251,5 @@ def render() -> None:
             "Les tests NON_TESTABLE sont traces explicitement.",
         ]
     )
+
+    render_llm_analysis_section("Q5", bundle, payload["bundle_hash"])

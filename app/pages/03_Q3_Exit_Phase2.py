@@ -46,6 +46,7 @@ from app.ui_components import (
     show_limitations,
     show_metric_explainers_tabbed,
 )
+from app.llm_analysis import render_llm_analysis_section
 from src.modules.bundle_result import export_question_bundle
 from src.modules.q3_exit import Q3_PARAMS
 from src.modules.test_registry import get_default_scenarios, get_question_tests
@@ -242,3 +243,5 @@ def render() -> None:
             "Les tests NON_TESTABLE sont explicites et traceables.",
         ]
     )
+
+    render_llm_analysis_section("Q3", bundle, payload["bundle_hash"])

@@ -46,6 +46,8 @@ from app.ui_components import (
     show_limitations,
     show_metric_explainers_tabbed,
 )
+from src.config_loader import load_countries
+from app.llm_analysis import render_llm_analysis_section
 from src.modules.bundle_result import export_question_bundle
 from src.modules.q4_bess import Q4_PARAMS
 from src.modules.test_registry import get_default_scenarios, get_question_tests
@@ -113,7 +115,9 @@ def render() -> None:
     st.markdown("## Ce que cette execution teste (historique + prospectif)")
     render_spec_table_collapsible(_spec_table())
 
-    country, year = country_year_selector()
+    country_options = sorted(load_countries().get("countries", {}).keys())
+    default_country = "FR" if "FR" in country_options else (country_options[0] if country_options else "FR")
+    year_options = list(range(2018, 2025))
 
     st.markdown("## Hypotheses utilisees")
     assumptions_phase1 = assumptions_editor_for(Q4_PARAMS, "q4_bundle")
@@ -122,6 +126,8 @@ def render() -> None:
     default_scen = [s for s in get_default_scenarios("Q4") if s in scenario_options]
 
     with st.form("q4_bundle_form"):
+        selected_countries = st.multiselect("Pays", country_options, default=[default_country])
+        year = st.selectbox("Annee historique de reference", year_options, index=len(year_options) - 1)
         objective = st.selectbox("Objectif sizing", ["FAR_TARGET", "SURPLUS_UNABS_TARGET"])
         horizon_year = st.selectbox("Horizon prospectif", [2030, 2040], index=1)
         scenario_ids = st.multiselect("Scenarios prospectifs", scenario_options, default=default_scen or scenario_options[:2])
@@ -132,9 +138,10 @@ def render() -> None:
         run_submit = st.form_submit_button("Lancer l'analyse complete Q4", type="primary")
 
     if run_submit:
+        countries = selected_countries or [default_country]
         selection = {
-            "country": country,
-            "countries": [country],
+            "country": countries[0],
+            "countries": countries,
             "year": int(year),
             "years": [int(year)],
             "horizon_year": int(horizon_year),
@@ -169,6 +176,7 @@ def render() -> None:
         [
             {"label": "Scenario hist", "value": "SURPLUS_FIRST + 2 modes", "help": "Le run historique inclut aussi PRICE_ARBITRAGE_SIMPLE et PV_COLOCATED."},
             {"label": "Scenarios executes", "value": len(bundle.scen_results), "help": "Nombre de scenarios prospectifs executes."},
+            {"label": "Pays analyses", "value": len(bundle.selection.get("countries", [])), "help": "Nombre de pays traites sur cette execution."},
             {"label": "Run ID", "value": bundle.run_id, "help": "Identifiant run unifie."},
         ]
     )
@@ -238,3 +246,5 @@ def render() -> None:
             "Les tests NON_TESTABLE sont signales explicitement.",
         ]
     )
+
+    render_llm_analysis_section("Q4", bundle, payload["bundle_hash"])
