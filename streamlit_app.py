@@ -8,23 +8,31 @@ import streamlit as st
 st.set_page_config(page_title="TTE Capture Prices V2", layout="wide")
 
 PAGES = [
-    ("Accueil", "app/pages/00_Accueil.py"),
-    ("Mode emploi", "app/pages/00_Mode_emploi.py"),
-    ("Donnees & Qualite", "app/pages/00_Donnees_Qualite.py"),
-    ("Socle Physique", "app/pages/00_Socle_Physique.py"),
-    ("Q1 Phase 1 -> 2", "app/pages/01_Q1_Phase1_to_Phase2.py"),
-    ("Q2 Pente", "app/pages/02_Q2_Phase2_Slope.py"),
-    ("Q3 Sortie Phase 2", "app/pages/03_Q3_Exit_Phase2.py"),
-    ("Q4 BESS", "app/pages/04_Q4_BESS_OrderOfMagnitude.py"),
-    ("Q5 CO2/Gaz", "app/pages/05_Q5_CO2_Gas_Anchor.py"),
-    ("Conclusions", "app/pages/99_Conclusions.py"),
+    ("Accueil", "app/pages/00_Accueil.py", "Vue d'ensemble et parcours recommande"),
+    ("Mode emploi", "app/pages/00_Mode_emploi.py", "Definitions et limites"),
+    ("Donnees & Qualite", "app/pages/00_Donnees_Qualite.py", "Chargement des donnees et checks qualite"),
+    ("Socle Physique", "app/pages/00_Socle_Physique.py", "NRL, surplus, flex, regimes"),
+    ("Q1 Phase 1 -> 2", "app/pages/01_Q1_Phase1_to_Phase2.py", "Detection de bascule"),
+    ("Q2 Pente", "app/pages/02_Q2_Phase2_Slope.py", "Pente et drivers"),
+    ("Q3 Sortie Phase 2", "app/pages/03_Q3_Exit_Phase2.py", "Stabilisation et inversion"),
+    ("Q4 BESS", "app/pages/04_Q4_BESS_OrderOfMagnitude.py", "Ordres de grandeur stockage"),
+    ("Q5 CO2/Gaz", "app/pages/05_Q5_CO2_Gas_Anchor.py", "Sensibilite ancre thermique"),
+    ("Conclusions", "app/pages/99_Conclusions.py", "Rapport final trace"),
 ]
 
-st.sidebar.title("Navigation")
+st.sidebar.title("Navigation guidee")
 labels = [x[0] for x in PAGES]
 choice = st.sidebar.radio("Page", labels)
-page_path = dict(PAGES)[choice]
+idx = labels.index(choice)
 
+st.sidebar.caption(f"Etape {idx + 1}/{len(PAGES)}")
+st.sidebar.info(PAGES[idx][2])
+
+st.sidebar.markdown("### Parcours")
+for i, (label, _, _) in enumerate(PAGES, start=1):
+    st.sidebar.markdown(f"{i}. {label}")
+
+page_path = dict((label, path) for label, path, _ in PAGES)[choice]
 namespace = runpy.run_path(str(Path(page_path)))
 if "render" in namespace:
     namespace["render"]()

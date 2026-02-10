@@ -139,7 +139,11 @@ def run_q5(
     h["price_da_eur_mwh"] = pd.to_numeric(h["price_da_eur_mwh"], errors="coerce")
     h["tca_eur_mwh"] = h["gas_price_eur_mwh_th"] / eff + h["co2_price_eur_t"] * (ef / eff) + vom
 
-    cd = h[h["regime"].isin(["C", "D"]) & h["price_da_eur_mwh"].notna() & h["tca_eur_mwh"].notna()].copy()
+    regime_col = "regime" if "regime" in h.columns else ("regime_phys" if "regime_phys" in h.columns else None)
+    if regime_col is None:
+        h["_regime_tmp"] = "C"
+        regime_col = "_regime_tmp"
+    cd = h[h[regime_col].isin(["C", "D"]) & h["price_da_eur_mwh"].notna() & h["tca_eur_mwh"].notna()].copy()
     ttl_obs = float(cd["price_da_eur_mwh"].quantile(0.95)) if not cd.empty else np.nan
     tca_q95 = float(cd["tca_eur_mwh"].quantile(0.95)) if not cd.empty else np.nan
     alpha = ttl_obs - tca_q95 if np.isfinite(ttl_obs) and np.isfinite(tca_q95) else np.nan

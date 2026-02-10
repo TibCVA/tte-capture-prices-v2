@@ -223,6 +223,7 @@ def main() -> None:
     )
     report.append("```")
     report.append("Conclusion Q1: la bascule est systematiquement multi-factorielle (SR/FAR/IR + symptomes prix/capture), jamais monocritere.")
+    report.append(f"- Preuve: `outputs/phase1/{run_id}/Q1/tables/Q1_country_summary.csv` colonnes `bascule_year_market`, `drivers_at_bascule`, `bascule_confidence`.")
     report.append("")
 
     report.append("## 4. Q2 - Pente de Phase 2 et drivers")
@@ -234,6 +235,7 @@ def main() -> None:
     report.append(q2_drivers.to_string(index=False))
     report.append("```")
     report.append("Conclusion Q2: heterogeneite forte de pente selon pays; validite conditionnee par n, R2 et coherences physiques locales.")
+    report.append(f"- Preuve: `outputs/phase1/{run_id}/Q2/tables/Q2_country_slopes.csv` colonnes `slope`, `r2`, `p_value`, `robust_flag`.")
     report.append("")
 
     report.append("## 5. Q3 - Sortie de Phase 2 et inversion")
@@ -253,6 +255,7 @@ def main() -> None:
     )
     report.append("```")
     report.append("Conclusion Q3: les inversions mono-levier sont rarement credibles; un mix demande + flexibilite + rigidite est requis.")
+    report.append(f"- Preuve: `outputs/phase1/{run_id}/Q3/tables/Q3_status.csv` colonnes `inversion_k_demand`, `inversion_r_mustrun`, `additional_absorbed_needed_TWh_year`.")
     report.append("")
 
     report.append("## 6. Q4 - Niveau de batteries et impact")
@@ -290,6 +293,7 @@ def main() -> None:
         )
         report.append("```")
     report.append("Conclusion Q4: la taille BESS pertinente est tres pays-dependante; dans certains cas, duree longue indispensable.")
+    report.append(f"- Preuve: `outputs/phase1/{run_id}/Q4/tables/Q4_sizing_summary_system.csv` et `Q4_sizing_summary_pv.csv`.")
     report.append("")
 
     report.append("## 7. Q5 - Impact CO2 / gaz sur ancre thermique")
@@ -311,6 +315,40 @@ def main() -> None:
     )
     report.append("```")
     report.append("Conclusion Q5: sensibilites CO2/gaz conformes au modele; confiance dependante de la coherence prix<->ancre (corr_cd).")
+    report.append(f"- Preuve: `outputs/phase1/{run_id}/Q5/tables/Q5_summary.csv` colonnes `corr_cd`, `dTCA_dCO2`, `dTCA_dGas`, `co2_required_base`.")
+    report.append("")
+
+    if not q1_summary.empty and "bascule_confidence" in q1_summary.columns:
+        conf = pd.to_numeric(q1_summary["bascule_confidence"], errors="coerce").fillna(0.0)
+        q1_robust = q1_summary[conf >= 0.70]["country"].astype(str).tolist()
+        q1_fragile = q1_summary[conf < 0.70]["country"].astype(str).tolist()
+    else:
+        q1_robust = []
+        q1_fragile = []
+
+    if not q2_slopes.empty and "robust_flag" in q2_slopes.columns:
+        robust_flag = q2_slopes["robust_flag"].astype(str)
+        q2_robust = q2_slopes[robust_flag == "ROBUST"]["country"].astype(str).unique().tolist()
+        q2_fragile = q2_slopes[robust_flag != "ROBUST"]["country"].astype(str).unique().tolist()
+    else:
+        q2_robust = []
+        q2_fragile = []
+
+    if not q5_summary.empty and "corr_cd" in q5_summary.columns:
+        corr_cd = pd.to_numeric(q5_summary["corr_cd"], errors="coerce")
+        q5_robust = q5_summary[corr_cd >= 0.2]["country"].astype(str).tolist()
+        q5_fragile = q5_summary[corr_cd < 0.2]["country"].astype(str).tolist()
+    else:
+        q5_robust = []
+        q5_fragile = []
+
+    report.append("## 7.b Ce qui est robuste / ce qui est fragile")
+    report.append(f"- Q1 robuste (confidence>=0.70): {', '.join(sorted(q1_robust)) if q1_robust else 'aucun'}")
+    report.append(f"- Q1 fragile (confidence<0.70): {', '.join(sorted(q1_fragile)) if q1_fragile else 'aucun'}")
+    report.append(f"- Q2 robuste (robust_flag=ROBUST): {', '.join(sorted(q2_robust)) if q2_robust else 'aucun'}")
+    report.append(f"- Q2 fragile (n insuffisant ou fit faible): {', '.join(sorted(q2_fragile)) if q2_fragile else 'aucun'}")
+    report.append(f"- Q5 robuste (corr_cd>=0.2): {', '.join(sorted(q5_robust)) if q5_robust else 'aucun'}")
+    report.append(f"- Q5 fragile (corr_cd<0.2): {', '.join(sorted(q5_fragile)) if q5_fragile else 'aucun'}")
     report.append("")
 
     report.append("## 8. Reponses directes aux 5 questions")

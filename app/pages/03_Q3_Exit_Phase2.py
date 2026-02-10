@@ -1,30 +1,48 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime
+from time import perf_counter
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import assumptions_editor_for, load_annual_metrics
+from app.page_utils import assumptions_editor_for, load_annual_metrics, load_hourly_safe
+from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
 from src.modules.q3_exit import Q3_PARAMS, run_q3
 from src.modules.result import export_module_result
-from src.storage import load_hourly
+
+
+RESULT_KEY = "q3_last_result"
+
+
+STATUS_LABELS = {
+    "degradation": "degradation",
+    "stabilisation": "stabilisation",
+    "amelioration": "amelioration",
+    "transition_partielle": "transition partielle",
+    "hors_scope_stage2": "hors scope stage2",
+}
 
 
 def render() -> None:
-    st.title("Q3 - Sortie de Phase 2 et conditions d'inversion")
+    inject_theme()
+    guided_header(
+        title="Q3 - Sortie de Phase 2 et conditions d'inversion",
+        purpose="Detecter les signaux de stabilisation et chiffrer les ordres de grandeur pour inverser la tendance.",
+        step_now="Q3: analyser la sortie de phase 2",
+        step_next="Q4: quantifier le levier batteries",
+    )
 
-    st.markdown(
-        """
-## 1) Question business
-Detecter les signaux de stabilisation/amelioration apres stress et chiffrer des ordres de grandeur d'inversion.
+    st.markdown("## Question business")
+    st.markdown("Quand la phase 2 s'arrete-t-elle, et que faudrait-il pour inverser la dynamique ?")
 
-### Definitions express
-- `Trend`: pente sur fenetre glissante (annees).
-- `Amelioration`: baisse des heures negatives et stabilisation/hausse capture ratio.
-- `Contre-factuel`: test statique (demande, must-run, flex), pas un plan d'investissement.
-"""
+    show_definitions(
+        [
+            ("Trend", "Pente estimee sur une fenetre glissante de plusieurs annees."),
+            ("Amelioration", "Baisse des heures negatives avec stabilisation/hausse du capture ratio."),
+            ("Contre-factuel", "Test statique pour evaluer un ordre de grandeur, pas un plan d'investissement."),
+        ]
     )
 
     annual = load_annual_metrics()
@@ -33,82 +51,113 @@ Detecter les signaux de stabilisation/amelioration apres stress et chiffrer des 
         return
 
     countries = sorted(annual["country"].dropna().unique().tolist())
-    selected = st.multiselect("Pays", countries, default=countries)
+    year_min = int(annual["year"].min())
+    year_max = int(annual["year"].max())
 
-    st.markdown("## 2) Hypotheses et sources")
+    with st.form("q3_form"):
+        selected = st.multiselect("Pays", countries, default=countries)
+        years = st.slider("Periode", min_value=year_min, max_value=year_max, value=(year_min, year_max))
+        run_submit = st.form_submit_button("Executer Q3", type="primary")
+
+    st.markdown("## Hypotheses utilisees")
     assumptions = assumptions_editor_for(Q3_PARAMS, "q3")
 
-    scoped = annual[annual["country"].isin(selected)].copy()
+    scoped = annual[annual["country"].isin(selected) & annual["year"].between(years[0], years[1])].copy()
     fail_count = int((scoped["quality_flag"] == "FAIL").sum()) if not scoped.empty else 0
     if fail_count > 0:
         st.error(f"{fail_count} ligne(s) quality_flag=FAIL. Conclusions bloquees.")
 
-    if not st.button("Executer Q3", type="primary", disabled=scoped.empty or fail_count > 0):
+    if run_submit and fail_count == 0 and not scoped.empty:
+        run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        t0 = perf_counter()
+        hourly_map: dict[tuple[str, int], pd.DataFrame] = {}
+        for _, row in scoped.iterrows():
+            c = str(row["country"])
+            y = int(row["year"])
+            h = load_hourly_safe(c, y)
+            if h is not None and not h.empty:
+                hourly_map[(c, y)] = h
+
+        res = run_q3(
+            annual,
+            hourly_map,
+            assumptions,
+            {"countries": selected, "years": list(range(years[0], years[1] + 1))},
+            run_id,
+        )
+        out_dir = export_module_result(res)
+        dt = perf_counter() - t0
+        st.session_state[RESULT_KEY] = {"res": res, "runtime_sec": dt, "out_dir": str(out_dir)}
+
+    payload = st.session_state.get(RESULT_KEY)
+    if not payload:
         return
 
-    run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    hourly_map: dict[tuple[str, int], pd.DataFrame] = {}
-    for _, row in scoped.iterrows():
-        c = str(row["country"])
-        y = int(row["year"])
-        try:
-            hourly_map[(c, y)] = load_hourly(c, y)
-        except Exception:
-            continue
-
-    res = run_q3(
-        annual,
-        hourly_map,
-        assumptions,
-        {"countries": selected, "years": sorted(scoped["year"].dropna().astype(int).unique().tolist())},
-        run_id,
-    )
-    out_dir = export_module_result(res)
-
+    res = payload["res"]
     out = res.tables["Q3_status"]
 
-    st.markdown("## 3) Tests empiriques")
-    st.dataframe(out, use_container_width=True)
+    st.markdown("## Tests empiriques")
+    with st.expander("Voir details techniques", expanded=False):
+        st.dataframe(out, use_container_width=True)
 
-    st.markdown("## 4) Resultats et interpretation")
+    st.markdown("## Resultats et interpretation")
+    show_kpi_cards(
+        [
+            ("Pays analyses", res.kpis.get("n_countries", 0), "Nombre de pays avec resultat Q3."),
+            ("Amelioration", res.kpis.get("n_amelioration", 0), "Pays en amelioration sur la fenetre retenue."),
+            ("Temps calcul (s)", f"{payload['runtime_sec']:.2f}", "Temps total de calcul."),
+        ]
+    )
+
     if not out.empty:
+        d = out.copy()
+        d["status_label"] = d["status"].map(STATUS_LABELS).fillna(d["status"])
+
         st.plotly_chart(
             px.scatter(
-                out,
+                d,
                 x="inversion_k_demand",
                 y="inversion_r_mustrun",
-                color="status",
+                color="status_label",
                 hover_name="country",
-                title="Contre-factuels inversion demande vs must-run",
+                title="Ordres de grandeur: demande additionnelle vs reduction must-run",
             ),
             use_container_width=True,
         )
+
         st.plotly_chart(
             px.bar(
-                out.sort_values("additional_absorbed_needed_TWh_year", ascending=False),
+                d.sort_values("additional_absorbed_needed_TWh_year", ascending=False),
                 x="country",
                 y="additional_absorbed_needed_TWh_year",
-                color="status",
+                color="status_label",
                 title="Flex additionnelle requise (TWh/an)",
             ),
             use_container_width=True,
         )
 
+        st.markdown("### Lecture business des statuts")
+        for _, row in d.sort_values("country").iterrows():
+            st.markdown(
+                f"- **{row['country']}**: {row['status_label']} | k_demande={row['inversion_k_demand']:.2%} | r_must-run={row['inversion_r_mustrun']:.2%}"
+            )
+
     st.markdown("### Lecture simple")
     st.markdown(res.narrative_md)
 
-    st.markdown("## 5) Limites et risques de lecture")
-    st.markdown(
-        """
-- Les contre-factuels sont statiques et unidimensionnels.
-- Les interactions investissement/prix/reseau ne sont pas modelisees.
-- Le resultat ne remplace pas une trajectoire industrielle.
-- La qualite des donnees annuelles conditionne la robustesse des trends.
-"""
+    st.warning("Ces contre-factuels sont statiques et ne representent pas une trajectoire d'investissement complete.")
+
+    show_limitations(
+        [
+            "Les interactions prix-investissement-reseau ne sont pas modelees.",
+            "Les ordres de grandeur dependent de l'annee de reference.",
+            "Une serie horaire manquante reduit la couverture Q3.",
+            "Les statuts restent sensibles aux seuils de tendance.",
+        ]
     )
 
-    st.markdown("## 6) Checks et exports")
-    st.dataframe(pd.DataFrame(res.checks), use_container_width=True)
+    st.markdown("## Checks & exports")
+    show_checks_summary(res.checks)
     if res.warnings:
         st.warning(" | ".join(res.warnings))
-    st.code(str(out_dir))
+    st.code(payload["out_dir"])

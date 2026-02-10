@@ -1,45 +1,54 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime
+from time import perf_counter
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from app.page_utils import assumptions_editor_for, load_annual_metrics
-from src.modules.q5_thermal_anchor import Q5_PARAMS, load_commodity_daily, run_q5
+from app.page_utils import assumptions_editor_for, load_annual_metrics, load_commodity_daily_ui, load_hourly_safe
+from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
+from src.config_loader import load_countries
+from src.modules.q5_thermal_anchor import Q5_PARAMS, run_q5
 from src.modules.result import export_module_result
-from src.storage import load_hourly
+
+
+RESULT_KEY = "q5_last_result"
 
 
 def _load_hourly_range(country: str, years: list[int]) -> pd.DataFrame:
-    chunks = []
+    chunks: list[pd.DataFrame] = []
     for y in years:
-        try:
-            h = load_hourly(country, y)
-            h = h.copy()
-            h["year"] = y
-            chunks.append(h)
-        except Exception:
+        h = load_hourly_safe(country, y)
+        if h is None or h.empty:
             continue
+        hx = h.copy()
+        hx["year"] = y
+        chunks.append(hx)
     if not chunks:
         return pd.DataFrame()
     return pd.concat(chunks, axis=0).sort_index()
 
 
 def render() -> None:
-    st.title("Q5 - Impact CO2 / Gaz sur ancre thermique")
+    inject_theme()
+    guided_header(
+        title="Q5 - Impact CO2 / Gaz sur ancre thermique",
+        purpose="Mesurer comment CO2 et gaz deplacent l'ancre thermique et estimer un CO2 requis pour une cible TTL.",
+        step_now="Q5: sensibilite ancre thermique",
+        step_next="Conclusions: synthese complete des modules",
+    )
 
-    st.markdown(
-        """
-## 1) Question business
-Mesurer comment CO2 et gaz deplacent l'ancre thermique (TCA) et ce que cela implique pour TTL hors surplus.
+    st.markdown("## Question business")
+    st.markdown("En quoi le CO2 et le gaz impactent-ils l'ancre thermique et quel CO2 est requis pour remonter le haut de courbe ?")
 
-### Definitions express
-- `TCA`: cout marginal thermique simplifie (fuel/eff + CO2*EF/eff + VOM).
-- `TTL`: Q95 du prix sur regimes C/D.
-- `alpha`: ecart TTL observe - TCA Q95.
-"""
+    show_definitions(
+        [
+            ("TCA", "Ancre cout thermique simplifiee: fuel/eff + CO2*EF/eff + VOM."),
+            ("TTL", "Q95 des prix sur regimes C/D (hors surplus)."),
+            ("alpha", "Ecart TTL observe - TCA Q95."),
+        ]
     )
 
     annual = load_annual_metrics()
@@ -48,86 +57,109 @@ Mesurer comment CO2 et gaz deplacent l'ancre thermique (TCA) et ce que cela impl
         return
 
     countries = sorted(annual["country"].dropna().unique().tolist())
-    country = st.selectbox("Pays", countries)
+    countries_cfg = load_countries().get("countries", {})
+
     y_min = int(annual["year"].min())
     y_max = int(annual["year"].max())
-    year_range = st.slider("Periode historique", min_value=y_min, max_value=y_max, value=(max(y_min, 2021), y_max))
 
-    marginal = st.selectbox("Technologie marginale", ["CCGT", "COAL"])
-    ttl_target = st.number_input("TTL cible (EUR/MWh)", value=120.0, step=5.0)
+    with st.form("q5_form"):
+        country = st.selectbox("Pays", countries)
+        year_range = st.slider("Periode historique", min_value=y_min, max_value=y_max, value=(max(y_min, 2021), y_max))
+        default_marginal = str(countries_cfg.get(country, {}).get("thermal", {}).get("marginal_tech", "CCGT")).upper()
+        marginal = st.selectbox("Technologie marginale", ["CCGT", "COAL"], index=0 if default_marginal == "CCGT" else 1)
+        ttl_target = st.number_input("TTL cible (EUR/MWh)", value=120.0, step=5.0)
 
-    gas_override_enabled = st.checkbox("Override gas")
-    gas_override_val = st.number_input("Gas override EUR/MWh_th", value=40.0, step=1.0) if gas_override_enabled else None
-    co2_override_enabled = st.checkbox("Override CO2")
-    co2_override_val = st.number_input("CO2 override EUR/t", value=80.0, step=1.0) if co2_override_enabled else None
+        gas_override_enabled = st.checkbox("Override gaz")
+        gas_override_val = st.number_input("Gaz override (EUR/MWh_th)", value=40.0, step=1.0) if gas_override_enabled else None
 
-    st.markdown("## 2) Hypotheses et sources")
+        co2_override_enabled = st.checkbox("Override CO2")
+        co2_override_val = st.number_input("CO2 override (EUR/t)", value=80.0, step=1.0) if co2_override_enabled else None
+
+        run_submit = st.form_submit_button("Executer Q5", type="primary")
+
+    st.markdown("## Hypotheses utilisees")
     assumptions = assumptions_editor_for(Q5_PARAMS, "q5")
 
     years = list(range(year_range[0], year_range[1] + 1))
-    hourly = _load_hourly_range(country, years)
-    if hourly.empty:
-        st.info("Donnees horaires absentes pour la periode selectionnee.")
-        return
-
     scoped = annual[(annual["country"] == country) & (annual["year"].isin(years))]
     fail_count = int((scoped["quality_flag"] == "FAIL").sum()) if not scoped.empty else 0
     if fail_count > 0:
         st.error(f"{fail_count} ligne(s) quality_flag=FAIL. Conclusions bloquees.")
+
+    if run_submit and fail_count == 0:
+        hourly = _load_hourly_range(country, years)
+        if hourly.empty:
+            st.info("Donnees horaires absentes pour la periode selectionnee.")
+            return
+
+        commodities = load_commodity_daily_ui()
+        if commodities is None or commodities.empty:
+            st.warning("Serie commodities absente ou invalide: Q5 fonctionne en mode desactive avec diagnostics seulement.")
+
+        run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        t0 = perf_counter()
+        res = run_q5(
+            hourly_df=hourly,
+            assumptions_df=assumptions,
+            selection={"country": country, "marginal_tech": marginal},
+            run_id=run_id,
+            commodity_daily=commodities,
+            ttl_target_eur_mwh=float(ttl_target),
+            gas_override_eur_mwh_th=gas_override_val,
+            co2_override_eur_t=co2_override_val,
+        )
+        out_dir = export_module_result(res)
+        dt = perf_counter() - t0
+        st.session_state[RESULT_KEY] = {"res": res, "runtime_sec": dt, "out_dir": str(out_dir)}
+
+    payload = st.session_state.get(RESULT_KEY)
+    if not payload:
         return
 
-    if not st.button("Executer Q5", type="primary"):
-        return
-
-    run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    commodities = load_commodity_daily()
-    res = run_q5(
-        hourly_df=hourly,
-        assumptions_df=assumptions,
-        selection={"country": country, "marginal_tech": marginal},
-        run_id=run_id,
-        commodity_daily=commodities,
-        ttl_target_eur_mwh=ttl_target,
-        gas_override_eur_mwh_th=gas_override_val,
-        co2_override_eur_t=co2_override_val,
-    )
-    out_dir = export_module_result(res)
-
+    res = payload["res"]
     summary = res.tables["Q5_summary"]
 
-    st.markdown("## 3) Tests empiriques")
-    st.dataframe(summary, use_container_width=True)
+    st.markdown("## Tests empiriques")
+    with st.expander("Voir details techniques", expanded=False):
+        st.dataframe(summary, use_container_width=True)
 
-    st.markdown("## 4) Resultats et interpretation")
+    st.markdown("## Resultats et interpretation")
+    show_kpi_cards(
+        [
+            ("TTL observe", f"{res.kpis.get('ttl_obs', float('nan')):.2f}", "Q95 prix sur regimes C/D."),
+            ("Corr prix-TCA", f"{res.kpis.get('corr_cd', float('nan')):.3f}", "Cohesion empirique entre prix et ancre thermique."),
+            ("Temps calcul (s)", f"{payload['runtime_sec']:.2f}", "Temps de calcul du module."),
+        ]
+    )
+
     if not summary.empty:
         row = summary.iloc[0]
-        st.write(
-            f"Sensibilite: +10 EUR/t CO2 -> +{10 * float(row['dTCA_dCO2']):.2f} EUR/MWh ; +10 EUR/MWh_th gaz -> +{10 * float(row['dTCA_dGas']):.2f} EUR/MWh"
-        )
+        dco2 = float(row.get("dTCA_dCO2", float("nan")))
+        dgas = float(row.get("dTCA_dGas", float("nan")) )
+        st.info(f"Sensibilite immediate: +10 EUR/t CO2 => +{10*dco2:.2f} EUR/MWh | +10 EUR/MWh_th gaz => +{10*dgas:.2f} EUR/MWh")
 
         plot_df = pd.DataFrame(
             {
                 "variable": ["ttl_obs", "tca_q95", "alpha"],
-                "value": [float(row["ttl_obs"]), float(row["tca_q95"]), float(row["alpha"])],
+                "value": [float(row.get("ttl_obs", float("nan"))), float(row.get("tca_q95", float("nan"))), float(row.get("alpha", float("nan")))],
             }
         )
-        st.plotly_chart(px.bar(plot_df, x="variable", y="value", title="TTL, TCA Q95 et alpha"), use_container_width=True)
+        st.plotly_chart(px.bar(plot_df, x="variable", y="value", title="TTL observe, TCA Q95 et alpha"), use_container_width=True)
 
     st.markdown("### Lecture simple")
     st.markdown(res.narrative_md)
 
-    st.markdown("## 5) Limites et risques de lecture")
-    st.markdown(
-        """
-- Resultat en ordre de grandeur, sensible au choix techno marginale.
-- Hypothese alpha stable simplifiee.
-- Corr faible prix/TCA => conclusion CO2 requise fragile.
-- Ne capture pas tous les effets hydro/interconnexions/contraintes reseau.
-"""
+    show_limitations(
+        [
+            "Resultat en ordre de grandeur, sensible au choix de techno marginale.",
+            "L'hypothese alpha stable simplifie la realite des regimes de prix.",
+            "Une corr prix-TCA faible fragilise l'estimation du CO2 requis.",
+            "Les effets hydro/interconnexions/contraintes reseau ne sont pas explicitement modeles.",
+        ]
     )
 
-    st.markdown("## 6) Checks et exports")
-    st.dataframe(pd.DataFrame(res.checks), use_container_width=True)
+    st.markdown("## Checks & exports")
+    show_checks_summary(res.checks)
     if res.warnings:
         st.warning(" | ".join(res.warnings))
-    st.code(str(out_dir))
+    st.code(payload["out_dir"])

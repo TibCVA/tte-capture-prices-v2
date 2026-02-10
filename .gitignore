@@ -20,3 +20,6 @@ reports/*.tmp.md
 
 # Streamlit caches
 .streamlit/cache/
+
+# Derived compute caches
+data/cache/q4/

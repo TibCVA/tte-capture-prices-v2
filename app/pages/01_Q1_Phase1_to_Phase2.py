@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from time import perf_counter
 from datetime import datetime
 
 import pandas as pd
@@ -7,30 +8,34 @@ import plotly.express as px
 import streamlit as st
 
 from app.page_utils import assumptions_editor_for, load_annual_metrics
+from app.ui_components import guided_header, inject_theme, show_checks_summary, show_definitions, show_kpi_cards, show_limitations
 from src.modules.q1_transition import Q1_PARAMS, run_q1
 from src.modules.result import export_module_result
 
 
-def _definitions_block() -> None:
-    st.markdown("""
-### Definitions express
-- `SR`: part d'energie en surplus sur l'annee.
-- `FAR`: part du surplus absorbee par la flex observee.
-- `IR`: rigidite du systeme en creux de charge.
-- `TTL`: queue haute des prix hors surplus (regimes C/D).
-- `Capture ratio PV vs TTL`: valeur captee PV relative a l'ancre hors surplus.
-""")
+RESULT_KEY = "q1_last_result"
 
 
 def render() -> None:
-    st.title("Q1 - Passage Phase 1 -> Phase 2")
+    inject_theme()
+    guided_header(
+        title="Q1 - Passage Phase 1 vers Phase 2",
+        purpose="Identifier l'annee de bascule par pays et expliquer les drivers dominants.",
+        step_now="Q1: detecter la bascule",
+        step_next="Q2: mesurer la pente post-bascule",
+    )
 
-    st.markdown("""
-## 1) Question business
-Identifier quand la bascule vers Phase 2 se produit, avec un diagnostic marche et un diagnostic physique.
-""")
+    st.markdown("## Question business")
+    st.markdown("Quels parametres expliquent le passage de la phase 1 a la phase 2 ?")
 
-    _definitions_block()
+    show_definitions(
+        [
+            ("SR", "Part d'energie en surplus sur l'annee."),
+            ("FAR", "Part du surplus absorbee par la flexibilite."),
+            ("IR", "Rigidite du systeme en creux de charge."),
+            ("Capture ratio PV vs TTL", "Valeur captee par le PV relative a l'ancre hors surplus."),
+        ]
+    )
 
     annual = load_annual_metrics()
     if annual.empty:
@@ -38,12 +43,15 @@ Identifier quand la bascule vers Phase 2 se produit, avec un diagnostic marche e
         return
 
     countries = sorted(annual["country"].dropna().unique().tolist())
-    selected_countries = st.multiselect("Pays", countries, default=countries)
     year_min = int(annual["year"].min())
     year_max = int(annual["year"].max())
-    years = st.slider("Annees", min_value=year_min, max_value=year_max, value=(year_min, year_max))
 
-    st.markdown("## 2) Hypotheses et sources")
+    with st.form("q1_form"):
+        selected_countries = st.multiselect("Pays", countries, default=countries)
+        years = st.slider("Periode", min_value=year_min, max_value=year_max, value=(year_min, year_max))
+        run_submit = st.form_submit_button("Executer Q1", type="primary")
+
+    st.markdown("## Hypotheses utilisees")
     assumptions = assumptions_editor_for(Q1_PARAMS, "q1")
 
     scoped = annual[
@@ -51,78 +59,79 @@ Identifier quand la bascule vers Phase 2 se produit, avec un diagnostic marche e
     ].copy()
     fail_count = int((scoped["quality_flag"] == "FAIL").sum()) if not scoped.empty else 0
     if fail_count > 0:
-        st.error(
-            f"{fail_count} ligne(s) quality_flag=FAIL dans la selection. Conclusions bloquees tant que ces donnees ne sont pas corrigees."
-        )
+        st.error(f"{fail_count} ligne(s) quality_flag=FAIL dans la selection. Conclusions bloquees.")
 
-    run_clicked = st.button("Executer Q1", type="primary", disabled=scoped.empty or fail_count > 0)
-    if not run_clicked:
+    if run_submit and fail_count == 0 and not scoped.empty:
+        run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        sel = {"countries": selected_countries, "years": list(range(years[0], years[1] + 1))}
+        t0 = perf_counter()
+        res = run_q1(annual, assumptions, sel, run_id)
+        out_dir = export_module_result(res)
+        dt = perf_counter() - t0
+        st.session_state[RESULT_KEY] = {"res": res, "runtime_sec": dt, "out_dir": str(out_dir)}
+
+    payload = st.session_state.get(RESULT_KEY)
+    if not payload:
         return
 
-    run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    sel = {
-        "countries": selected_countries,
-        "years": list(range(years[0], years[1] + 1)),
-    }
-    res = run_q1(annual, assumptions, sel, run_id)
-    out_dir = export_module_result(res)
-
-    st.markdown("## 3) Tests empiriques")
+    res = payload["res"]
     panel = res.tables["Q1_year_panel"]
-    st.dataframe(
-        panel[
-            [
-                "country",
-                "year",
-                "phase_market",
-                "stress_phys_state",
-                "stage2_market_score",
-                "flag_h_negative_stage2",
-                "flag_capture_stage2",
-                "flag_sr_stress",
-                "flag_far_tension",
-            ]
-        ],
-        use_container_width=True,
+    summary = res.tables["Q1_country_summary"]
+
+    st.markdown("## Tests empiriques")
+    with st.expander("Voir details techniques", expanded=False):
+        st.dataframe(
+            panel[
+                [
+                    "country",
+                    "year",
+                    "phase_market",
+                    "stress_phys_state",
+                    "stage2_market_score",
+                    "flag_h_negative_stage2",
+                    "flag_capture_stage2",
+                    "flag_sr_stress",
+                    "flag_far_tension",
+                ]
+            ],
+            use_container_width=True,
+        )
+
+    st.markdown("## Resultats et interpretation")
+    show_kpi_cards(
+        [
+            ("Pays analyses", res.kpis.get("n_countries", 0), "Nombre de pays pris en compte."),
+            ("Bascules marche", res.kpis.get("n_bascule_market", 0), "Nombre de pays avec bascule marche detectee."),
+            ("Temps calcul (s)", f"{payload['runtime_sec']:.2f}", "Temps de calcul de ce module."),
+        ]
     )
 
-    st.markdown("## 4) Resultats et interpretation")
-    summary = res.tables["Q1_country_summary"]
     st.dataframe(summary, use_container_width=True)
 
     if not panel.empty:
         st.plotly_chart(
-            px.scatter(panel, x="sr_energy", y="capture_ratio_pv_vs_ttl", color="country", title="capture_ratio_pv_vs_ttl vs SR"),
+            px.scatter(panel, x="sr_energy", y="capture_ratio_pv_vs_ttl", color="country", title="Capture ratio PV vs SR"),
             use_container_width=True,
         )
         st.plotly_chart(
-            px.scatter(panel, x="sr_hours", y="h_negative_obs", color="country", title="h_negative vs SR_hours"),
-            use_container_width=True,
-        )
-        st.plotly_chart(
-            px.scatter(panel, x="sr_energy", y="far_energy", color="h_negative_obs", title="SR vs FAR (couleur=h_negative)"),
-            use_container_width=True,
-        )
-        st.plotly_chart(
-            px.scatter(panel, x="ir_p10", y="capture_ratio_pv_vs_ttl", color="sr_energy", title="capture_ratio vs IR (couleur=SR)"),
+            px.scatter(panel, x="sr_hours", y="h_negative_obs", color="country", title="Heures negatives vs SR heures"),
             use_container_width=True,
         )
 
     st.markdown("### Lecture simple")
     st.markdown(res.narrative_md)
 
-    st.markdown("## 5) Limites et risques de lecture")
-    st.markdown(
-        """
-- La bascule est un diagnostic empirique, pas une preuve causale.
-- Les resultats dependent du perimetre must-run et de la qualite des prix.
-- Un regime_coherence faible fragilise l'interpretation causale.
-- Les seuils sont parametriques et doivent etre documentes run par run.
-"""
+    show_limitations(
+        [
+            "La bascule reste un diagnostic empirique, pas une preuve causale.",
+            "Les seuils et le perimetre must-run influencent le verdict.",
+            "Un regime_coherence faible rend l'interpretation plus fragile.",
+            "Les conclusions sont bloquees si quality_flag=FAIL.",
+        ]
     )
 
-    st.markdown("## 6) Checks et exports")
-    st.dataframe(pd.DataFrame(res.checks), use_container_width=True)
+    st.markdown("## Checks & exports")
+    show_checks_summary(res.checks)
     if res.warnings:
         st.warning(" | ".join(res.warnings))
-    st.code(str(out_dir))
+    st.code(payload["out_dir"])

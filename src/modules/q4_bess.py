@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from time import perf_counter
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
 
+from src.hash_utils import hash_object
 from src.modules.common import assumptions_subset
 from src.modules.result import ModuleResult
 
@@ -18,6 +21,9 @@ Q4_PARAMS = [
     "target_far",
     "target_surplus_unabs_energy_twh",
 ]
+
+Q4_ENGINE_VERSION = "v2.1.0"
+Q4_CACHE_BASE = Path("data/cache/q4")
 
 
 @dataclass
@@ -46,134 +52,253 @@ def _ensure_ts_index(df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
         if out.index.tz is None:
             out.index = out.index.tz_localize("UTC")
-        return out
+        return out.sort_index()
     if "timestamp_utc" in df.columns:
         out = df.copy()
         out["timestamp_utc"] = pd.to_datetime(out["timestamp_utc"], errors="coerce", utc=True)
         out = out.dropna(subset=["timestamp_utc"]).set_index("timestamp_utc")
-        return out
+        return out.sort_index()
     raise ValueError("Hourly dataframe must have DatetimeIndex or timestamp_utc.")
 
 
-def _daily_sets(day_df: pd.DataFrame, duration_h: float) -> tuple[set[pd.Timestamp], set[pd.Timestamp]]:
-    n = max(1, int(np.ceil(duration_h)))
-    low = set(day_df["price_da_eur_mwh"].nsmallest(min(n, len(day_df))).index)
-    high = set(day_df["price_da_eur_mwh"].nlargest(min(n, len(day_df))).index)
-    return low, high
+def _to_float_array(df: pd.DataFrame, col: str) -> np.ndarray:
+    if col not in df.columns:
+        return np.zeros(len(df), dtype=np.float64)
+    return pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=np.float64, na_value=np.nan)
 
 
-def _simulate_dispatch(df: pd.DataFrame, cfg: BessConfig, dispatch_mode: str) -> tuple[pd.DataFrame, dict[str, float]]:
-    out = _ensure_ts_index(df)
-    out = out.sort_index().copy()
+def _day_slices(ts_index: pd.DatetimeIndex) -> list[tuple[int, int]]:
+    day_key = ts_index.tz_convert("UTC").floor("D").view("int64")
+    if len(day_key) == 0:
+        return []
+    breaks = np.flatnonzero(np.r_[True, day_key[1:] != day_key[:-1], True])
+    slices: list[tuple[int, int]] = []
+    for i in range(len(breaks) - 1):
+        slices.append((int(breaks[i]), int(breaks[i + 1])))
+    return slices
 
-    for c in ["surplus_mw", "surplus_unabsorbed_mw", "nrl_mw", "gen_solar_mw", "price_da_eur_mwh", "flex_sink_observed_mw"]:
-        if c not in out.columns:
-            out[c] = 0.0
-        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
 
-    soc = cfg.soc_init_frac * cfg.energy_mwh
-    charge = np.zeros(len(out), dtype=float)
-    discharge = np.zeros(len(out), dtype=float)
-    soc_series = np.zeros(len(out), dtype=float)
+def _precompute_low_high_masks(price: np.ndarray, day_ranges: list[tuple[int, int]], duration_values: list[float]) -> dict[float, tuple[np.ndarray, np.ndarray]]:
+    out: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+    n_total = int(len(price))
+    for d in duration_values:
+        k = max(1, int(np.ceil(float(d))))
+        low_mask = np.zeros(n_total, dtype=bool)
+        high_mask = np.zeros(n_total, dtype=bool)
+        for start, end in day_ranges:
+            segment = price[start:end]
+            finite = np.isfinite(segment)
+            if not finite.any():
+                continue
+            finite_idx = np.nonzero(finite)[0]
+            vals = segment[finite]
+            k_eff = min(k, len(vals))
+            order = np.argsort(vals)
+            low_local = finite_idx[order[:k_eff]]
+            high_local = finite_idx[order[-k_eff:]]
+            low_mask[start + low_local] = True
+            high_mask[start + high_local] = True
+        out[float(d)] = (low_mask, high_mask)
+    return out
 
-    idx_by_day = pd.Series(np.arange(len(out)), index=out.index).groupby(out.index.tz_convert("UTC").floor("D"))
-    max_daily_throughput = max(0.0, cfg.max_cycles_per_day) * cfg.energy_mwh
 
-    for _, idx_positions in idx_by_day:
-        pos = list(idx_positions.values)
-        day = out.iloc[pos]
-        low_set, high_set = _daily_sets(day, cfg.duration_h)
-        daily_charge_in = 0.0
-        daily_discharge_out = 0.0
+def _simulate_dispatch_arrays(
+    price: np.ndarray,
+    surplus: np.ndarray,
+    surplus_unabs: np.ndarray,
+    pv: np.ndarray,
+    flex_sink_observed: np.ndarray,
+    day_ranges: list[tuple[int, int]],
+    masks_by_duration: dict[float, tuple[np.ndarray, np.ndarray]],
+    cfg: BessConfig,
+    dispatch_mode: str,
+) -> dict[str, np.ndarray | float]:
+    n = len(price)
+    charge = np.zeros(n, dtype=np.float64)
+    discharge = np.zeros(n, dtype=np.float64)
+    soc_series = np.zeros(n, dtype=np.float64)
 
-        for i in pos:
-            ts = out.index[i]
-            price = float(out.iloc[i]["price_da_eur_mwh"])
-            surplus_unabs = float(out.iloc[i]["surplus_unabsorbed_mw"])
-            pv = max(0.0, float(out.iloc[i]["gen_solar_mw"]))
+    low_mask, high_mask = masks_by_duration[float(cfg.duration_h)]
 
+    soc = float(cfg.soc_init_frac * cfg.energy_mwh)
+    eta_c = float(cfg.eta_charge)
+    eta_d = float(cfg.eta_discharge)
+    pmax = float(cfg.power_mw)
+    emax = float(cfg.energy_mwh)
+    max_daily_throughput = max(0.0, float(cfg.max_cycles_per_day)) * emax
+
+    for start, end in day_ranges:
+        daily_charge = 0.0
+        daily_discharge = 0.0
+
+        for i in range(start, end):
             desired_charge = 0.0
             desired_discharge = 0.0
 
             if dispatch_mode == "SURPLUS_FIRST":
-                if surplus_unabs > 0:
-                    desired_charge = surplus_unabs
-                if ts in high_set:
-                    desired_discharge = cfg.power_mw
+                if surplus_unabs[i] > 0.0:
+                    desired_charge = surplus_unabs[i]
+                if high_mask[i]:
+                    desired_discharge = pmax
             elif dispatch_mode == "PRICE_ARBITRAGE_SIMPLE":
-                if ts in low_set:
-                    desired_charge = cfg.power_mw
-                elif ts in high_set:
-                    desired_discharge = cfg.power_mw
+                if low_mask[i]:
+                    desired_charge = pmax
+                elif high_mask[i]:
+                    desired_discharge = pmax
             elif dispatch_mode == "PV_COLOCATED":
-                if pv > 0:
-                    desired_charge = min(cfg.power_mw, pv)
-                if ts in high_set:
-                    desired_discharge = cfg.power_mw
+                if pv[i] > 0.0:
+                    desired_charge = min(pmax, pv[i])
+                if high_mask[i]:
+                    desired_discharge = pmax
             else:
                 raise ValueError(f"Unknown dispatch_mode={dispatch_mode}")
 
             if max_daily_throughput > 0:
-                remaining_charge = max(0.0, max_daily_throughput - daily_charge_in)
-                remaining_discharge = max(0.0, max_daily_throughput - daily_discharge_out)
+                remaining_charge = max(0.0, max_daily_throughput - daily_charge)
+                remaining_discharge = max(0.0, max_daily_throughput - daily_discharge)
             else:
                 remaining_charge = 0.0
                 remaining_discharge = 0.0
 
             ch = min(
-                cfg.power_mw,
+                pmax,
                 desired_charge,
-                max(0.0, (cfg.energy_mwh - soc) / cfg.eta_charge),
+                max(0.0, (emax - soc) / eta_c),
                 remaining_charge,
             )
-            soc += ch * cfg.eta_charge
-            daily_charge_in += ch
+            soc += ch * eta_c
+            daily_charge += ch
 
             dis = min(
-                cfg.power_mw,
+                pmax,
                 desired_discharge,
-                max(0.0, soc * cfg.eta_discharge),
+                max(0.0, soc * eta_d),
                 remaining_discharge,
             )
-            soc -= dis / cfg.eta_discharge
-            daily_discharge_out += dis
+            soc -= dis / eta_d
+            daily_discharge += dis
 
-            soc = min(max(soc, 0.0), cfg.energy_mwh)
+            if soc < 0.0:
+                soc = 0.0
+            elif soc > emax:
+                soc = emax
+
             charge[i] = ch
             discharge[i] = dis
             soc_series[i] = soc
 
-    out["bess_charge_mw"] = charge
-    out["bess_discharge_mw"] = discharge
-    out["bess_soc_mwh"] = soc_series
-    out["flex_effective_mw_after"] = out["flex_sink_observed_mw"] + out["bess_charge_mw"]
-    out["surplus_absorbed_mw_after"] = np.minimum(out["surplus_mw"], out["flex_effective_mw_after"])
-    out["surplus_unabsorbed_mw_after"] = (out["surplus_mw"] - out["surplus_absorbed_mw_after"]).clip(lower=0.0)
+    flex_after = flex_sink_observed + charge
+    absorbed_after = np.minimum(surplus, flex_after)
+    unabs_after = np.maximum(0.0, surplus - absorbed_after)
+    price_clean = np.where(np.isfinite(price), price, 0.0)
+    revenue = float(np.sum((discharge - charge) * price_clean))
 
-    diag = {
-        "soc_min": float(out["bess_soc_mwh"].min()),
-        "soc_max": float(out["bess_soc_mwh"].max()),
-        "charge_max": float(out["bess_charge_mw"].max()),
-        "discharge_max": float(out["bess_discharge_mw"].max()),
-        "charge_sum": float(out["bess_charge_mw"].sum()),
-        "discharge_sum": float(out["bess_discharge_mw"].sum()),
+    return {
+        "charge": charge,
+        "discharge": discharge,
+        "soc": soc_series,
+        "absorbed_after": absorbed_after,
+        "unabs_after": unabs_after,
+        "revenue": revenue,
+        "soc_min": float(np.min(soc_series)) if len(soc_series) else 0.0,
+        "soc_max": float(np.max(soc_series)) if len(soc_series) else 0.0,
+        "charge_max": float(np.max(charge)) if len(charge) else 0.0,
+        "discharge_max": float(np.max(discharge)) if len(discharge) else 0.0,
+        "charge_sum": float(np.sum(charge)),
+        "discharge_sum": float(np.sum(discharge)),
     }
-    return out, diag
 
 
-def _compute_far(surplus: pd.Series, absorbed: pd.Series) -> float:
-    s = float(pd.to_numeric(surplus, errors="coerce").fillna(0.0).sum())
-    a = float(pd.to_numeric(absorbed, errors="coerce").fillna(0.0).sum())
+def _compute_far_array(surplus: np.ndarray, absorbed: np.ndarray) -> float:
+    s = float(np.nansum(np.where(np.isfinite(surplus), surplus, 0.0)))
+    a = float(np.nansum(np.where(np.isfinite(absorbed), absorbed, 0.0)))
     return np.nan if s <= 0.0 else a / s
 
 
-def _pv_capture(price: pd.Series, pv: pd.Series) -> float:
-    p = pd.to_numeric(price, errors="coerce")
-    g = pd.to_numeric(pv, errors="coerce").fillna(0.0)
-    den = float(g.sum())
+def _pv_capture(price: np.ndarray, pv: np.ndarray) -> float:
+    p = np.where(np.isfinite(price), price, 0.0)
+    g = np.where(np.isfinite(pv), pv, 0.0)
+    den = float(np.sum(g))
     if den <= 0:
         return np.nan
-    return float((p * g).sum()) / den
+    return float(np.sum(p * g)) / den
+
+
+def _selection_grids(selection: dict[str, Any]) -> tuple[list[float], list[float]]:
+    default_power_grid = [0.0, 200.0, 500.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0]
+    default_duration_grid = [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
+    power_grid = [float(x) for x in selection.get("power_grid", default_power_grid)]
+    duration_grid = [float(x) for x in selection.get("duration_grid", default_duration_grid)]
+    power_grid = sorted(set([x for x in power_grid if x >= 0.0]))
+    duration_grid = sorted(set([x for x in duration_grid if x > 0.0]))
+    if not power_grid:
+        power_grid = [0.0]
+    if not duration_grid:
+        duration_grid = [1.0]
+    return power_grid, duration_grid
+
+
+def _hourly_signature(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "empty"
+    payload: dict[str, Any] = {
+        "rows": int(len(df)),
+        "ts_min": str(df.index.min()),
+        "ts_max": str(df.index.max()),
+    }
+    for col in ["surplus_mw", "surplus_unabsorbed_mw", "gen_solar_mw", "price_da_eur_mwh", "flex_sink_observed_mw"]:
+        if col in df.columns:
+            s = pd.to_numeric(df[col], errors="coerce")
+            payload[f"sum_{col}"] = float(np.nan_to_num(s.to_numpy(dtype=float), nan=0.0).sum())
+            payload[f"mean_{col}"] = float(s.mean(skipna=True)) if s.notna().any() else np.nan
+    return hash_object(payload)[:20]
+
+
+def _assumption_hash(
+    assumptions_df: pd.DataFrame,
+    dispatch_mode: str,
+    objective: str,
+    power_grid: list[float],
+    duration_grid: list[float],
+    data_signature: str,
+) -> str:
+    sub = assumptions_subset(assumptions_df, Q4_PARAMS)
+    payload = {
+        "engine_version": Q4_ENGINE_VERSION,
+        "dispatch_mode": dispatch_mode,
+        "objective": objective,
+        "power_grid": power_grid,
+        "duration_grid": duration_grid,
+        "data_signature": data_signature,
+        "assumptions": sub,
+    }
+    return hash_object(payload)[:20]
+
+
+def _cache_paths(country: str, year: int, dispatch_mode: str, assumption_hash: str) -> tuple[Path, Path]:
+    base = Q4_CACHE_BASE / str(country) / str(year) / str(dispatch_mode)
+    return base / f"{assumption_hash}.parquet", base / f"{assumption_hash}.meta.json"
+
+
+def _save_cache(frontier: pd.DataFrame, frontier_path: Path, meta_path: Path, meta: dict[str, Any]) -> None:
+    frontier_path.parent.mkdir(parents=True, exist_ok=True)
+    frontier.to_parquet(frontier_path, index=False)
+    import json
+
+    with meta_path.open("w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2, default=str)
+
+
+def _load_cache(frontier_path: Path, meta_path: Path) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    if not frontier_path.exists():
+        return None, {}
+    frontier = pd.read_parquet(frontier_path)
+    meta: dict[str, Any] = {}
+    if meta_path.exists():
+        import json
+
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    return frontier, meta
 
 
 def run_q4(
@@ -182,7 +307,10 @@ def run_q4(
     selection: dict[str, Any],
     run_id: str,
     dispatch_mode: str = "SURPLUS_FIRST",
+    progress_callback: Callable[[str, float], None] | None = None,
 ) -> ModuleResult:
+    t_start = perf_counter()
+
     params = {
         str(r["param_name"]): float(r["param_value"])
         for _, r in assumptions_df[assumptions_df["param_name"].isin(Q4_PARAMS)].iterrows()
@@ -197,81 +325,171 @@ def run_q4(
     if objective not in {"FAR_TARGET", "SURPLUS_UNABS_TARGET"}:
         objective = "FAR_TARGET"
 
-    base = _ensure_ts_index(hourly_df)
-    base_far = _compute_far(base["surplus_mw"], base["surplus_absorbed_mw"])
-    unabs_before_twh = float(pd.to_numeric(base["surplus_unabsorbed_mw"], errors="coerce").fillna(0.0).sum()) / 1e6
-    pv_before = _pv_capture(base["price_da_eur_mwh"], base["gen_solar_mw"])
+    power_grid, duration_grid = _selection_grids(selection)
+    force_recompute = bool(selection.get("force_recompute", False))
 
-    default_power_grid = [0.0, 200.0, 500.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0]
-    default_duration_grid = [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
-    power_grid = [float(x) for x in selection.get("power_grid", default_power_grid)]
-    duration_grid = [float(x) for x in selection.get("duration_grid", default_duration_grid)]
-    rows: list[dict[str, Any]] = []
+    base = _ensure_ts_index(hourly_df)
+    data_signature = _hourly_signature(base)
+
+    country = str(selection.get("country", ""))
+    year = int(selection.get("year", 0))
+    assumption_hash = _assumption_hash(
+        assumptions_df=assumptions_df,
+        dispatch_mode=dispatch_mode,
+        objective=objective,
+        power_grid=power_grid,
+        duration_grid=duration_grid,
+        data_signature=data_signature,
+    )
+    frontier_path, meta_path = _cache_paths(country, year, dispatch_mode, assumption_hash)
+
+    if progress_callback:
+        progress_callback("Initialisation Q4", 0.02)
+
+    frontier: pd.DataFrame
+    cache_hit = False
+    cached_frontier, cached_meta = (None, {})
+    if not force_recompute:
+        cached_frontier, cached_meta = _load_cache(frontier_path, meta_path)
+    if cached_frontier is not None:
+        frontier = cached_frontier.copy()
+        cache_hit = True
+        if "engine_version" not in frontier.columns:
+            frontier["engine_version"] = str(cached_meta.get("engine_version", Q4_ENGINE_VERSION))
+        if "compute_time_sec" not in frontier.columns:
+            frontier["compute_time_sec"] = float(cached_meta.get("compute_time_sec", 0.0))
+        frontier["cache_hit"] = True
+        if progress_callback:
+            progress_callback("Chargement cache Q4", 0.95)
+    else:
+        for c in ["surplus_mw", "surplus_unabsorbed_mw", "gen_solar_mw", "price_da_eur_mwh", "flex_sink_observed_mw", "surplus_absorbed_mw"]:
+            if c not in base.columns:
+                base[c] = 0.0
+
+        price = _to_float_array(base, "price_da_eur_mwh")
+        surplus = np.where(np.isfinite(_to_float_array(base, "surplus_mw")), _to_float_array(base, "surplus_mw"), 0.0)
+        surplus_unabs = np.where(np.isfinite(_to_float_array(base, "surplus_unabsorbed_mw")), _to_float_array(base, "surplus_unabsorbed_mw"), 0.0)
+        pv = np.where(np.isfinite(_to_float_array(base, "gen_solar_mw")), _to_float_array(base, "gen_solar_mw"), 0.0)
+        flex_sink_observed = np.where(np.isfinite(_to_float_array(base, "flex_sink_observed_mw")), _to_float_array(base, "flex_sink_observed_mw"), 0.0)
+        absorbed_base = np.where(np.isfinite(_to_float_array(base, "surplus_absorbed_mw")), _to_float_array(base, "surplus_absorbed_mw"), 0.0)
+
+        base_far = _compute_far_array(surplus, absorbed_base)
+        unabs_before_twh = float(np.sum(surplus_unabs) / 1e6)
+        pv_before = _pv_capture(price, pv)
+        day_ranges = _day_slices(base.index)
+
+        if progress_callback:
+            progress_callback("Pre-calcul des structures journalieres", 0.10)
+
+        masks_by_duration = _precompute_low_high_masks(price, day_ranges, duration_grid)
+
+        rows: list[dict[str, Any]] = []
+        total_scenarios = max(1, len(power_grid) * len(duration_grid))
+        scenario_idx = 0
+
+        for p in power_grid:
+            for d in duration_grid:
+                scenario_idx += 1
+                if progress_callback:
+                    progress_callback(
+                        f"Simulation scenario {scenario_idx}/{total_scenarios}",
+                        0.10 + 0.78 * (scenario_idx / total_scenarios),
+                    )
+
+                cfg = BessConfig(
+                    power_mw=float(p),
+                    duration_h=float(d),
+                    eta_roundtrip=eta_rt,
+                    soc_init_frac=soc_init,
+                    max_cycles_per_day=max_cycles_day,
+                )
+                sim = _simulate_dispatch_arrays(
+                    price=price,
+                    surplus=surplus,
+                    surplus_unabs=surplus_unabs,
+                    pv=pv,
+                    flex_sink_observed=flex_sink_observed,
+                    day_ranges=day_ranges,
+                    masks_by_duration=masks_by_duration,
+                    cfg=cfg,
+                    dispatch_mode=dispatch_mode,
+                )
+
+                far_after = _compute_far_array(surplus, sim["absorbed_after"])
+                unabs_after_twh = float(np.sum(sim["unabs_after"]) / 1e6)
+                revenue = float(sim["revenue"])
+
+                if dispatch_mode == "PV_COLOCATED":
+                    pv_to_grid = np.maximum(0.0, pv - sim["charge"])
+                    pv_shifted = sim["discharge"]
+                    delivered = pv_to_grid + pv_shifted
+                    den = float(np.sum(delivered))
+                    pv_after = np.nan if den <= 0 else float(np.sum(np.where(np.isfinite(price), price, 0.0) * delivered) / den)
+                else:
+                    pv_after = pv_before
+
+                rows.append(
+                    {
+                        "dispatch_mode": dispatch_mode,
+                        "objective": objective,
+                        "required_bess_power_mw": cfg.power_mw,
+                        "required_bess_energy_mwh": cfg.energy_mwh,
+                        "required_bess_duration_h": cfg.duration_h,
+                        "far_before": base_far,
+                        "far_after": far_after,
+                        "surplus_unabs_energy_before": unabs_before_twh,
+                        "surplus_unabs_energy_after": unabs_after_twh,
+                        "pv_capture_price_before": pv_before,
+                        "pv_capture_price_after": pv_after,
+                        "revenue_bess_price_taker": revenue,
+                        "soc_min": float(sim["soc_min"]),
+                        "soc_max": float(sim["soc_max"]),
+                        "charge_max": float(sim["charge_max"]),
+                        "discharge_max": float(sim["discharge_max"]),
+                        "charge_sum_mwh": float(sim["charge_sum"]),
+                        "discharge_sum_mwh": float(sim["discharge_sum"]),
+                        "initial_deliverable_mwh": cfg.soc_init_frac * cfg.energy_mwh * cfg.eta_discharge,
+                    }
+                )
+
+        frontier = pd.DataFrame(rows)
+        if frontier.empty:
+            return ModuleResult(
+                module_id="Q4",
+                run_id=run_id,
+                selection=selection,
+                assumptions_used=assumptions_subset(assumptions_df, Q4_PARAMS),
+                kpis={},
+                tables={"Q4_sizing_summary": pd.DataFrame(), "Q4_bess_frontier": pd.DataFrame()},
+                figures=[],
+                narrative_md="Q4 impossible: aucune simulation produite.",
+                checks=[{"status": "FAIL", "code": "Q4_EMPTY", "message": "Aucune simulation Q4."}],
+                warnings=["Aucune simulation Q4."],
+            )
+
+        compute_time_sec = float(perf_counter() - t_start)
+        frontier["engine_version"] = Q4_ENGINE_VERSION
+        frontier["compute_time_sec"] = compute_time_sec
+        frontier["cache_hit"] = False
+        _save_cache(
+            frontier=frontier,
+            frontier_path=frontier_path,
+            meta_path=meta_path,
+            meta={
+                "engine_version": Q4_ENGINE_VERSION,
+                "compute_time_sec": compute_time_sec,
+                "assumption_hash": assumption_hash,
+                "data_signature": data_signature,
+                "dispatch_mode": dispatch_mode,
+                "country": country,
+                "year": year,
+            },
+        )
+        if progress_callback:
+            progress_callback("Aggregation et sauvegarde cache Q4", 0.92)
+
     checks: list[dict[str, str]] = []
     warnings: list[str] = []
-
-    for p in power_grid:
-        for d in duration_grid:
-            cfg = BessConfig(
-                power_mw=float(p),
-                duration_h=float(d),
-                eta_roundtrip=eta_rt,
-                soc_init_frac=soc_init,
-                max_cycles_per_day=max_cycles_day,
-            )
-            sim, diag = _simulate_dispatch(base, cfg, dispatch_mode=dispatch_mode)
-
-            far_after = _compute_far(sim["surplus_mw"], sim["surplus_absorbed_mw_after"])
-            unabs_after_twh = float(sim["surplus_unabsorbed_mw_after"].sum()) / 1e6
-            revenue = float((sim["bess_discharge_mw"] * sim["price_da_eur_mwh"] - sim["bess_charge_mw"] * sim["price_da_eur_mwh"]).sum())
-
-            if dispatch_mode == "PV_COLOCATED":
-                pv_to_grid = (pd.to_numeric(base["gen_solar_mw"], errors="coerce").fillna(0.0) - sim["bess_charge_mw"]).clip(lower=0.0)
-                pv_shifted = sim["bess_discharge_mw"]
-                delivered = pv_to_grid + pv_shifted
-                den = float(delivered.sum())
-                pv_after = np.nan if den <= 0 else float((base["price_da_eur_mwh"] * delivered).sum()) / den
-            else:
-                pv_after = pv_before
-
-            rows.append(
-                {
-                    "dispatch_mode": dispatch_mode,
-                    "objective": objective,
-                    "required_bess_power_mw": cfg.power_mw,
-                    "required_bess_energy_mwh": cfg.energy_mwh,
-                    "required_bess_duration_h": cfg.duration_h,
-                    "far_before": base_far,
-                    "far_after": far_after,
-                    "surplus_unabs_energy_before": unabs_before_twh,
-                    "surplus_unabs_energy_after": unabs_after_twh,
-                    "pv_capture_price_before": pv_before,
-                    "pv_capture_price_after": pv_after,
-                    "revenue_bess_price_taker": revenue,
-                    "soc_min": diag["soc_min"],
-                    "soc_max": diag["soc_max"],
-                    "charge_max": diag["charge_max"],
-                    "discharge_max": diag["discharge_max"],
-                    "charge_sum_mwh": diag["charge_sum"],
-                    "discharge_sum_mwh": diag["discharge_sum"],
-                    "initial_deliverable_mwh": cfg.soc_init_frac * cfg.energy_mwh * cfg.eta_discharge,
-                }
-            )
-
-    frontier = pd.DataFrame(rows)
-    if frontier.empty:
-        return ModuleResult(
-            module_id="Q4",
-            run_id=run_id,
-            selection=selection,
-            assumptions_used=assumptions_subset(assumptions_df, Q4_PARAMS),
-            kpis={},
-            tables={"Q4_sizing_summary": pd.DataFrame(), "Q4_bess_frontier": pd.DataFrame()},
-            figures=[],
-            narrative_md="Q4 impossible: aucune simulation produite.",
-            checks=[{"status": "FAIL", "code": "Q4_EMPTY", "message": "Aucune simulation Q4."}],
-            warnings=["Aucune simulation Q4."],
-        )
 
     # Hard invariants
     if (frontier["soc_min"] < -1e-6).any():
@@ -282,7 +500,11 @@ def run_q4(
         checks.append({"status": "FAIL", "code": "Q4_CHARGE_ABOVE_PMAX", "message": "Charge > Pmax detectee."})
     if (frontier["discharge_max"] - frontier["required_bess_power_mw"] > 1e-6).any():
         checks.append({"status": "FAIL", "code": "Q4_DISCHARGE_ABOVE_PMAX", "message": "Decharge > Pmax detectee."})
-    if (frontier["discharge_sum_mwh"] - (frontier["charge_sum_mwh"] * eta_rt + frontier["initial_deliverable_mwh"]) > 1e-3).any():
+    if (
+        frontier["discharge_sum_mwh"]
+        - (frontier["charge_sum_mwh"] * eta_rt + frontier["initial_deliverable_mwh"])
+        > 1e-3
+    ).any():
         checks.append({"status": "FAIL", "code": "Q4_ENERGY_BALANCE", "message": "Energie dechargee > energie chargee * eta."})
 
     if dispatch_mode == "SURPLUS_FIRST":
@@ -291,7 +513,13 @@ def run_q4(
         for d in duration_grid:
             subset = frontier[frontier["required_bess_duration_h"] == d].sort_values("required_bess_power_mw")
             if len(subset) >= 2 and (subset["far_after"].diff().dropna() < -1e-8).any():
-                checks.append({"status": "FAIL", "code": "Q4_FAR_NON_MONOTONIC", "message": f"FAR diminue quand la puissance augmente (duration={d}h)."})
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q4_FAR_NON_MONOTONIC",
+                        "message": f"FAR diminue quand la puissance augmente (duration={d}h).",
+                    }
+                )
 
     # Objective satisfaction
     if objective == "FAR_TARGET":
@@ -302,6 +530,7 @@ def run_q4(
         feasible = frontier[frontier["surplus_unabs_energy_after"] <= target_unabs].sort_values(
             ["required_bess_power_mw", "required_bess_energy_mwh"]
         )
+
     if feasible.empty:
         if objective == "FAR_TARGET":
             best = frontier.sort_values(["far_after", "required_bess_power_mw"], ascending=[False, True]).iloc[0]
@@ -314,8 +543,8 @@ def run_q4(
     summary = pd.DataFrame(
         [
             {
-                "country": selection.get("country", ""),
-                "year": selection.get("year", ""),
+                "country": country,
+                "year": year,
                 **best.to_dict(),
                 "notes_quality": "ok",
             }
@@ -327,8 +556,14 @@ def run_q4(
     if float(summary["required_bess_duration_h"].iloc[0]) > 8.0:
         warnings.append("Besoin de stockage long (>8h): batterie courte potentiellement insuffisante.")
 
+    if cache_hit:
+        checks.append({"status": "INFO", "code": "Q4_CACHE_HIT", "message": "Resultat charge depuis cache persistant Q4."})
     if not checks:
         checks.append({"status": "PASS", "code": "Q4_PASS", "message": "Q4 invariants et checks passes."})
+
+    total_time = float(perf_counter() - t_start)
+    if progress_callback:
+        progress_callback("Q4 termine", 1.0)
 
     narrative = (
         "Q4 estime un ordre de grandeur BESS sur historique avec dispatch explicite. "
@@ -338,9 +573,16 @@ def run_q4(
     return ModuleResult(
         module_id="Q4",
         run_id=run_id,
-        selection=selection,
+        selection={**selection, "dispatch_mode": dispatch_mode},
         assumptions_used=assumptions_subset(assumptions_df, Q4_PARAMS),
-        kpis={"best_far_after": float(summary["far_after"].iloc[0]), "objective": objective},
+        kpis={
+            "best_far_after": float(summary["far_after"].iloc[0]),
+            "objective": objective,
+            "compute_time_sec": total_time,
+            "cache_hit": cache_hit,
+            "engine_version": Q4_ENGINE_VERSION,
+            "assumption_hash": assumption_hash,
+        },
         tables={"Q4_sizing_summary": summary, "Q4_bess_frontier": frontier},
         figures=[],
         narrative_md=narrative,
