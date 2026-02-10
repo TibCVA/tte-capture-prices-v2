@@ -1,0 +1,56 @@
+run_id,question_id,test_id,source_ref,mode,scenario_id,status,value,threshold,interpretation,evidence_ref
+FULL_20260210_113139,Q1,Q1-H-01,SPEC2-Q1/Slides 2-4,HIST,nan,PASS,4.1020408163265305,score present,Le score de bascule marche est exploitable.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-H-01
+FULL_20260210_113139,Q1,Q1-H-02,SPEC2-Q1/Slides 3-4,HIST,nan,PASS,"far_energy,ir_p10,sr_energy",SR/FAR/IR presents,Le stress physique est calculable.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-H-02
+FULL_20260210_113139,Q1,Q1-H-03,SPEC2-Q1,HIST,nan,WARN,42.86%,>=50%,Concordance mesuree entre bascules marche et physique.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-H-03
+FULL_20260210_113139,Q1,Q1-H-04,Slides 4-6,HIST,nan,PASS,0.914,confidence moyenne >=0.60,Proxy de robustesse du diagnostic de bascule.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-H-04
+FULL_20260210_113139,Q1,Q1-S-01,SPEC2-Q1/Slides 5,SCEN,BASE,PASS,7,>0 lignes,La bascule projetee est produite.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-01
+FULL_20260210_113139,Q1,Q1-S-01,SPEC2-Q1/Slides 5,SCEN,DEMAND_UP,PASS,7,>0 lignes,La bascule projetee est produite.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-01
+FULL_20260210_113139,Q1,Q1-S-01,SPEC2-Q1/Slides 5,SCEN,FLEX_UP,PASS,7,>0 lignes,La bascule projetee est produite.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-01
+FULL_20260210_113139,Q1,Q1-S-01,SPEC2-Q1/Slides 5,SCEN,LOW_RIGIDITY,PASS,7,>0 lignes,La bascule projetee est produite.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-01
+FULL_20260210_113139,Q1,Q1-S-02,SPEC2-Q1/Slides 5,SCEN,BASE,PASS,7,>=1 bascule,Le scenario fournit une variation exploitable.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-02
+FULL_20260210_113139,Q1,Q1-S-02,SPEC2-Q1/Slides 5,SCEN,DEMAND_UP,PASS,7,>=1 bascule,Le scenario fournit une variation exploitable.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-02
+FULL_20260210_113139,Q1,Q1-S-02,SPEC2-Q1/Slides 5,SCEN,FLEX_UP,PASS,7,>=1 bascule,Le scenario fournit une variation exploitable.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-02
+FULL_20260210_113139,Q1,Q1-S-02,SPEC2-Q1/Slides 5,SCEN,LOW_RIGIDITY,PASS,7,>=1 bascule,Le scenario fournit une variation exploitable.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-02
+FULL_20260210_113139,Q1,Q1-S-03,SPEC2-Q1,SCEN,BASE,PASS,100.00%,>=50% lignes >=0.55,La coherence scenario est lisible.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-03
+FULL_20260210_113139,Q1,Q1-S-03,SPEC2-Q1,SCEN,DEMAND_UP,PASS,100.00%,>=50% lignes >=0.55,La coherence scenario est lisible.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-03
+FULL_20260210_113139,Q1,Q1-S-03,SPEC2-Q1,SCEN,FLEX_UP,PASS,100.00%,>=50% lignes >=0.55,La coherence scenario est lisible.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-03
+FULL_20260210_113139,Q1,Q1-S-03,SPEC2-Q1,SCEN,LOW_RIGIDITY,PASS,100.00%,>=50% lignes >=0.55,La coherence scenario est lisible.,outputs\combined\FULL_20260210_113139\Q1\test_ledger.csv#test_id=Q1-S-03
+FULL_20260210_113139,Q2,Q2-H-01,SPEC2-Q2/Slides 10,HIST,nan,PASS,14,>0 lignes,Les pentes historiques sont calculees.,outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-01
+FULL_20260210_113139,Q2,Q2-H-02,SPEC2-Q2/Slides 10-12,HIST,nan,PASS,"n,p_value,r2","r2,p_value,n disponibles",La robustesse statistique est lisible.,outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-02
+FULL_20260210_113139,Q2,Q2-H-03,Slides 10-13,HIST,nan,PASS,6,>0 lignes,Les drivers de pente sont disponibles.,outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-H-03
+FULL_20260210_113139,Q2,Q2-S-01,SPEC2-Q2/Slides 11,SCEN,BASE,PASS,14,>0 lignes,Pentes prospectives calculees.,outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01
+FULL_20260210_113139,Q2,Q2-S-01,SPEC2-Q2/Slides 11,SCEN,HIGH_CO2,PASS,14,>0 lignes,Pentes prospectives calculees.,outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01
+FULL_20260210_113139,Q2,Q2-S-01,SPEC2-Q2/Slides 11,SCEN,HIGH_GAS,PASS,14,>0 lignes,Pentes prospectives calculees.,outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-01
+FULL_20260210_113139,Q2,Q2-S-02,SPEC2-Q2,SCEN,BASE,WARN,0.00%,>=30% robustes,Delta de pente interpretable avec robustesse.,outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-02
+FULL_20260210_113139,Q2,Q2-S-02,SPEC2-Q2,SCEN,HIGH_CO2,WARN,0.00%,>=30% robustes,Delta de pente interpretable avec robustesse.,outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-02
+FULL_20260210_113139,Q2,Q2-S-02,SPEC2-Q2,SCEN,HIGH_GAS,WARN,0.00%,>=30% robustes,Delta de pente interpretable avec robustesse.,outputs\combined\FULL_20260210_113139\Q2\test_ledger.csv#test_id=Q2-S-02
+FULL_20260210_113139,Q3,Q3-H-01,SPEC2-Q3/Slides 16,HIST,nan,PASS,7,>0 lignes,Les tendances historiques sont calculees.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-H-01
+FULL_20260210_113139,Q3,Q3-H-02,SPEC2-Q3,HIST,nan,PASS,2,status valides,Les statuts business sont renseignes.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-H-02
+FULL_20260210_113139,Q3,Q3-S-01,SPEC2-Q3/Slides 17,SCEN,BASE,PASS,7,colonnes inversion presentes,Les ordres de grandeur d'inversion sont quantifies.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-S-01
+FULL_20260210_113139,Q3,Q3-S-01,SPEC2-Q3/Slides 17,SCEN,DEMAND_UP,PASS,7,colonnes inversion presentes,Les ordres de grandeur d'inversion sont quantifies.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-S-01
+FULL_20260210_113139,Q3,Q3-S-01,SPEC2-Q3/Slides 17,SCEN,FLEX_UP,PASS,7,colonnes inversion presentes,Les ordres de grandeur d'inversion sont quantifies.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-S-01
+FULL_20260210_113139,Q3,Q3-S-01,SPEC2-Q3/Slides 17,SCEN,LOW_RIGIDITY,PASS,7,colonnes inversion presentes,Les ordres de grandeur d'inversion sont quantifies.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-S-01
+FULL_20260210_113139,Q3,Q3-S-02,Slides 17-19,SCEN,BASE,PASS,1,status renseignes,La lecture de transition phase 3 est possible.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-S-02
+FULL_20260210_113139,Q3,Q3-S-02,Slides 17-19,SCEN,DEMAND_UP,PASS,1,status renseignes,La lecture de transition phase 3 est possible.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-S-02
+FULL_20260210_113139,Q3,Q3-S-02,Slides 17-19,SCEN,FLEX_UP,PASS,1,status renseignes,La lecture de transition phase 3 est possible.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-S-02
+FULL_20260210_113139,Q3,Q3-S-02,Slides 17-19,SCEN,LOW_RIGIDITY,PASS,1,status renseignes,La lecture de transition phase 3 est possible.,outputs\combined\FULL_20260210_113139\Q3\test_ledger.csv#test_id=Q3-S-02
+FULL_20260210_113139,Q4,Q4-H-01,SPEC2-Q4/Slides 22,HIST,nan,PASS,"HIST_PRICE_ARBITRAGE_SIMPLE,HIST_PV_COLOCATED",3 modes executes,Les trois modes Q4 sont disponibles.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-H-01
+FULL_20260210_113139,Q4,Q4-H-02,SPEC2-Q4,HIST,nan,PASS,PASS,pas de FAIL,Les invariants physiques batterie sont respectes.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-H-02
+FULL_20260210_113139,Q4,Q4-S-01,SPEC2-Q4/Slides 23,SCEN,BASE,PASS,1,>0 lignes,Resultats Q4 prospectifs disponibles.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-S-01
+FULL_20260210_113139,Q4,Q4-S-01,SPEC2-Q4/Slides 23,SCEN,FLEX_UP,PASS,1,>0 lignes,Resultats Q4 prospectifs disponibles.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-S-01
+FULL_20260210_113139,Q4,Q4-S-01,SPEC2-Q4/Slides 23,SCEN,HIGH_CO2,PASS,1,>0 lignes,Resultats Q4 prospectifs disponibles.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-S-01
+FULL_20260210_113139,Q4,Q4-S-01,SPEC2-Q4/Slides 23,SCEN,HIGH_GAS,PASS,1,>0 lignes,Resultats Q4 prospectifs disponibles.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-S-01
+FULL_20260210_113139,Q4,Q4-S-02,Slides 23-25,SCEN,BASE,PASS,1318.7589939342624,capture apres finite,Sensibilite valeur exploitable.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-S-02
+FULL_20260210_113139,Q4,Q4-S-02,Slides 23-25,SCEN,FLEX_UP,PASS,1317.042435494933,capture apres finite,Sensibilite valeur exploitable.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-S-02
+FULL_20260210_113139,Q4,Q4-S-02,Slides 23-25,SCEN,HIGH_CO2,PASS,1336.2811724552707,capture apres finite,Sensibilite valeur exploitable.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-S-02
+FULL_20260210_113139,Q4,Q4-S-02,Slides 23-25,SCEN,HIGH_GAS,PASS,1356.6039238995759,capture apres finite,Sensibilite valeur exploitable.,outputs\combined\FULL_20260210_113139\Q4\test_ledger.csv#test_id=Q4-S-02
+FULL_20260210_113139,Q5,Q5-H-01,SPEC2-Q5/Slides 28,HIST,nan,PASS,"ttl=419.95, tca=370.83959999999996",ttl/tca finis,L'ancre thermique est quantifiable.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-H-01
+FULL_20260210_113139,Q5,Q5-H-02,SPEC2-Q5,HIST,nan,PASS,"dCO2=0.36727272727272725, dGas=1.8181818181818181",>0,Sensibilites analytiques coherentes.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-H-02
+FULL_20260210_113139,Q5,Q5-S-01,SPEC2-Q5/Slides 29,SCEN,BASE,PASS,1,>0 lignes,Sensibilites scenario calculees.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-S-01
+FULL_20260210_113139,Q5,Q5-S-01,SPEC2-Q5/Slides 29,SCEN,HIGH_CO2,PASS,1,>0 lignes,Sensibilites scenario calculees.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-S-01
+FULL_20260210_113139,Q5,Q5-S-01,SPEC2-Q5/Slides 29,SCEN,HIGH_GAS,PASS,1,>0 lignes,Sensibilites scenario calculees.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-S-01
+FULL_20260210_113139,Q5,Q5-S-01,SPEC2-Q5/Slides 29,SCEN,HIGH_BOTH,PASS,1,>0 lignes,Sensibilites scenario calculees.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-S-01
+FULL_20260210_113139,Q5,Q5-S-02,SPEC2-Q5/Slides 31,SCEN,BASE,PASS,-10168.862806747053,valeur finie,CO2 requis interpretable.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-S-02
+FULL_20260210_113139,Q5,Q5-S-02,SPEC2-Q5/Slides 31,SCEN,HIGH_CO2,PASS,-10177.062869892936,valeur finie,CO2 requis interpretable.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-S-02
+FULL_20260210_113139,Q5,Q5-S-02,SPEC2-Q5/Slides 31,SCEN,HIGH_GAS,PASS,-10308.637127318678,valeur finie,CO2 requis interpretable.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-S-02
+FULL_20260210_113139,Q5,Q5-S-02,SPEC2-Q5/Slides 31,SCEN,HIGH_BOTH,PASS,-10113.862806747053,valeur finie,CO2 requis interpretable.,outputs\combined\FULL_20260210_113139\Q5\test_ledger.csv#test_id=Q5-S-02
