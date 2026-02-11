@@ -1,4 +1,4 @@
-# LLM Audit Protocol (DE, ES) - FULL_20260211_000820
+# LLM Audit Protocol (DE, ES) - FULL_20260211_081242
 
 Use this protocol to review analytical consistency country-by-country and question-by-question.
 

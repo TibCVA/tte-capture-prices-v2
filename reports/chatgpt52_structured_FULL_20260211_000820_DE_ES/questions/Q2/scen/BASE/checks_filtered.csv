@@ -1,2 +1,5 @@
 status,code,message,question_id,mentioned_countries,is_global
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,Q2,ES,False
 PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q2,,True

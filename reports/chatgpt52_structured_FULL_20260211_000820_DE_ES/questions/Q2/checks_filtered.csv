@@ -1,12 +1,21 @@
 status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
-WARN,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
-WARN,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
-INFO,Q2_LOW_R2,DE-WIND: R2 faible (0.06).,HIST,,Q2,DE,False
-WARN,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,HIST,,Q2,ES,False
-WARN,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,HIST,,Q2,ES,False
-PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,HIST,,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+INFO,Q2_FRAGILE,ES-PV: n insuffisant pour robustesse pleine.,HIST,,Q2,ES,False
+WARN,Q2_UNLIKELY_SLOPE,ES-PV: pente atypique abs>0.2/an.,HIST,,Q2,ES,False
+INFO,Q2_FRAGILE,ES-WIND: n insuffisant pour robustesse pleine.,HIST,,Q2,ES,False
+WARN,Q2_UNLIKELY_SLOPE,ES-WIND: pente atypique abs>0.2/an.,HIST,,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,ES,False
 PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,ES,False
 PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_CO2,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,ES,False
 PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_GAS,Q2,,True
 PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q2,,True
-WARN,BUNDLE_INFORMATIVENESS,share_tests_informatifs=66.67% ; share_compare_informatifs=0.00%,BUNDLE,,Q2,,True
+PASS,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=71.43%,BUNDLE,,Q2,,True

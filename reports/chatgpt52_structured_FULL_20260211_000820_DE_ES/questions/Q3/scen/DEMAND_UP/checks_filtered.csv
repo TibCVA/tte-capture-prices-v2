@@ -1,2 +1,8 @@
 status,code,message,question_id,mentioned_countries,is_global
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,Q3,ES,False
 PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q3,,True

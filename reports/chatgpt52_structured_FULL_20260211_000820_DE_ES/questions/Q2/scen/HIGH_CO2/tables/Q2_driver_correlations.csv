@@ -1,7 +1,9 @@
-driver_name,corr_with_slope_pv,corr_with_slope_wind,n_countries
-mean_sr_energy_phase2,,,2
-mean_far_energy_phase2,,,2
-mean_ir_p10_phase2,,,2
-mean_ttl_phase2,,,2
-vre_load_corr_phase2,,,2
-surplus_load_trough_share_phase2,,,2
+driver_name,corr_with_slope_pv,corr_with_slope_wind,n_countries,expected_sign,sign_conflict_share
+exports_pos_share_proxy,-0.3517139325193385,-0.6363371662180553,7,1,0.4285714285714285
+far_energy,1.0,1.0,7,1,0.1428571428571428
+ir_p10,-0.3533569983877089,-0.6350013247467367,7,-1,0.5714285714285714
+nrl_p10_proxy,0.4569741429125918,0.6580615786718454,7,1,0.5714285714285714
+nrl_p50_proxy,0.4571446730864887,0.6583166375986749,7,1,0.5714285714285714
+nrl_p90_proxy,0.4571107270123318,0.6582556949738202,7,1,0.5714285714285714
+sr_energy,-1.0,-0.9999999999999998,7,-1,0.1428571428571428
+vre_penetration_share_gen,0.4665403337520834,0.6719459140301901,7,-1,0.4285714285714285
