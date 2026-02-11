@@ -9,10 +9,15 @@ import numpy as np
 import pandas as pd
 
 from src.constants import (
+    COL_BESS_DISCHARGE,
+    COL_GEN_HYDRO_PSH_GEN,
+    COL_GEN_MUST_RUN,
     COL_GEN_SOLAR,
     COL_GEN_TOTAL,
     COL_LOAD_NET,
+    COL_LOW_RESIDUAL_HOUR,
     COL_NRL,
+    COL_PSH_PUMP,
     COL_PRICE_DA,
     COL_REGIME,
     COL_SURPLUS,
@@ -42,6 +47,69 @@ class ValidationFinding:
 
 def _finding(severity: str, code: str, message: str, evidence: str, suggestion: str) -> ValidationFinding:
     return ValidationFinding(severity=severity, code=code, message=message, evidence=evidence, suggestion=suggestion)
+
+
+def _safe_float(v: Any, default: float = np.nan) -> float:
+    try:
+        out = float(v)
+    except Exception:
+        return float(default)
+    return out if np.isfinite(out) else float(default)
+
+
+def _possible_causes_neg_price_mismatch(df: pd.DataFrame, neg_mask: pd.Series) -> list[str]:
+    causes: list[tuple[float, str]] = []
+    if "gen_must_run_mw" in df.columns:
+        mr_missing_share = float(pd.to_numeric(df["gen_must_run_mw"], errors="coerce").isna().mean())
+        if mr_missing_share > 0.01:
+            causes.append((mr_missing_share, "donnees must_run manquantes"))
+    if "psh_pumping_data_status" in df.columns:
+        psh_status = str(df["psh_pumping_data_status"].dropna().iloc[0]).lower() if df["psh_pumping_data_status"].notna().any() else "missing"
+        if psh_status in {"missing", "partial"}:
+            causes.append((0.8 if psh_status == "missing" else 0.5, "donnees pompage STEP partielles/manquantes"))
+    if COL_PSH_PUMP in df.columns and COL_LOAD_NET in df.columns and "load_total_mw" in df.columns:
+        load_total = pd.to_numeric(df["load_total_mw"], errors="coerce").fillna(0.0)
+        load_net = pd.to_numeric(df[COL_LOAD_NET], errors="coerce").fillna(0.0)
+        psh = pd.to_numeric(df[COL_PSH_PUMP], errors="coerce").fillna(0.0)
+        lhs = float(load_total.sum())
+        rhs = float((load_net + psh).sum())
+        rel_gap = abs(lhs - rhs) / max(abs(lhs), 1e-9)
+        if rel_gap > 0.001:
+            causes.append((min(1.0, rel_gap * 10.0), "possible double comptage/mauvais netting du pompage STEP"))
+    if neg_mask.any():
+        reg = df[COL_REGIME].astype(str) if COL_REGIME in df.columns else pd.Series("", index=df.index)
+        neg_ab_share = float(((neg_mask) & reg.isin(["A", "B"])).sum()) / float(neg_mask.sum())
+        if neg_ab_share < 0.30:
+            causes.append((0.35 - neg_ab_share, "mapping prix/regimes possiblement incoherent"))
+    causes = sorted(causes, key=lambda x: x[0], reverse=True)
+    top = [c for _, c in causes[:3]]
+    if not top:
+        top = ["causes non conclusives (verifier mapping prix et donnees physiques)"]
+    return top
+
+
+def _corr(a: pd.Series, b: pd.Series) -> float:
+    x = pd.to_numeric(a, errors="coerce")
+    y = pd.to_numeric(b, errors="coerce")
+    tmp = pd.DataFrame({"x": x, "y": y}).dropna()
+    if len(tmp) < 12:
+        return float("nan")
+    return _safe_float(tmp["x"].corr(tmp["y"]), np.nan)
+
+
+def _must_run_monthly_zero(df: pd.DataFrame) -> bool:
+    mr = pd.to_numeric(df.get(COL_GEN_MUST_RUN), errors="coerce")
+    if mr.notna().sum() == 0:
+        return False
+    if isinstance(df.index, pd.DatetimeIndex):
+        idx = df.index
+        if idx.tz is None:
+            idx = idx.tz_localize("UTC")
+        month_key = idx.tz_convert("UTC").to_period("M")
+        by_month = mr.groupby(month_key).sum(min_count=1)
+        return bool((pd.to_numeric(by_month, errors="coerce").fillna(0.0).abs() <= 1e-6).all())
+    # Fallback when index is not datetime: treat as one bucket.
+    return bool(abs(float(mr.fillna(0.0).sum())) <= 1e-6)
 
 
 
@@ -116,16 +184,46 @@ def build_validation_report(df: pd.DataFrame, annual_metrics: dict[str, Any]) ->
     # Reality checks
     neg_total = int((df[COL_PRICE_DA] < 0).sum())
     if neg_total > 0:
-        neg_in_ab = int(((df[COL_PRICE_DA] < 0) & df[COL_REGIME].isin(["A", "B"])) .sum())
-        ratio = neg_in_ab / neg_total
-        if ratio < 0.50:
+        neg_mask = df[COL_PRICE_DA] < 0
+        regime = df[COL_REGIME].astype(str) if COL_REGIME in df.columns else pd.Series("", index=df.index)
+        low_residual = (
+            pd.to_numeric(df.get(COL_LOW_RESIDUAL_HOUR), errors="coerce").fillna(0.0) > 0
+            if COL_LOW_RESIDUAL_HOUR in df.columns
+            else pd.Series(False, index=df.index)
+        )
+        nrl = pd.to_numeric(df.get(COL_NRL), errors="coerce")
+        neg_in_ab = int((neg_mask & regime.isin(["A", "B"])).sum())
+        neg_in_ab_or_low = int((neg_mask & (regime.isin(["A", "B"]) | low_residual)).sum())
+        ratio_ab = neg_in_ab / neg_total
+        ratio_ab_or_low = neg_in_ab_or_low / neg_total
+
+        if ratio_ab < 0.50:
+            findings.append(
+                _finding(
+                    "INFO",
+                    "RC_NEG_NOT_IN_AB",
+                    "Negative prices are not mostly in regimes A/B (legacy strict check).",
+                    f"ratio_ab={ratio_ab:.3f}, neg_total={neg_total}",
+                    "Use AB_OR_LOW_RESIDUAL principal check for interpretation.",
+                )
+            )
+
+        if ratio_ab_or_low < 0.70:
+            neg_nrl = nrl[neg_mask]
+            nrl_p10 = _safe_float(neg_nrl.quantile(0.10), np.nan) if neg_nrl.notna().any() else np.nan
+            nrl_p50 = _safe_float(neg_nrl.quantile(0.50), np.nan) if neg_nrl.notna().any() else np.nan
+            nrl_p90 = _safe_float(neg_nrl.quantile(0.90), np.nan) if neg_nrl.notna().any() else np.nan
+            causes = _possible_causes_neg_price_mismatch(df, neg_mask)
             findings.append(
                 _finding(
                     "WARN",
-                    "RC_NEG_NOT_IN_SURPLUS",
-                    "Negative prices are not mostly in surplus regimes A/B",
-                    f"ratio={ratio:.3f}, neg_total={neg_total}",
-                    "Review must-run perimeter, PSH handling, and price-zone mapping.",
+                    "RC_NEG_NOT_IN_AB_OR_LOW_RESIDUAL",
+                    "Negative prices are not mostly explained by (A/B) or low residual load.",
+                    (
+                        f"ratio_ab_or_low_residual={ratio_ab_or_low:.3f}, ratio_ab={ratio_ab:.3f}, neg_total={neg_total}, "
+                        f"nrl_neg_p10={nrl_p10:.1f}, nrl_neg_p50={nrl_p50:.1f}, nrl_neg_p90={nrl_p90:.1f}, causes={'; '.join(causes)}"
+                    ),
+                    "Review must-run completeness, PSH netting and price-zone mapping.",
                 )
             )
 
@@ -144,6 +242,47 @@ def build_validation_report(df: pd.DataFrame, annual_metrics: dict[str, Any]) ->
     cap_ratio = annual_metrics.get("capture_ratio_pv")
     if np.isfinite(cap_ratio) and (cap_ratio < 0.2 or cap_ratio > 1.5):
         findings.append(_finding("WARN", "RC_CAPTURE_RATIO_PV", "PV capture ratio atypical", f"capture_ratio_pv={cap_ratio:.3f}", "Inspect prices, PV profile and anchors."))
+
+    # Must-run sanity checks
+    must_run = pd.to_numeric(df.get(COL_GEN_MUST_RUN), errors="coerce")
+    total_gen_num = pd.to_numeric(df.get(COL_GEN_TOTAL), errors="coerce")
+    if must_run.notna().sum() > 0 and total_gen_num.notna().sum() > 0:
+        must_run_twh = float(must_run.fillna(0.0).clip(lower=0.0).sum()) / 1e6
+        total_gen_twh = float(total_gen_num.fillna(0.0).clip(lower=0.0).sum()) / 1e6
+        mr_share = must_run_twh / total_gen_twh if total_gen_twh > 0 else np.nan
+        if np.isfinite(mr_share) and not (0.05 <= mr_share <= 0.60):
+            findings.append(
+                _finding(
+                    "WARN",
+                    "RC_MR_SHARE_IMPLAUSIBLE",
+                    "Must-run share outside plausible range [5%, 60%].",
+                    f"must_run_share={mr_share:.3f}, must_run_twh={must_run_twh:.3f}, total_gen_twh={total_gen_twh:.3f}",
+                    "Review must-run perimeter and component mapping.",
+                )
+            )
+    if _must_run_monthly_zero(df):
+        findings.append(
+            _finding(
+                "WARN",
+                "RC_MR_ALL_ZERO_MONTHS",
+                "Must-run is zero on all monthly buckets.",
+                "must_run_monthly_sum=0",
+                "Verify must-run construction and source mapping.",
+            )
+        )
+    if must_run.notna().sum() > 0:
+        corr_psh_gen = _corr(must_run, pd.to_numeric(df.get(COL_GEN_HYDRO_PSH_GEN), errors="coerce"))
+        corr_bess_dis = _corr(must_run, pd.to_numeric(df.get(COL_BESS_DISCHARGE), errors="coerce"))
+        if (np.isfinite(corr_psh_gen) and corr_psh_gen > 0.85) or (np.isfinite(corr_bess_dis) and corr_bess_dis > 0.85):
+            findings.append(
+                _finding(
+                    "WARN",
+                    "RC_MR_FLEX_OVERLAP",
+                    "Must-run may include flexible assets (PSH turbine / BESS discharge overlap).",
+                    f"corr_mr_psh_gen={corr_psh_gen:.3f}, corr_mr_bess_discharge={corr_bess_dis:.3f}",
+                    "Exclude flexible assets from must-run perimeter.",
+                )
+            )
 
     load_neg_share = float((df[COL_LOAD_NET] < 0).mean())
     if load_neg_share > 0.001:

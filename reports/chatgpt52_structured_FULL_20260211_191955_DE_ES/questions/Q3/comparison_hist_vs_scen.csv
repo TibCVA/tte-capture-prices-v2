@@ -1,0 +1,17 @@
+country,scenario_id,metric,hist_value,scen_value,delta,hist_status,scen_status,interpretability_status,interpretability_reason
+DE,BASE,inversion_k_demand,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+DE,BASE,inversion_r_mustrun,,,,CONTINUES,BACK_TO_STAGE1,NON_TESTABLE,delta_non_interpretable_nan
+ES,BASE,inversion_k_demand,0.0053734043843405,0.0,-0.0053734043843405,CONTINUES,STOP_CONFIRMED,INFORMATIVE,delta_interpretable
+ES,BASE,inversion_r_mustrun,,,,CONTINUES,STOP_CONFIRMED,NON_TESTABLE,delta_non_interpretable_nan
+DE,DEMAND_UP,inversion_k_demand,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+DE,DEMAND_UP,inversion_r_mustrun,,,,CONTINUES,BACK_TO_STAGE1,NON_TESTABLE,delta_non_interpretable_nan
+ES,DEMAND_UP,inversion_k_demand,0.0053734043843405,0.0,-0.0053734043843405,CONTINUES,STOP_CONFIRMED,INFORMATIVE,delta_interpretable
+ES,DEMAND_UP,inversion_r_mustrun,,,,CONTINUES,STOP_CONFIRMED,NON_TESTABLE,delta_non_interpretable_nan
+DE,FLEX_UP,inversion_k_demand,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+DE,FLEX_UP,inversion_r_mustrun,,,,CONTINUES,BACK_TO_STAGE1,NON_TESTABLE,delta_non_interpretable_nan
+ES,FLEX_UP,inversion_k_demand,0.0053734043843405,0.0,-0.0053734043843405,CONTINUES,STOP_CONFIRMED,INFORMATIVE,delta_interpretable
+ES,FLEX_UP,inversion_r_mustrun,,,,CONTINUES,STOP_CONFIRMED,NON_TESTABLE,delta_non_interpretable_nan
+DE,LOW_RIGIDITY,inversion_k_demand,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+DE,LOW_RIGIDITY,inversion_r_mustrun,,,,CONTINUES,BACK_TO_STAGE1,NON_TESTABLE,delta_non_interpretable_nan
+ES,LOW_RIGIDITY,inversion_k_demand,0.0053734043843405,0.0,-0.0053734043843405,CONTINUES,STOP_CONFIRMED,INFORMATIVE,delta_interpretable
+ES,LOW_RIGIDITY,inversion_r_mustrun,,,,CONTINUES,STOP_CONFIRMED,NON_TESTABLE,delta_non_interpretable_nan

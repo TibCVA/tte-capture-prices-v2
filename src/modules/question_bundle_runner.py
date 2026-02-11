@@ -1085,7 +1085,7 @@ def _evaluate_test_ledger(
                     status = "PASS" if not out.empty else "FAIL"
                     _append_test_row(rows, spec, status, int(len(out)), ">0 lignes", "Les tendances historiques sont calculees.")
                 else:
-                    allowed = {"HORS_SCOPE_PHASE2", "STOP_POSSIBLE", "PHASE2_IMPROVING", "PHASE2_ACTIVE"}
+                    allowed = {"HORS_SCOPE_PHASE2", "CONTINUES", "STOP_POSSIBLE", "STOP_CONFIRMED", "BACK_TO_STAGE1"}
                     ok = (not out.empty) and out["status"].astype(str).str.upper().isin(allowed).all()
                     _append_test_row(rows, spec, "PASS" if ok else "WARN", int(out["status"].nunique()) if not out.empty else 0, "status valides", "Les statuts business sont renseignes.")
             elif qid == "Q4":
@@ -1130,8 +1130,11 @@ def _evaluate_test_ledger(
                         _append_test_row(rows, spec, "FAIL", "", "summary non vide", "Q5 historique absent.")
                     else:
                         dco2 = pd.to_numeric(out["dTCA_dCO2"], errors="coerce") if "dTCA_dCO2" in out.columns else pd.Series(dtype=float)
-                        dgas = pd.to_numeric(out["dTCA_dGas"], errors="coerce") if "dTCA_dGas" in out.columns else pd.Series(dtype=float)
-                        ok_share = float(((dco2 > 0) & (dgas > 0)).mean()) if len(out) else 0.0
+                        if "dTCA_dFuel" in out.columns:
+                            dfuel = pd.to_numeric(out["dTCA_dFuel"], errors="coerce")
+                        else:
+                            dfuel = pd.to_numeric(out["dTCA_dGas"], errors="coerce") if "dTCA_dGas" in out.columns else pd.Series(dtype=float)
+                        ok_share = float(((dco2 > 0) & (dfuel > 0)).mean()) if len(out) else 0.0
                         status = "PASS" if ok_share == 1.0 else ("WARN" if ok_share > 0 else "FAIL")
                         _append_test_row(
                             rows,

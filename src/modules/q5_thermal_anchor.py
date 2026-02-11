@@ -266,6 +266,7 @@ def run_q5(
     ef = float(tech_meta["ef"])
     vom = float(tech_meta["vom"])
     fuel_mult = float(tech_meta["multiplier"])
+    fuel_used = "gas" if str(chosen_tech).upper() == "CCGT" else ("coal" if str(chosen_tech).upper() == "COAL" else "lignite")
 
     # Build hourly anchor on full panel for annual aggregation.
     h["ttl_anchor_eur_mwh"] = (
@@ -343,6 +344,8 @@ def run_q5(
     dist_error, p90_err, p95_err = _distributional_error(ref_hourly["price_da_eur_mwh"], ref_hourly["ttl_anchor_eur_mwh"])
 
     dco2 = ef / eff if eff > 0 else np.nan
+    dfuel = 1.0 / eff if eff > 0 else np.nan
+    # Backward-compatible gas-equivalent derivative for existing outputs/tests.
     dgas = fuel_mult / eff if eff > 0 else np.nan
 
     fuel_term_p95 = float((pd.to_numeric(ref_hourly["gas_price_eur_mwh_th"], errors="coerce") * fuel_mult / eff).quantile(0.95)) if not ref_hourly.empty else np.nan
@@ -369,8 +372,29 @@ def run_q5(
     warnings: list[str] = []
     if not (np.isfinite(dco2) and dco2 > 0):
         checks.append({"status": "FAIL", "code": "Q5_DCO2_SIGN", "message": "dTCA/dCO2 doit etre strictement positif."})
+    if not (np.isfinite(dfuel) and dfuel > 0):
+        checks.append({"status": "FAIL", "code": "Q5_DFUEL_SIGN", "message": "dTCA/dFuel doit etre strictement positif."})
+    # Legacy compatibility check.
     if not (np.isfinite(dgas) and dgas > 0):
-        checks.append({"status": "FAIL", "code": "Q5_DGAS_SIGN", "message": "dTCA/dGas doit etre strictement positif."})
+        checks.append({"status": "FAIL", "code": "Q5_DGAS_SIGN", "message": "dTCA/dGas (compat) doit etre strictement positif."})
+    eta_implicit = (1.0 / dfuel) if np.isfinite(dfuel) and dfuel > 0 else np.nan
+    ef_implicit_e = dco2
+    if np.isfinite(eta_implicit) and not (0.30 <= eta_implicit <= 0.65):
+        checks.append(
+            {
+                "status": "WARN",
+                "code": "Q5_IMPL_EFF_OUT_OF_RANGE",
+                "message": f"Rendement implicite hors plage [0.30,0.65]: eta={eta_implicit:.3f}.",
+            }
+        )
+    if np.isfinite(ef_implicit_e) and not (0.30 <= ef_implicit_e <= 1.10):
+        checks.append(
+            {
+                "status": "WARN",
+                "code": "Q5_IMPL_EF_OUT_OF_RANGE",
+                "message": f"EF implicite hors plage [0.30,1.10] tCO2/MWh_e: ef={ef_implicit_e:.3f}.",
+            }
+        )
     if np.isfinite(alpha) and alpha < 0.0 and anchor_status == "already_above_target":
         checks.append({"status": "INFO", "code": "Q5_ALPHA_NEGATIVE", "message": "Alpha negatif mais TTL deja au-dessus de la cible (lecture normale)."})
     elif np.isfinite(alpha) and alpha < 0.0:
@@ -412,6 +436,7 @@ def run_q5(
                 "ttl_reference_year": ref_year_used,
                 "marginal_tech": chosen_tech,
                 "chosen_anchor_tech": chosen_tech,
+                "fuel_used": fuel_used,
                 "ttl_obs": ttl_obs,
                 "ttl_obs_price_cd": ttl_obs,
                 "ttl_annual_metrics_same_year": _safe_float(
@@ -434,7 +459,10 @@ def run_q5(
                 "anchor_error_p95": p95_err,
                 "anchor_status": anchor_status,
                 "dTCA_dCO2": dco2,
+                "dTCA_dFuel": dfuel,
                 "dTCA_dGas": dgas,
+                "eta_implicit_from_dTCA_dFuel": eta_implicit,
+                "ef_implicit_t_per_mwh_e": ef_implicit_e,
                 "ttl_target": ttl_target,
                 "required_co2_eur_t": required_co2,
                 "required_gas_eur_mwh_th": required_gas,
@@ -464,6 +492,7 @@ def run_q5(
             "corr_cd": corr_cd,
             "anchor_distribution_error_p90_p95": dist_error,
             "dTCA_dCO2": dco2,
+            "dTCA_dFuel": dfuel,
             "dTCA_dGas": dgas,
         },
         tables={"Q5_summary": summary},

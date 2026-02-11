@@ -30,6 +30,9 @@ from src.constants import (
     COL_LOAD_TOTAL,
     COL_NRL,
     COL_PSH_PUMP,
+    COL_PSH_PUMP_ALIAS,
+    COL_PSH_PUMP_COVERAGE,
+    COL_PSH_PUMP_STATUS,
     COL_SURPLUS,
     COL_SURPLUS_ABSORBED,
     COL_SURPLUS_UNABS,
@@ -108,19 +111,11 @@ def resolve_load_and_pump(
 
     load_total = pd.to_numeric(load_total_mw, errors="coerce")
     psh = pd.to_numeric(psh_pump_mw, errors="coerce").clip(lower=0.0)
-    psh_missing_share = float(psh.isna().mean()) if len(psh) else 1.0
-    has_psh = bool(psh.notna().any())
-
-    if prefer_net_of_psh_pump and has_psh and psh_missing_share <= psh_missing_share_threshold:
-        psh_effective = psh.fillna(0.0)
-        load_net = load_total - psh_effective
-        load_net_mode = "net_of_psh_pump"
-    else:
-        psh_effective = pd.Series(0.0, index=load_total.index, dtype=float)
-        load_net = load_total.copy()
-        load_net_mode = "as_reported"
-
-    load_net = load_net.where(~(load_net < 0.0), np.nan)
+    # Non-negotiable definition:
+    # load_mw = load_total_mw - psh_pumping_mw, with explicit zero-fill when PSH is missing.
+    psh_effective = psh.fillna(0.0)
+    load_net = load_total - psh_effective
+    load_net_mode = "net_of_psh_pump"
     return load_net, psh_effective, load_net_mode
 
 
@@ -256,7 +251,19 @@ def compute_core_hourly_definitions(
     """Compute canonical load/VRE/must-run/NRL/surplus/flex definitions on an hourly panel."""
 
     load_total = _numeric_series(df, COL_LOAD_TOTAL, np.nan)
-    psh_pump_raw = _numeric_series(df, COL_PSH_PUMP, np.nan)
+    if COL_PSH_PUMP in df.columns:
+        psh_pump_raw = _numeric_series(df, COL_PSH_PUMP, np.nan)
+    elif COL_PSH_PUMP_ALIAS in df.columns:
+        psh_pump_raw = _numeric_series(df, COL_PSH_PUMP_ALIAS, np.nan)
+    else:
+        psh_pump_raw = pd.Series(np.nan, index=df.index, dtype=float)
+    psh_coverage_share = float(psh_pump_raw.notna().mean()) if len(psh_pump_raw) else 0.0
+    if psh_coverage_share <= 0.0:
+        psh_status = "missing"
+    elif psh_coverage_share >= 1.0:
+        psh_status = "ok"
+    else:
+        psh_status = "partial"
     load_mw, psh_pump_effective, load_mode = resolve_load_and_pump(
         load_total_mw=load_total,
         psh_pump_mw=psh_pump_raw,
@@ -305,6 +312,8 @@ def compute_core_hourly_definitions(
         COL_LOAD_NET: load_mw,
         COL_LOAD_NET_MODE: load_mode,
         COL_PSH_PUMP: psh_pump_effective,
+        COL_PSH_PUMP_COVERAGE: psh_coverage_share,
+        COL_PSH_PUMP_STATUS: psh_status,
         COL_GEN_VRE: vre_mw,
         "must_run_observed_mw": must_run.observed_mw,
         "must_run_floor_by_component_mw": must_run.floor_by_component_mw,
@@ -345,6 +354,7 @@ def sanity_check_core_definitions(df: pd.DataFrame, far_energy: float, sr_energy
     unabs = pd.to_numeric(df.get(COL_SURPLUS_UNABS), errors="coerce").fillna(0.0)
     mr = pd.to_numeric(df.get("gen_must_run_mw"), errors="coerce")
     load = pd.to_numeric(df.get(COL_LOAD_NET), errors="coerce")
+    load_total = pd.to_numeric(df.get(COL_LOAD_TOTAL), errors="coerce")
     exports = pd.to_numeric(df.get(COL_EXPORTS), errors="coerce").fillna(0.0).clip(lower=0.0)
     psh = pd.to_numeric(df.get(COL_PSH_PUMP), errors="coerce").fillna(0.0).clip(lower=0.0)
     curtailment_proxy = pd.to_numeric(df.get(COL_SURPLUS_UNABS), errors="coerce").fillna(0.0).clip(lower=0.0)
@@ -361,6 +371,17 @@ def sanity_check_core_definitions(df: pd.DataFrame, far_energy: float, sr_energy
     rhs = load.fillna(0.0) + exports + psh + curtailment_proxy
     if mr.notna().any() and ((mr.fillna(0.0) - rhs) > tol).any():
         issues.append("must_run_mw exceeds load+exports+psh+curtailment_proxy")
+
+    if load.notna().any() and (load < -tol).any():
+        issues.append("load_mw < 0")
+
+    if load_total.notna().any():
+        # Annual energy identity check against PSH de-netting.
+        lhs = float(load_total.fillna(0.0).sum())
+        rhs_energy = float(load.fillna(0.0).sum() + psh.fillna(0.0).sum())
+        tol_energy = max(1e-6, 0.001 * abs(lhs))
+        if abs(lhs - rhs_energy) > tol_energy:
+            issues.append("load_total_mw != load_mw + psh_pump_mw (energy)")
 
     surplus_sum = float(surplus.sum())
     unabs_sum = float(unabs.sum())

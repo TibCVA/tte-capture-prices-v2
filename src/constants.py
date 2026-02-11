@@ -38,6 +38,8 @@ COL_GEN_OTHER = "gen_other_mw"
 
 COL_PSH_PUMP = "psh_pump_mw"
 COL_PSH_PUMP_ALIAS = "psh_pumping_mw"
+COL_PSH_PUMP_COVERAGE = "psh_pumping_coverage_share"
+COL_PSH_PUMP_STATUS = "psh_pumping_data_status"
 
 COL_GEN_VRE = "gen_vre_mw"
 COL_GEN_TOTAL = "gen_total_mw"
@@ -47,6 +49,8 @@ COL_GEN_MUST_RUN = "gen_must_run_mw"
 
 COL_NRL = "nrl_mw"
 COL_NRL_POS = "nrl_pos_mw"
+COL_LOW_RESIDUAL_HOUR = "low_residual_hour"
+COL_LOW_RESIDUAL_THRESHOLD = "low_residual_threshold_mw"
 COL_SURPLUS = "surplus_mw"
 COL_FLEX_EXPORTS = "flex_sink_exports_mw"
 COL_FLEX_PSH = "flex_sink_psh_pump_mw"

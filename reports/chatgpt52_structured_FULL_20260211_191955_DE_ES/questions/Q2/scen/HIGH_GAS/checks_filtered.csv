@@ -1,0 +1,2 @@
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q2_POSITIVE_ROBUST_SLOPE,ES-WIND: pente robuste positive (exception possible meteo/structure).,Q2,ES,False

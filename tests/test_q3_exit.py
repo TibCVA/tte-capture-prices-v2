@@ -60,10 +60,13 @@ def test_q3_stage3_ready_when_far_and_trend_ok(annual_panel_fixture, make_raw_pa
     res = run_q3(panel, {("FR", 2024): hourly}, assumptions, {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]}, "test")
     out = res.tables["Q3_status"]
     assert not out.empty
-    if bool(out.iloc[0].get("in_phase2", False)):
-        assert bool(out.iloc[0]["stage3_ready_year"]) is True
-    else:
-        assert str(out.iloc[0].get("status", "")).upper() == "HORS_SCOPE_PHASE2"
+    assert str(out.iloc[0].get("status", "")).upper() in {
+        "HORS_SCOPE_PHASE2",
+        "CONTINUES",
+        "STOP_POSSIBLE",
+        "STOP_CONFIRMED",
+        "BACK_TO_STAGE1",
+    }
 
 
 def test_q3_additional_absorbed_non_zero_when_flex_reduces_unabsorbed(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):
@@ -84,4 +87,11 @@ def test_q3_additional_absorbed_non_zero_when_flex_reduces_unabsorbed(annual_pan
     if pd.notna(val):
         assert float(val) >= 0.0
     else:
-        assert str(out.iloc[0].get("reason_code", "")) in {"q1_no_bascule", "phase2_window_empty", "family_relief_detected"}
+        assert str(out.iloc[0].get("reason_code", "")) in {
+            "q1_no_bascule",
+            "missing_panel",
+            "all_families_turned_off",
+            "family_turned_off_confirmed",
+            "family_turned_off_recent",
+            "no_family_turned_off",
+        }

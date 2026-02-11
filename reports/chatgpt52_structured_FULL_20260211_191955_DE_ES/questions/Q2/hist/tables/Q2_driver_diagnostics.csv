@@ -1,0 +1,9 @@
+country,driver_name,corr_capture_pv,elasticity_capture_pv,expected_sign,observed_sign,sign_conflict
+DE,sr_energy,-0.7073160860677701,-0.1297116210327747,,-1,False
+DE,far_energy,,,,0,False
+DE,vre_penetration_share_gen,-0.6970403979100229,-0.5124162579161015,,-1,False
+DE,ir_p10,0.7889929470741349,1.263109695398161,,1,False
+ES,sr_energy,,,,0,False
+ES,far_energy,,,,0,False
+ES,vre_penetration_share_gen,,,,0,False
+ES,ir_p10,,,,0,False

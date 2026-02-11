@@ -93,6 +93,8 @@ def test_q1_no_false_phase2_without_low_prices(annual_panel_fixture):
     mask = (df["country"] == "FR") & (df["year"] == 2024)
     df.loc[mask, "h_negative_obs"] = 0.0
     df.loc[mask, "h_below_5_obs"] = 50.0
+    df.loc[mask, "days_spread_gt50"] = 0.0
+    df.loc[mask, "days_spread_50_obs"] = 0.0
     df.loc[mask, "sr_energy"] = 0.0
     df.loc[mask, "sr_hours"] = 0.0
     df.loc[mask, "far_energy"] = 0.99

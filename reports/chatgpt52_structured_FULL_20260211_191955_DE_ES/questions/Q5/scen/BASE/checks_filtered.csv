@@ -1,0 +1,11 @@
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=23.1 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=18.5 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=38.5 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=32.3 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=46.5 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=16.8 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=27.1 EUR/MWh (acceptable).,Q5,,True

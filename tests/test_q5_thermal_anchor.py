@@ -27,6 +27,7 @@ def test_q5_sensitivities_positive(make_raw_panel, countries_cfg, thresholds_cfg
     )
     row = res.tables["Q5_summary"].iloc[0]
     assert row["dTCA_dCO2"] > 0
+    assert row["dTCA_dFuel"] > 0
     assert row["dTCA_dGas"] > 0
 
 
@@ -145,3 +146,27 @@ def test_q5_ttl_year_specific_consistent_with_annual_ttl(make_raw_panel, countri
     ttl_annual = float(out["ttl_annual_metrics_same_year"])
     if abs(ttl_annual) > 1e-12:
         assert abs(ttl_obs - ttl_annual) / abs(ttl_annual) < 0.05
+
+
+def test_q5_warns_on_implausible_implicit_efficiency(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    assumptions.loc[assumptions["param_name"] == "ccgt_efficiency", "param_value"] = 0.9
+    commodity = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=20, freq="D"),
+            "gas_price_eur_mwh_th": 35.0,
+            "co2_price_eur_t": 80.0,
+        }
+    )
+    res = run_q5(
+        hourly,
+        assumptions,
+        {"country": "FR", "year": 2024, "marginal_tech": "CCGT"},
+        "test",
+        commodity_daily=commodity,
+        ttl_target_eur_mwh=140.0,
+    )
+    codes = {str(c.get("code")) for c in res.checks}
+    assert "Q5_IMPL_EFF_OUT_OF_RANGE" in codes

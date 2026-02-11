@@ -66,7 +66,7 @@ def test_q2_two_point_slope_is_finite_when_x_varies(annual_panel_fixture):
     out = res.tables["Q2_country_slopes"]
     if out.empty:
         return
-    two_pt = out[out["slope_method"].astype(str) == "two_point_delta"]
+    two_pt = out[out["slope_method"].astype(str) == "two_point"]
     if two_pt.empty:
         return
     assert pd.to_numeric(two_pt["slope"], errors="coerce").notna().all()

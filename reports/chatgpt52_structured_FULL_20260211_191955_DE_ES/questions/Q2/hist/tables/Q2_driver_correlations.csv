@@ -1,0 +1,5 @@
+driver_name,corr_with_slope_pv,corr_with_slope_wind,n_countries,expected_sign,sign_conflict_share
+far_energy,-0.0169130266751366,,7,,0.0
+ir_p10,0.3714720700272933,,7,,0.0
+sr_energy,0.1568020857777414,,7,,0.0
+vre_penetration_share_gen,0.4319655640410411,,7,,0.0

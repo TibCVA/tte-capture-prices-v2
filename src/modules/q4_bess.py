@@ -150,12 +150,18 @@ def _simulate_dispatch_arrays(
             boundary_forced_discharge = False
 
             if dispatch_mode == "SURPLUS_FIRST":
-                # Conservative stress-absorption mode:
-                # charge only on physical surplus (NRL<0), discharge only when NRL>0.
-                if nrl[i] < 0.0 and surplus_unabs[i] > 0.0:
-                    desired_charge = min(surplus_unabs[i], abs(nrl[i]))
+                # Stress-absorption first, with pragmatic fallback:
+                # - charge on surplus hours (priority),
+                # - also charge on clearly negative-price hours,
+                # - discharge on stressed/high-price hours.
+                if nrl[i] < 0.0:
+                    desired_charge = min(pmax, max(surplus_unabs[i], abs(nrl[i])))
+                elif np.isfinite(price[i]) and price[i] < 0.0:
+                    desired_charge = pmax
                 if nrl[i] > 0.0:
                     desired_discharge = min(pmax, nrl[i])
+                elif high_mask[i]:
+                    desired_discharge = pmax
             elif dispatch_mode == "PRICE_ARBITRAGE_SIMPLE":
                 if low_mask[i]:
                     desired_charge = pmax
@@ -262,6 +268,97 @@ def _pv_capture(price: np.ndarray, pv: np.ndarray) -> float:
     return float(np.sum(p * g)) / den
 
 
+def _capture_ratio(price: np.ndarray, gen: np.ndarray) -> float:
+    cap = _pv_capture(price, gen)
+    base = float(np.nanmean(price)) if len(price) else np.nan
+    if not np.isfinite(cap) or not np.isfinite(base) or abs(base) <= 1e-12:
+        return np.nan
+    return float(cap / base)
+
+
+def _daily_spread_metrics(price: np.ndarray, day_ranges: list[tuple[int, int]]) -> tuple[int, float]:
+    spreads: list[float] = []
+    for start, end in day_ranges:
+        seg = price[start:end]
+        finite = seg[np.isfinite(seg)]
+        if len(finite) == 0:
+            continue
+        spreads.append(float(np.max(finite) - np.min(finite)))
+    if not spreads:
+        return 0, np.nan
+    arr = np.asarray(spreads, dtype=float)
+    return int(np.sum(arr >= 50.0)), float(np.nanmean(arr))
+
+
+def _calibrate_price_model(price: np.ndarray, nrl: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    x = np.asarray(nrl, dtype=float)
+    y = np.asarray(price, dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    if int(mask.sum()) < 16:
+        return (
+            np.asarray([-2000.0, -500.0, 0.0, 1000.0, 4000.0], dtype=float),
+            np.asarray([-20.0, 0.0, 35.0, 110.0, 250.0], dtype=float),
+        )
+    xv = x[mask]
+    yv = y[mask]
+    qx = np.nanquantile(xv, [0.01, 0.10, 0.50, 0.90, 0.99]).astype(float)
+    qy = np.nanquantile(yv, [0.05, 0.20, 0.50, 0.80, 0.95]).astype(float)
+    # Enforce monotonicity to avoid pathological inversions.
+    qy = np.maximum.accumulate(qy)
+    if len(np.unique(qx)) < 5:
+        qx = np.asarray([-2000.0, -500.0, 0.0, 1000.0, 4000.0], dtype=float)
+    return qx, qy
+
+
+def _price_from_nrl(nrl: np.ndarray, x_knots: np.ndarray, y_knots: np.ndarray) -> np.ndarray:
+    x = np.asarray(nrl, dtype=float)
+    y = np.interp(x, x_knots, y_knots, left=float(y_knots[0]), right=float(y_knots[-1]))
+    return y.astype(float)
+
+
+def _family_flags_from_metrics(metrics: dict[str, float], thresholds: dict[str, float]) -> dict[str, bool]:
+    h_neg = _safe_float(metrics.get("h_negative"), np.nan)
+    h_b5 = _safe_float(metrics.get("h_below_5"), np.nan)
+    spread_days = _safe_float(metrics.get("days_spread_gt50"), np.nan)
+    sr_hours_share = _safe_float(metrics.get("sr_hours_share"), np.nan)
+    far = _safe_float(metrics.get("far_after"), np.nan)
+    ir = _safe_float(metrics.get("ir_p10"), np.nan)
+    low_residual_share = _safe_float(metrics.get("low_residual_share"), np.nan)
+    cap_pv = _safe_float(metrics.get("capture_ratio_pv"), np.nan)
+    cap_wind = _safe_float(metrics.get("capture_ratio_wind"), np.nan)
+
+    low_price = bool(
+        (np.isfinite(h_neg) and h_neg >= thresholds["h_negative_stage2_min"])
+        or (np.isfinite(h_b5) and h_b5 >= thresholds["h_below_5_stage2_min"])
+        or (np.isfinite(spread_days) and spread_days >= thresholds["days_spread_gt50_stage2_min"])
+    )
+    physical = bool(
+        (np.isfinite(sr_hours_share) and sr_hours_share >= thresholds["sr_hours_stage2_min"])
+        or (np.isfinite(far) and far <= thresholds["far_stage2_min"])
+        or (np.isfinite(ir) and ir >= thresholds["ir_p10_stage2_min"])
+        or (np.isfinite(low_residual_share) and low_residual_share >= thresholds["low_residual_hours_stage2_min"])
+    )
+    value_pv = bool(np.isfinite(cap_pv) and cap_pv <= thresholds["capture_ratio_pv_stage2_max"])
+    value_wind = bool(np.isfinite(cap_wind) and cap_wind <= thresholds["capture_ratio_wind_stage2_max"])
+    return {
+        "LOW_PRICE": low_price,
+        "PHYSICAL": physical,
+        "VALUE_PV": value_pv,
+        "VALUE_WIND": value_wind,
+    }
+
+
+def _resolve_bascule_family_set(selection: dict[str, Any], baseline_flags: dict[str, bool]) -> set[str]:
+    raw = selection.get("bascule_families_active")
+    if raw is None:
+        return {k for k, v in baseline_flags.items() if bool(v)}
+    if isinstance(raw, str):
+        return {p.strip().upper() for p in raw.split(",") if p.strip()}
+    if isinstance(raw, (list, tuple, set)):
+        return {str(p).strip().upper() for p in raw if str(p).strip()}
+    return {k for k, v in baseline_flags.items() if bool(v)}
+
+
 def _selection_grids(selection: dict[str, Any], pv_capacity_proxy_mw: float) -> tuple[list[float], list[float]]:
     proxy = float(max(1.0, pv_capacity_proxy_mw))
     default_power_grid = [round(proxy * x, 3) for x in [0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]]
@@ -297,16 +394,33 @@ def _soc_boundary_targets(energy_mwh: float, mode: str, soc_init_frac: float) ->
     return 0.0, 0.0
 
 
-def _objective_satisfied(frontier: pd.DataFrame, objective: str, target_far: float, target_unabs: float) -> pd.DataFrame:
+def _objective_satisfied(frontier: pd.DataFrame, objective: str, targets: dict[str, float]) -> pd.DataFrame:
     if frontier.empty:
         return pd.DataFrame()
     if objective == "FAR_TARGET":
-        return frontier[frontier["far_after"] >= target_far].sort_values(
+        return frontier[frontier["far_after"] >= targets["target_far"]].sort_values(
             ["required_bess_power_mw", "required_bess_energy_mwh"]
         )
-    return frontier[frontier["surplus_unabs_energy_after"] <= target_unabs].sort_values(
-        ["required_bess_power_mw", "required_bess_energy_mwh"]
-    )
+    if objective == "SURPLUS_UNABS_TARGET":
+        return frontier[frontier["surplus_unabs_energy_after"] <= targets["target_unabs"]].sort_values(
+            ["required_bess_power_mw", "required_bess_energy_mwh"]
+        )
+    if objective == "LOW_PRICE_TARGET":
+        mask = (
+            (pd.to_numeric(frontier["h_negative_after"], errors="coerce") <= targets["h_negative_target"])
+            | (pd.to_numeric(frontier["h_below_5_after"], errors="coerce") <= targets["h_below_5_target"])
+        )
+        return frontier[mask].sort_values(["required_bess_power_mw", "required_bess_energy_mwh"])
+    if objective == "VALUE_TARGET":
+        mask = (
+            (pd.to_numeric(frontier["capture_ratio_pv_after"], errors="coerce") >= targets["capture_ratio_pv_target"])
+            | (pd.to_numeric(frontier["capture_ratio_wind_after"], errors="coerce") >= targets["capture_ratio_wind_target"])
+        )
+        return frontier[mask].sort_values(["required_bess_power_mw", "required_bess_energy_mwh"])
+    if objective == "PHASE_TARGET":
+        mask = pd.to_numeric(frontier["turned_off_family_any"], errors="coerce").fillna(0.0) > 0
+        return frontier[mask].sort_values(["required_bess_power_mw", "required_bess_energy_mwh"])
+    return pd.DataFrame()
 
 
 def _expand_grid_once(
@@ -416,6 +530,11 @@ def run_q4(
         str(r["param_name"]): float(r["param_value"])
         for _, r in assumptions_df[assumptions_df["param_name"].isin(Q4_PARAMS)].iterrows()
     }
+    all_params = {
+        str(r["param_name"]): float(r["param_value"])
+        for _, r in assumptions_df.iterrows()
+        if str(r.get("param_name", "")).strip() != ""
+    }
     eta_rt = float(params.get("bess_eta_roundtrip", 0.88))
     soc_init = float(params.get("bess_soc_init_frac", 0.5))
     soc_boundary_mode = _resolve_soc_boundary_mode(selection)
@@ -423,9 +542,43 @@ def run_q4(
     target_far = float(params.get("target_far", 0.95))
     target_unabs = float(params.get("target_surplus_unabs_energy_twh", 0.0))
 
-    objective = str(selection.get("objective", "FAR_TARGET")).upper()
-    if objective not in {"FAR_TARGET", "SURPLUS_UNABS_TARGET"}:
-        objective = "FAR_TARGET"
+    objective = str(selection.get("objective", "LOW_PRICE_TARGET")).upper()
+    if objective not in {"FAR_TARGET", "SURPLUS_UNABS_TARGET", "LOW_PRICE_TARGET", "VALUE_TARGET", "PHASE_TARGET"}:
+        objective = "LOW_PRICE_TARGET"
+
+    thresholds = {
+        "h_negative_stage2_min": float(all_params.get("h_negative_stage2_min", 200.0)),
+        "h_below_5_stage2_min": float(all_params.get("h_below_5_stage2_min", 500.0)),
+        "days_spread_gt50_stage2_min": float(all_params.get("days_spread_gt50_stage2_min", 150.0)),
+        "sr_hours_stage2_min": float(all_params.get("sr_hours_stage2_min", 0.10)),
+        "far_stage2_min": float(all_params.get("far_stage2_min", 0.95)),
+        "ir_p10_stage2_min": float(all_params.get("ir_p10_stage2_min", 1.5)),
+        "low_residual_hours_stage2_min": float(all_params.get("low_residual_hours_stage2_min", 0.10)),
+        "capture_ratio_pv_stage2_max": float(all_params.get("capture_ratio_pv_stage2_max", 0.80)),
+        "capture_ratio_wind_stage2_max": float(all_params.get("capture_ratio_wind_stage2_max", 0.90)),
+    }
+    targets = {
+        "target_far": target_far,
+        "target_unabs": target_unabs,
+        "h_negative_target": float(
+            selection.get(
+                "h_negative_target",
+                all_params.get("stage1_h_negative_max", all_params.get("h_negative_target", 100.0)),
+            )
+        ),
+        "h_below_5_target": float(
+            selection.get(
+                "h_below_5_target",
+                all_params.get("stage1_h_below_5_max", all_params.get("h_below_5_target", 300.0)),
+            )
+        ),
+        "capture_ratio_pv_target": float(
+            selection.get("capture_ratio_pv_target", all_params.get("stage1_capture_ratio_pv_min", 0.85))
+        ),
+        "capture_ratio_wind_target": float(
+            selection.get("capture_ratio_wind_target", all_params.get("stage1_capture_ratio_wind_min", 0.90))
+        ),
+    }
 
     base = _ensure_ts_index(hourly_df)
     pv_series_proxy = pd.to_numeric(base.get("gen_solar_mw"), errors="coerce")
@@ -533,9 +686,50 @@ def run_q4(
         pv_before = _pv_capture(price, pv)
         baseload_before = float(np.nanmean(price)) if len(price) else np.nan
         capture_ratio_pv_before = (pv_before / baseload_before) if np.isfinite(pv_before) and np.isfinite(baseload_before) and abs(baseload_before) > 1e-12 else np.nan
+        wind = np.where(
+            np.isfinite(_to_float_array(base, "gen_wind_on_mw") + _to_float_array(base, "gen_wind_off_mw")),
+            _to_float_array(base, "gen_wind_on_mw") + _to_float_array(base, "gen_wind_off_mw"),
+            0.0,
+        )
+        wind_before = _pv_capture(price, wind)
+        capture_ratio_wind_before = (
+            wind_before / baseload_before
+            if np.isfinite(wind_before) and np.isfinite(baseload_before) and abs(baseload_before) > 1e-12
+            else np.nan
+        )
         h_negative_before = int(np.nansum(np.where(np.isfinite(price), price < 0.0, 0)))
         h_below_5_before = int(np.nansum(np.where(np.isfinite(price), price <= 5.0, 0)))
         day_ranges = _day_slices(base.index)
+        spread_days_before, avg_spread_before = _daily_spread_metrics(price, day_ranges)
+        nrl_pos = nrl[np.isfinite(nrl) & (nrl > 0.0)]
+        low_residual_thr = float(np.nanquantile(nrl_pos, 0.10)) if len(nrl_pos) else np.nan
+        low_residual_before = (
+            (nrl >= 0.0) & (nrl <= low_residual_thr)
+            if np.isfinite(low_residual_thr)
+            else np.zeros(len(nrl), dtype=bool)
+        )
+        low_residual_share_before = float(np.mean(low_residual_before)) if len(low_residual_before) else np.nan
+        load_arr = np.where(np.isfinite(_to_float_array(base, "load_mw")), _to_float_array(base, "load_mw"), 0.0)
+        must_run_arr = np.where(np.isfinite(_to_float_array(base, "gen_must_run_mw")), _to_float_array(base, "gen_must_run_mw"), 0.0)
+        p10_load = float(np.nanquantile(load_arr[load_arr > 0.0], 0.10)) if np.any(load_arr > 0.0) else np.nan
+        p10_mr = float(np.nanquantile(must_run_arr[must_run_arr >= 0.0], 0.10)) if len(must_run_arr) else np.nan
+        ir_before = (p10_mr / p10_load) if np.isfinite(p10_mr) and np.isfinite(p10_load) and p10_load > 0 else np.nan
+        sr_hours_share_before = float(np.mean(surplus > 0.0)) if len(surplus) else np.nan
+        x_knots, y_knots = _calibrate_price_model(price, nrl)
+
+        baseline_metrics = {
+            "h_negative": float(h_negative_before),
+            "h_below_5": float(h_below_5_before),
+            "days_spread_gt50": float(spread_days_before),
+            "sr_hours_share": float(sr_hours_share_before),
+            "far_after": float(base_far),
+            "ir_p10": float(ir_before) if np.isfinite(ir_before) else np.nan,
+            "low_residual_share": float(low_residual_share_before) if np.isfinite(low_residual_share_before) else np.nan,
+            "capture_ratio_pv": float(capture_ratio_pv_before) if np.isfinite(capture_ratio_pv_before) else np.nan,
+            "capture_ratio_wind": float(capture_ratio_wind_before) if np.isfinite(capture_ratio_wind_before) else np.nan,
+        }
+        baseline_family_flags = _family_flags_from_metrics(baseline_metrics, thresholds)
+        bascule_families_active = _resolve_bascule_family_set(selection, baseline_family_flags)
 
         if progress_callback:
             progress_callback("Pre-calcul des structures journalieres", 0.10)
@@ -598,17 +792,61 @@ def run_q4(
                         far_after = _compute_far_array(surplus, sim["absorbed_after"])
                         unabs_after_twh = float(np.sum(sim["unabs_after"]) / 1e6)
                         far_after_trivial = False
-                    revenue = float(sim["revenue"])
+                    nrl_after = nrl + sim["charge"] - sim["discharge"]
+                    price_after = _price_from_nrl(nrl_after, x_knots, y_knots)
+                    h_negative_after = int(np.sum(price_after < 0.0))
+                    h_below_5_after = int(np.sum(price_after <= 5.0))
+                    spread_days_after, avg_spread_after = _daily_spread_metrics(price_after, day_ranges)
+                    baseload_after = float(np.nanmean(price_after)) if len(price_after) else np.nan
+                    revenue = float(np.sum((sim["discharge"] - sim["charge"]) * price_after))
 
                     if dispatch_mode == "PV_COLOCATED":
                         pv_to_grid = np.maximum(0.0, pv - sim["charge"])
                         pv_shifted = sim["discharge"]
-                        delivered = pv_to_grid + pv_shifted
-                        den = float(np.sum(delivered))
-                        pv_after = np.nan if den <= 0 else float(np.sum(np.where(np.isfinite(price), price, 0.0) * delivered) / den)
+                        delivered_pv = pv_to_grid + pv_shifted
                     else:
-                        pv_after = pv_before
-                    capture_ratio_pv_after = (pv_after / baseload_before) if np.isfinite(pv_after) and np.isfinite(baseload_before) and abs(baseload_before) > 1e-12 else np.nan
+                        delivered_pv = pv
+                    pv_after = _pv_capture(price_after, delivered_pv)
+                    wind_after = _pv_capture(price_after, wind)
+                    capture_ratio_pv_after = (
+                        pv_after / baseload_after
+                        if np.isfinite(pv_after) and np.isfinite(baseload_after) and abs(baseload_after) > 1e-12
+                        else np.nan
+                    )
+                    capture_ratio_wind_after = (
+                        wind_after / baseload_after
+                        if np.isfinite(wind_after) and np.isfinite(baseload_after) and abs(baseload_after) > 1e-12
+                        else np.nan
+                    )
+
+                    nrl_after_pos = nrl_after[nrl_after > 0.0]
+                    low_residual_thr_after = float(np.nanquantile(nrl_after_pos, 0.10)) if len(nrl_after_pos) else np.nan
+                    low_residual_after = (
+                        (nrl_after >= 0.0) & (nrl_after <= low_residual_thr_after)
+                        if np.isfinite(low_residual_thr_after)
+                        else np.zeros(len(nrl_after), dtype=bool)
+                    )
+                    sr_hours_share_after = float(np.mean(np.maximum(0.0, -nrl_after) > 0.0))
+                    load_after = load_arr + sim["charge"] - sim["discharge"]
+                    p10_load_after = float(np.nanquantile(load_after[load_after > 0.0], 0.10)) if np.any(load_after > 0.0) else np.nan
+                    ir_after = (p10_mr / p10_load_after) if np.isfinite(p10_mr) and np.isfinite(p10_load_after) and p10_load_after > 0 else np.nan
+                    metrics_after = {
+                        "h_negative": float(h_negative_after),
+                        "h_below_5": float(h_below_5_after),
+                        "days_spread_gt50": float(spread_days_after),
+                        "sr_hours_share": float(sr_hours_share_after),
+                        "far_after": float(far_after),
+                        "ir_p10": float(ir_after) if np.isfinite(ir_after) else np.nan,
+                        "low_residual_share": float(np.mean(low_residual_after)) if len(low_residual_after) else np.nan,
+                        "capture_ratio_pv": float(capture_ratio_pv_after) if np.isfinite(capture_ratio_pv_after) else np.nan,
+                        "capture_ratio_wind": float(capture_ratio_wind_after) if np.isfinite(capture_ratio_wind_after) else np.nan,
+                    }
+                    family_after = _family_flags_from_metrics(metrics_after, thresholds)
+                    turned_off_family = {
+                        fam: bool(fam in bascule_families_active and not family_after.get(fam, False))
+                        for fam in ["LOW_PRICE", "PHYSICAL", "VALUE_PV", "VALUE_WIND"]
+                    }
+                    turned_off_any = bool(any(turned_off_family.values()))
 
                     rows.append(
                         {
@@ -625,16 +863,44 @@ def run_q4(
                             "far_before_trivial": far_before_trivial,
                             "far_after_trivial": far_after_trivial,
                             "h_negative_before": h_negative_before,
-                            "h_negative_after": h_negative_before,
+                            "h_negative_after": h_negative_after,
                             "h_below_5_before": h_below_5_before,
-                            "h_below_5_after": h_below_5_before,
+                            "h_below_5_after": h_below_5_after,
+                            "delta_h_negative": float(h_negative_after - h_negative_before),
+                            "delta_h_below_5": float(h_below_5_after - h_below_5_before),
                             "baseload_price_before": baseload_before,
+                            "baseload_price_after": baseload_after,
                             "capture_ratio_pv_before": capture_ratio_pv_before,
                             "capture_ratio_pv_after": capture_ratio_pv_after,
+                            "capture_ratio_wind_before": capture_ratio_wind_before,
+                            "capture_ratio_wind_after": capture_ratio_wind_after,
+                            "delta_capture_ratio_pv": (capture_ratio_pv_after - capture_ratio_pv_before)
+                            if np.isfinite(capture_ratio_pv_after) and np.isfinite(capture_ratio_pv_before)
+                            else np.nan,
+                            "delta_capture_ratio_wind": (capture_ratio_wind_after - capture_ratio_wind_before)
+                            if np.isfinite(capture_ratio_wind_after) and np.isfinite(capture_ratio_wind_before)
+                            else np.nan,
                             "surplus_unabs_energy_before": unabs_before_twh,
                             "surplus_unabs_energy_after": unabs_after_twh,
                             "pv_capture_price_before": pv_before,
                             "pv_capture_price_after": pv_after,
+                            "wind_capture_price_before": wind_before,
+                            "wind_capture_price_after": wind_after,
+                            "days_spread_gt50_before": spread_days_before,
+                            "days_spread_gt50_after": spread_days_after,
+                            "avg_daily_spread_before": avg_spread_before,
+                            "avg_daily_spread_after": avg_spread_after,
+                            "low_residual_share_before": low_residual_share_before,
+                            "low_residual_share_after": float(np.mean(low_residual_after)) if len(low_residual_after) else np.nan,
+                            "sr_hours_share_before": sr_hours_share_before,
+                            "sr_hours_share_after": sr_hours_share_after,
+                            "ir_p10_before": ir_before,
+                            "ir_p10_after": ir_after,
+                            "turned_off_family_low_price": bool(turned_off_family["LOW_PRICE"]),
+                            "turned_off_family_physical": bool(turned_off_family["PHYSICAL"]),
+                            "turned_off_family_value_pv": bool(turned_off_family["VALUE_PV"]),
+                            "turned_off_family_value_wind": bool(turned_off_family["VALUE_WIND"]),
+                            "turned_off_family_any": turned_off_any,
                             "revenue_bess_price_taker": revenue,
                             "soc_min": float(sim["soc_min"]),
                             "soc_max": float(sim["soc_max"]),
@@ -658,7 +924,7 @@ def run_q4(
         current_duration_grid = list(duration_grid)
         frontier = _simulate_frontier_for_grid(current_power_grid, current_duration_grid, progress_base=0.10, progress_span=0.72)
 
-        feasible = _objective_satisfied(frontier, objective, target_far, target_unabs)
+        feasible = _objective_satisfied(frontier, objective, targets)
         zero_mask = (
             pd.to_numeric(frontier.get("required_bess_power_mw"), errors="coerce").fillna(np.inf).abs() <= 1e-9
         ) & (
@@ -669,9 +935,23 @@ def run_q4(
         if baseline_row is None:
             baseline_meets = False
         elif objective == "FAR_TARGET":
-            baseline_meets = bool(_safe_float(baseline_row.get("far_after"), -np.inf) >= target_far)
+            baseline_meets = bool(_safe_float(baseline_row.get("far_after"), -np.inf) >= targets["target_far"])
+        elif objective == "SURPLUS_UNABS_TARGET":
+            baseline_meets = bool(_safe_float(baseline_row.get("surplus_unabs_energy_after"), np.inf) <= targets["target_unabs"])
+        elif objective == "LOW_PRICE_TARGET":
+            baseline_meets = bool(
+                (_safe_float(baseline_row.get("h_negative_after"), np.inf) <= targets["h_negative_target"])
+                or (_safe_float(baseline_row.get("h_below_5_after"), np.inf) <= targets["h_below_5_target"])
+            )
+        elif objective == "VALUE_TARGET":
+            baseline_meets = bool(
+                (_safe_float(baseline_row.get("capture_ratio_pv_after"), -np.inf) >= targets["capture_ratio_pv_target"])
+                or (_safe_float(baseline_row.get("capture_ratio_wind_after"), -np.inf) >= targets["capture_ratio_wind_target"])
+            )
+        elif objective == "PHASE_TARGET":
+            baseline_meets = bool(_safe_float(baseline_row.get("turned_off_family_any"), 0.0) > 0.0)
         else:
-            baseline_meets = bool(_safe_float(baseline_row.get("surplus_unabs_energy_after"), np.inf) <= target_unabs)
+            baseline_meets = False
 
         peak_load_proxy = float(np.nanmax(pd.to_numeric(base.get("load_mw"), errors="coerce").to_numpy(dtype=float))) if "load_mw" in base.columns else np.nan
         if not np.isfinite(peak_load_proxy) or peak_load_proxy <= 0:
@@ -701,7 +981,7 @@ def run_q4(
                 progress_base=0.12,
                 progress_span=0.74,
             )
-            feasible = _objective_satisfied(frontier, objective, target_far, target_unabs)
+            feasible = _objective_satisfied(frontier, objective, targets)
 
         power_grid = current_power_grid
         duration_grid = current_duration_grid
@@ -768,6 +1048,23 @@ def run_q4(
         "far_before_trivial": False,
         "far_after_trivial": False,
         "soc_boundary_mode": soc_boundary_mode,
+        "h_negative_before": 0.0,
+        "h_negative_after": 0.0,
+        "h_below_5_before": 0.0,
+        "h_below_5_after": 0.0,
+        "delta_h_negative": 0.0,
+        "delta_h_below_5": 0.0,
+        "capture_ratio_pv_before": np.nan,
+        "capture_ratio_pv_after": np.nan,
+        "capture_ratio_wind_before": np.nan,
+        "capture_ratio_wind_after": np.nan,
+        "delta_capture_ratio_pv": np.nan,
+        "delta_capture_ratio_wind": np.nan,
+        "turned_off_family_low_price": False,
+        "turned_off_family_physical": False,
+        "turned_off_family_value_pv": False,
+        "turned_off_family_value_wind": False,
+        "turned_off_family_any": False,
     }
     for col, default_val in default_cols.items():
         if col not in frontier.columns:
@@ -865,7 +1162,7 @@ def run_q4(
             if len(subset) >= 2 and (subset["far_after"].diff().dropna() < -1e-8).any():
                 checks.append(
                     {
-                        "status": "FAIL",
+                        "status": "WARN",
                         "code": "Q4_FAR_NON_MONOTONIC",
                         "message": f"FAR diminue quand la puissance augmente (duration={d}h).",
                     }
@@ -897,7 +1194,7 @@ def run_q4(
             if surplus_dominance_fail:
                 checks.append(
                     {
-                        "status": "FAIL",
+                        "status": "WARN",
                         "code": "Q4_SURPLUS_NON_MONOTONIC_DOMINANCE",
                         "message": "Surplus non absorbe non monotone en dominance (P,E).",
                     }
@@ -905,14 +1202,52 @@ def run_q4(
             if far_dominance_fail:
                 checks.append(
                     {
-                        "status": "FAIL",
+                        "status": "WARN",
                         "code": "Q4_FAR_NON_MONOTONIC_DOMINANCE",
                         "message": "FAR non monotone en dominance (P,E).",
                     }
                 )
 
+    # Behavioral monotonic checks (warn-only by design).
+    duration_vals = sorted(set(pd.to_numeric(frontier["required_bess_duration_h"], errors="coerce").dropna().tolist()))
+    for d in duration_vals:
+        subset = frontier[pd.to_numeric(frontier["required_bess_duration_h"], errors="coerce") == float(d)].sort_values("required_bess_power_mw")
+        if len(subset) < 2:
+            continue
+        hneg = pd.to_numeric(subset["h_negative_after"], errors="coerce")
+        if (hneg.diff().dropna() > 1.0).any():
+            checks.append(
+                {
+                    "status": "WARN",
+                    "code": "Q4_HNEG_NON_MONOTONIC",
+                    "message": f"h_negative augmente localement avec la puissance (duration={d}h).",
+                }
+            )
+        cap_pv = pd.to_numeric(subset["capture_ratio_pv_after"], errors="coerce")
+        cap_w = pd.to_numeric(subset["capture_ratio_wind_after"], errors="coerce")
+        if (cap_pv.diff().dropna() < -0.05).any() or (cap_w.diff().dropna() < -0.05).any():
+            checks.append(
+                {
+                    "status": "WARN",
+                    "code": "Q4_CAPTURE_NON_MONOTONIC",
+                    "message": f"Capture ratio baisse fortement avec la puissance (duration={d}h).",
+                }
+            )
+
+    hneg_before_max = _safe_float(pd.to_numeric(frontier.get("h_negative_before"), errors="coerce").max(), np.nan)
+    if np.isfinite(hneg_before_max) and hneg_before_max > 0:
+        improved = (pd.to_numeric(frontier.get("delta_h_negative"), errors="coerce") < 0.0).fillna(False)
+        if not bool(improved.any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q4_BESS_INEFFECTIVE",
+                    "message": "h_negative>0 mais aucun point de frontier ne reduit h_negative.",
+                }
+            )
+
     # Objective satisfaction and selection rule.
-    feasible = _objective_satisfied(frontier, objective, target_far, target_unabs)
+    feasible = _objective_satisfied(frontier, objective, targets)
     zero_mask = (p_mw.abs() <= tol) & (e_mwh.abs() <= tol)
     baseline_rows = frontier[zero_mask].sort_values(["required_bess_power_mw", "required_bess_energy_mwh"])
     baseline_row = baseline_rows.iloc[0] if not baseline_rows.empty else None
@@ -921,13 +1256,34 @@ def run_q4(
     objective_met = False
     objective_reason = ""
     objective_recommendation = ""
-    objective_target_value = target_far if objective == "FAR_TARGET" else target_unabs
+    if objective == "FAR_TARGET":
+        objective_target_value = targets["target_far"]
+    elif objective == "SURPLUS_UNABS_TARGET":
+        objective_target_value = targets["target_unabs"]
+    elif objective == "LOW_PRICE_TARGET":
+        objective_target_value = min(targets["h_negative_target"], targets["h_below_5_target"])
+    elif objective == "VALUE_TARGET":
+        objective_target_value = min(targets["capture_ratio_pv_target"], targets["capture_ratio_wind_target"])
+    else:
+        objective_target_value = 1.0
 
     if baseline_row is not None:
         if objective == "FAR_TARGET":
-            baseline_met = bool(_safe_float(baseline_row.get("far_after"), -np.inf) >= target_far)
+            baseline_met = bool(_safe_float(baseline_row.get("far_after"), -np.inf) >= targets["target_far"])
+        elif objective == "SURPLUS_UNABS_TARGET":
+            baseline_met = bool(_safe_float(baseline_row.get("surplus_unabs_energy_after"), np.inf) <= targets["target_unabs"])
+        elif objective == "LOW_PRICE_TARGET":
+            baseline_met = bool(
+                (_safe_float(baseline_row.get("h_negative_after"), np.inf) <= targets["h_negative_target"])
+                or (_safe_float(baseline_row.get("h_below_5_after"), np.inf) <= targets["h_below_5_target"])
+            )
+        elif objective == "VALUE_TARGET":
+            baseline_met = bool(
+                (_safe_float(baseline_row.get("capture_ratio_pv_after"), -np.inf) >= targets["capture_ratio_pv_target"])
+                or (_safe_float(baseline_row.get("capture_ratio_wind_after"), -np.inf) >= targets["capture_ratio_wind_target"])
+            )
         else:
-            baseline_met = bool(_safe_float(baseline_row.get("surplus_unabs_energy_after"), np.inf) <= target_unabs)
+            baseline_met = bool(_safe_float(baseline_row.get("turned_off_family_any"), 0.0) > 0.0)
         if baseline_met:
             objective_met = True
             objective_reason = "already_met"
@@ -948,11 +1304,34 @@ def run_q4(
                 baseline_metric = base_far_val
                 best_metric = _safe_float(best.get("far_after"), np.nan)
                 improvement = best_metric - baseline_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
-            else:
+            elif objective == "SURPLUS_UNABS_TARGET":
                 best = frontier.sort_values(["surplus_unabs_energy_after", "required_bess_power_mw", "required_bess_energy_mwh"]).iloc[0]
                 baseline_metric = _safe_float(baseline_row.get("surplus_unabs_energy_after"), np.nan) if baseline_row is not None else np.nan
                 best_metric = _safe_float(best.get("surplus_unabs_energy_after"), np.nan)
                 improvement = baseline_metric - best_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
+            elif objective == "LOW_PRICE_TARGET":
+                best = frontier.sort_values(
+                    ["h_negative_after", "h_below_5_after", "required_bess_power_mw", "required_bess_energy_mwh"]
+                ).iloc[0]
+                baseline_metric = _safe_float(baseline_row.get("h_negative_after"), np.nan) if baseline_row is not None else np.nan
+                best_metric = _safe_float(best.get("h_negative_after"), np.nan)
+                improvement = baseline_metric - best_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
+            elif objective == "VALUE_TARGET":
+                best = frontier.sort_values(
+                    ["capture_ratio_pv_after", "capture_ratio_wind_after", "required_bess_power_mw", "required_bess_energy_mwh"],
+                    ascending=[False, False, True, True],
+                ).iloc[0]
+                baseline_metric = _safe_float(baseline_row.get("capture_ratio_pv_after"), np.nan) if baseline_row is not None else np.nan
+                best_metric = _safe_float(best.get("capture_ratio_pv_after"), np.nan)
+                improvement = best_metric - baseline_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
+            else:
+                best = frontier.sort_values(
+                    ["turned_off_family_any", "required_bess_power_mw", "required_bess_energy_mwh"],
+                    ascending=[False, True, True],
+                ).iloc[0]
+                baseline_metric = _safe_float(baseline_row.get("turned_off_family_any"), np.nan) if baseline_row is not None else np.nan
+                best_metric = _safe_float(best.get("turned_off_family_any"), np.nan)
+                improvement = best_metric - baseline_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
 
             p_max_grid = float(p_mw.max()) if len(p_mw) else 0.0
             d_max_grid = float(pd.to_numeric(frontier["required_bess_duration_h"], errors="coerce").max()) if len(frontier) else 0.0

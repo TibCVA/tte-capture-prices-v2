@@ -90,7 +90,7 @@ def main() -> None:
             "year": int(args.hist_year_end),
             "years": [int(args.hist_year_end)],
             "horizon_year": max(scenario_years),
-            "objective": "FAR_TARGET",
+            "objective": "LOW_PRICE_TARGET",
             "power_grid": [0.0, 250.0, 500.0, 750.0, 1000.0, 1500.0],
             "duration_grid": [2.0, 4.0, 6.0, 8.0],
             "scenario_ids": get_default_scenarios("Q4"),

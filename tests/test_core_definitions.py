@@ -35,3 +35,29 @@ def test_far_equals_one_when_surplus_zero(make_raw_panel, countries_cfg, thresho
     issues = sanity_check_core_definitions(df, far_energy=1.0, sr_energy=0.0, ir=0.0)
     assert "FAR must equal 1 when surplus is zero" not in issues
     assert float(pd.to_numeric(df["surplus_unabsorbed_mw"], errors="coerce").sum()) == 0.0
+
+
+def test_load_psh_energy_identity(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=240)
+    raw["psh_pump_mw"] = 400.0
+    df = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    lhs = float(pd.to_numeric(df["load_total_mw"], errors="coerce").fillna(0.0).sum())
+    rhs = float(pd.to_numeric(df["load_mw"], errors="coerce").fillna(0.0).sum() + pd.to_numeric(df["psh_pump_mw"], errors="coerce").fillna(0.0).sum())
+    tol = max(1e-6, 0.001 * abs(lhs))
+    assert abs(lhs - rhs) <= tol
+
+
+def test_psh_status_and_coverage_when_partial_or_missing(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=48)
+    raw.loc[raw.index[:12], "psh_pump_mw"] = pd.NA
+    df_partial = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assert "psh_pumping_data_status" in df_partial.columns
+    assert "psh_pumping_coverage_share" in df_partial.columns
+    assert set(df_partial["psh_pumping_data_status"].astype(str).str.lower().unique()) == {"partial"}
+    assert 0.0 < float(pd.to_numeric(df_partial["psh_pumping_coverage_share"], errors="coerce").iloc[0]) < 1.0
+
+    raw_missing = make_raw_panel(n=48)
+    raw_missing["psh_pump_mw"] = pd.NA
+    df_missing = build_hourly_table(raw_missing, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assert set(df_missing["psh_pumping_data_status"].astype(str).str.lower().unique()) == {"missing"}
+    assert float(pd.to_numeric(df_missing["psh_pumping_coverage_share"], errors="coerce").iloc[0]) == 0.0

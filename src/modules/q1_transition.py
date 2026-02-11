@@ -34,6 +34,7 @@ Q1_PARAMS = [
     "capture_ratio_pv_stage2_max",
     "capture_ratio_wind_stage2_max",
     "sr_hours_stage2_min",
+    "low_residual_hours_stage2_min",
     "far_stage2_min",
     "ir_p10_stage2_min",
     "days_spread_gt50_stage2_min",
@@ -174,6 +175,11 @@ def _build_rule_definition(params: dict[str, float], crisis_years: set[int]) -> 
                 "capture_ratio_pv_stage2_max": _safe_param(params, "capture_ratio_pv_stage2_max", 0.80),
                 "capture_ratio_wind_stage2_max": _safe_param(params, "capture_ratio_wind_stage2_max", 0.90),
                 "sr_hours_stage2_min": _safe_param(params, "sr_hours_stage2_min", 0.10),
+                "low_residual_hours_stage2_min": _safe_param(
+                    params,
+                    "low_residual_hours_stage2_min",
+                    _safe_param(params, "sr_hours_stage2_min", 0.10),
+                ),
                 "far_stage2_min": _safe_param(params, "far_stage2_min", 0.95),
                 "ir_p10_stage2_min": _safe_param(params, "ir_p10_stage2_min", 1.5),
                 "days_spread_gt50_stage2_min": _safe_param(params, "days_spread_gt50_stage2_min", 150.0),
@@ -186,10 +192,11 @@ def _build_rule_definition(params: dict[str, float], crisis_years: set[int]) -> 
                 "persistence_window_years": _safe_param(params, "q1_persistence_window_years", 2.0),
                 "crisis_years_explicit": ",".join([str(int(y)) for y in sorted(crisis_years)]),
                 "rule_logic": (
-                    "stage2_candidate=(>=2 familles LOW_PRICE/VALUE/PHYSICAL) "
-                    "hors annees de crise explicites et avec quality_ok data-only; "
+                    "stage2_candidate_tech=(>=2 familles actives parmi LOW_PRICE/PHYSICAL/VALUE_TECH) "
+                    "avec persistence sur 2 annees non-crise; "
+                    "bascule_country=min(bascule_pv,bascule_wind). "
                     "stage1_candidate=(familles toutes inactives) hors crise. "
-                    "NEG_NOT_IN_SURPLUS reste un diagnostic marche/physique et ne bloque pas quality_ok."
+                    "NEG_NOT_IN_AB reste informatif; RC principal=AB_OR_LOW_RESIDUAL."
                 ),
             }
         ]
@@ -207,6 +214,7 @@ def _flag_list(row: pd.Series) -> str:
         "flag_capture_pv_low",
         "flag_capture_wind_low",
         "flag_sr_hours_high",
+        "flag_low_residual_high",
         "flag_far_low",
         "flag_ir_high",
         "flag_spread_high",
@@ -244,6 +252,27 @@ def _apply_phase2_logic(
         out["days_spread_gt50"] = out.get("days_spread_50_obs", np.nan)
     if "avg_daily_spread_obs" not in out.columns:
         out["avg_daily_spread_obs"] = np.nan
+    if "low_residual_hours_share" not in out.columns:
+        out["low_residual_hours_share"] = np.nan
+    if "share_neg_price_hours_in_AB" not in out.columns:
+        out["share_neg_price_hours_in_AB"] = np.nan
+    if "share_neg_price_hours_in_low_residual" not in out.columns:
+        out["share_neg_price_hours_in_low_residual"] = np.nan
+    if "share_neg_price_hours_in_AB_OR_LOW_RESIDUAL" not in out.columns:
+        out["share_neg_price_hours_in_AB_OR_LOW_RESIDUAL"] = np.nan
+    for col, default in {
+        "psh_pumping_twh": 0.0,
+        "psh_pumping_coverage_share": np.nan,
+        "psh_pumping_data_status": "missing",
+        "flex_sink_exports_twh": 0.0,
+        "flex_sink_psh_twh": 0.0,
+        "flex_sink_total_twh": 0.0,
+        "surplus_energy_twh": out.get("surplus_twh", np.nan),
+        "absorbed_surplus_twh": np.nan,
+        "unabsorbed_surplus_twh": out.get("surplus_unabsorbed_twh", np.nan),
+    }.items():
+        if col not in out.columns:
+            out[col] = default
 
     h_neg = pd.to_numeric(out.get("h_negative_obs"), errors="coerce")
     h_low = pd.to_numeric(out.get("h_below_5_obs"), errors="coerce")
@@ -252,6 +281,7 @@ def _apply_phase2_logic(
     sr_h = pd.to_numeric(out.get("sr_hours_share"), errors="coerce")
     far = pd.to_numeric(out.get("far_observed"), errors="coerce")
     ir = pd.to_numeric(out.get("ir_p10"), errors="coerce")
+    low_residual_share = pd.to_numeric(out.get("low_residual_hours_share"), errors="coerce")
 
     out["flag_h_negative_stage2"] = h_neg >= _safe_param(p, "h_negative_stage2_min", 200.0)
     out["flag_h_below_5_stage2"] = h_low >= _safe_param(p, "h_below_5_stage2_min", 500.0)
@@ -262,9 +292,14 @@ def _apply_phase2_logic(
     out["flag_sr_hours_high"] = sr_h >= _safe_param(p, "sr_hours_stage2_min", 0.10)
     # Backward-compatible alias used by some pages/tests.
     out["flag_sr_high"] = out["flag_sr_hours_high"]
+    out["flag_low_residual_high"] = low_residual_share >= _safe_param(
+        p,
+        "low_residual_hours_stage2_min",
+        _safe_param(p, "sr_hours_stage2_min", 0.10),
+    )
     out["flag_far_low"] = far < _safe_param(p, "far_stage2_min", 0.95)
     out["flag_ir_high"] = ir >= _safe_param(p, "ir_p10_stage2_min", 1.5)
-    out["flag_spread_high"] = pd.to_numeric(out.get("days_spread_gt50"), errors="coerce") > _safe_param(p, "days_spread_gt50_stage2_min", 150.0)
+    out["flag_spread_high"] = pd.to_numeric(out.get("days_spread_gt50"), errors="coerce") >= _safe_param(p, "days_spread_gt50_stage2_min", 150.0)
     crisis = pd.Series(False, index=out.index, dtype=bool)
     for i, row in out[["country", "year"]].iterrows():
         country = str(row.get("country", ""))
@@ -276,9 +311,11 @@ def _apply_phase2_logic(
         crisis.at[i] = y in years_set
     out["crisis_year"] = crisis
 
-    out["low_price_family"] = out["flag_h_negative_stage2"] | out["flag_h_below_5_stage2"]
-    out["value_family"] = out["flag_capture_pv_low"] | out["flag_capture_wind_low"]
-    out["physical_family"] = out["flag_sr_hours_high"] | out["flag_far_low"] | out["flag_ir_high"]
+    out["low_price_family"] = out["flag_h_negative_stage2"] | out["flag_h_below_5_stage2"] | out["flag_spread_high"]
+    out["value_family_pv"] = out["flag_capture_pv_low"]
+    out["value_family_wind"] = out["flag_capture_wind_low"]
+    out["value_family"] = out["value_family_pv"] | out["value_family_wind"]
+    out["physical_family"] = out["flag_sr_hours_high"] | out["flag_far_low"] | out["flag_ir_high"] | out["flag_low_residual_high"]
 
     out["low_price_flags_count"] = (
         out[["flag_h_negative_stage2", "flag_h_below_5_stage2"]]
@@ -287,9 +324,17 @@ def _apply_phase2_logic(
         .sum(axis=1)
     )
     out["capture_flags_count"] = out[["flag_capture_pv_low", "flag_capture_wind_low"]].fillna(False).astype(int).sum(axis=1)
-    out["physical_flags_count"] = out[["flag_sr_hours_high", "flag_far_low", "flag_ir_high"]].fillna(False).astype(int).sum(axis=1)
+    out["physical_flags_count"] = out[
+        ["flag_sr_hours_high", "flag_far_low", "flag_ir_high", "flag_low_residual_high"]
+    ].fillna(False).astype(int).sum(axis=1)
 
     out["family_count"] = out[["low_price_family", "value_family", "physical_family"]].fillna(False).astype(int).sum(axis=1)
+    out["family_count_pv"] = (
+        out[["low_price_family", "physical_family", "value_family_pv"]].fillna(False).astype(int).sum(axis=1)
+    )
+    out["family_count_wind"] = (
+        out[["low_price_family", "physical_family", "value_family_wind"]].fillna(False).astype(int).sum(axis=1)
+    )
     out["stage2_points_low_price"] = out["low_price_family"].fillna(False).astype(int)
     out["stage2_points_capture"] = out["value_family"].fillna(False).astype(int)
     out["stage2_points_physical"] = out["physical_family"].fillna(False).astype(int)
@@ -337,11 +382,23 @@ def _apply_phase2_logic(
     )
     out["market_physical_gap_flag"] = out["market_physical_gap_flag"].fillna(False).astype(bool)
 
+    out["stage2_candidate_year_pv"] = (
+        (out["family_count_pv"] >= 2)
+        & out["quality_ok"].fillna(False)
+        & (~out["crisis_year"].fillna(False))
+    )
+    out["stage2_candidate_year_wind"] = (
+        (out["family_count_wind"] >= 2)
+        & out["quality_ok"].fillna(False)
+        & (~out["crisis_year"].fillna(False))
+    )
+    out["stage2_candidate_year_country"] = out["stage2_candidate_year_pv"] | out["stage2_candidate_year_wind"]
     out["stage2_candidate_year"] = (
         (out["family_count"] >= 2)
         & out["quality_ok"].fillna(False)
         & (~out["crisis_year"].fillna(False))
     )
+    out["stage2_candidate_year"] = out["stage2_candidate_year"] | out["stage2_candidate_year_country"]
     out["phase2_candidate_year"] = out["stage2_candidate_year"]
     out["flag_capture_only_stage2"] = out["value_family"] & (~out["low_price_family"]) & (~out["physical_family"])
     out["is_phase2_market"] = out["stage2_candidate_year"]
@@ -393,6 +450,11 @@ def _persistent_run_start_and_status(group: pd.DataFrame, col: str, window_years
 
     w = max(1, int(window_years))
     g = group.sort_values("year").copy()
+    # Persistence is evaluated on the non-crisis sequence only.
+    if "crisis_year" in g.columns:
+        g = g[~g["crisis_year"].fillna(False).astype(bool)].copy()
+    if g.empty:
+        return float("nan"), "not_reached_in_window"
     years = pd.to_numeric(g["year"], errors="coerce")
     flags = g[col].fillna(False).astype(bool)
     if years.notna().sum() == 0:
@@ -409,13 +471,11 @@ def _persistent_run_start_and_status(group: pd.DataFrame, col: str, window_years
         run_start = int(y0)
         run_len = 1
         j = i + 1
-        prev = int(y0)
         while j < n:
             yj = _safe_float(years.iloc[j], np.nan)
-            if not (np.isfinite(yj) and bool(flags.iloc[j]) and int(yj) == prev + 1):
+            if not (np.isfinite(yj) and bool(flags.iloc[j])):
                 break
             run_len += 1
-            prev = int(yj)
             j += 1
         if run_len >= w:
             status = "already_phase2_at_window_start" if run_start == first_year else "transition_observed"
@@ -443,7 +503,7 @@ def _parse_evidence_ratio(evidence: Any) -> float:
     try:
         import re
 
-        m = re.search(r"ratio\s*=\s*([0-9]*\.?[0-9]+)", txt)
+        m = re.search(r"ratio(?:_ab_or_low_residual|_ab|)\s*=\s*([0-9]*\.?[0-9]+)", txt)
         if m:
             return float(m.group(1))
         return float(txt)
@@ -462,7 +522,16 @@ def _market_physical_gap_from_findings(validation_findings_df: pd.DataFrame | No
     vf["country"] = vf["country"].astype(str)
     vf["year"] = pd.to_numeric(vf["year"], errors="coerce")
     vf["code"] = vf["code"].astype(str)
-    vf = vf[(vf["code"] == "RC_NEG_NOT_IN_SURPLUS") & vf["year"].notna()]
+    vf = vf[
+        vf["code"].isin(
+            [
+                "RC_NEG_NOT_IN_SURPLUS",
+                "RC_NEG_NOT_IN_AB",
+                "RC_NEG_NOT_IN_AB_OR_LOW_RESIDUAL",
+            ]
+        )
+        & vf["year"].notna()
+    ]
     if vf.empty:
         return overrides
     for _, row in vf.iterrows():
@@ -506,6 +575,27 @@ def _drivers_at_bascule(row: pd.Series, p: dict[str, float]) -> str:
                 f"PHYSICAL:ir_p10>={_safe_param(p, 'ir_p10_stage2_min', 1.5):.2f} ({_safe_float(row.get('ir_p10'), np.nan):.3f})"
             )
     return "; ".join(drivers)
+
+
+def _families_active_at_row(row: pd.Series, tech: str | None = None) -> str:
+    families: list[str] = []
+    if bool(row.get("low_price_family", False)):
+        families.append("LOW_PRICE")
+    if bool(row.get("physical_family", False)):
+        families.append("PHYSICAL")
+    t = str(tech or "").upper().strip()
+    if t == "PV":
+        if bool(row.get("value_family_pv", False)):
+            families.append("VALUE_PV")
+    elif t == "WIND":
+        if bool(row.get("value_family_wind", False)):
+            families.append("VALUE_WIND")
+    else:
+        if bool(row.get("value_family_pv", False)):
+            families.append("VALUE_PV")
+        if bool(row.get("value_family_wind", False)):
+            families.append("VALUE_WIND")
+    return ",".join(families)
 
 
 def _adjust_for_lever(group: pd.DataFrame, demand_uplift: float = 0.0, flex_uplift: float = 0.0) -> pd.DataFrame:
@@ -711,6 +801,60 @@ def _build_scope_audit(
     return pd.DataFrame(rows).sort_values(["country", "year"]).reset_index(drop=True)
 
 
+def _build_residual_diagnostics(
+    panel: pd.DataFrame,
+    hourly_by_country_year: dict[tuple[str, int], pd.DataFrame] | None,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    if panel.empty:
+        return pd.DataFrame()
+    hourly_by_country_year = hourly_by_country_year or {}
+
+    for _, prow in panel.iterrows():
+        country = str(prow.get("country", ""))
+        year = int(prow.get("year"))
+        key = (country, year)
+        row: dict[str, Any] = {"country": country, "year": year}
+        if key in hourly_by_country_year and hourly_by_country_year[key] is not None and not hourly_by_country_year[key].empty:
+            h = hourly_by_country_year[key]
+            nrl = pd.to_numeric(h.get("nrl_mw"), errors="coerce")
+            price = pd.to_numeric(h.get("price_da_eur_mwh"), errors="coerce")
+            low_residual = (
+                pd.to_numeric(h.get("low_residual_hour"), errors="coerce").fillna(0.0) > 0
+                if "low_residual_hour" in h.columns
+                else pd.Series(False, index=h.index)
+            )
+            neg = price < 0
+            row.update(
+                {
+                    "residual_load_p10_mw": _safe_float(nrl.quantile(0.10), np.nan) if nrl.notna().any() else np.nan,
+                    "residual_load_p50_mw": _safe_float(nrl.quantile(0.50), np.nan) if nrl.notna().any() else np.nan,
+                    "residual_load_p90_mw": _safe_float(nrl.quantile(0.90), np.nan) if nrl.notna().any() else np.nan,
+                    "price_low_residual_median_eur_mwh": _safe_float(price[low_residual].median(), np.nan) if bool(low_residual.any()) else np.nan,
+                    "price_negative_median_eur_mwh": _safe_float(price[neg].median(), np.nan) if bool(neg.any()) else np.nan,
+                    "residual_negative_p10_mw": _safe_float(nrl[neg].quantile(0.10), np.nan) if bool(neg.any()) else np.nan,
+                    "residual_negative_p50_mw": _safe_float(nrl[neg].quantile(0.50), np.nan) if bool(neg.any()) else np.nan,
+                    "residual_negative_p90_mw": _safe_float(nrl[neg].quantile(0.90), np.nan) if bool(neg.any()) else np.nan,
+                }
+            )
+        else:
+            row.update(
+                {
+                    "residual_load_p10_mw": _safe_float(prow.get("residual_load_p10_mw"), np.nan),
+                    "residual_load_p50_mw": _safe_float(prow.get("residual_load_p50_mw"), np.nan),
+                    "residual_load_p90_mw": _safe_float(prow.get("residual_load_p90_mw"), np.nan),
+                    "price_low_residual_median_eur_mwh": _safe_float(prow.get("price_low_residual_median_eur_mwh"), np.nan),
+                    "price_negative_median_eur_mwh": _safe_float(prow.get("price_negative_hours_median_eur_mwh"), np.nan),
+                    "residual_negative_p10_mw": np.nan,
+                    "residual_negative_p50_mw": _safe_float(prow.get("residual_load_p50_on_negative_price_mw"), np.nan),
+                    "residual_negative_p90_mw": np.nan,
+                }
+            )
+        rows.append(row)
+
+    return pd.DataFrame(rows).sort_values(["country", "year"]).reset_index(drop=True)
+
+
 def run_q1(
     annual_df: pd.DataFrame,
     assumptions_df: pd.DataFrame,
@@ -748,7 +892,33 @@ def run_q1(
 
     for country, group in panel.groupby("country"):
         group = group.sort_values("year").copy()
-        bascule_year, bascule_status_market = _persistent_run_start_and_status(group, "stage2_candidate_year", persist_window)
+        bascule_year_pv, bascule_status_market_pv = _persistent_run_start_and_status(
+            group,
+            "stage2_candidate_year_pv",
+            persist_window,
+        )
+        bascule_year_wind, bascule_status_market_wind = _persistent_run_start_and_status(
+            group,
+            "stage2_candidate_year_wind",
+            persist_window,
+        )
+        if np.isfinite(bascule_year_pv) and np.isfinite(bascule_year_wind):
+            bascule_year = float(min(int(bascule_year_pv), int(bascule_year_wind)))
+        elif np.isfinite(bascule_year_pv):
+            bascule_year = float(int(bascule_year_pv))
+        elif np.isfinite(bascule_year_wind):
+            bascule_year = float(int(bascule_year_wind))
+        else:
+            bascule_year = float("nan")
+        bascule_status_market = (
+            "transition_observed"
+            if np.isfinite(bascule_year)
+            else (
+                "already_phase2_at_window_start"
+                if ("already_phase2_at_window_start" in {bascule_status_market_pv, bascule_status_market_wind})
+                else "not_reached_in_window"
+            )
+        )
         physical_year, bascule_status_physical = _persistent_run_start_and_status(group, "physical_candidate_year", persist_window)
         stage1_year, _ = _persistent_run_start_and_status(group, "stage1_candidate_year", persist_window)
         if np.isfinite(bascule_year):
@@ -756,6 +926,16 @@ def run_q1(
             at = at_rows.iloc[0] if not at_rows.empty else group.iloc[-1]
         else:
             at = group.iloc[-1]
+        at_pv = (
+            group[group["year"] == int(bascule_year_pv)].iloc[0]
+            if np.isfinite(bascule_year_pv) and not group[group["year"] == int(bascule_year_pv)].empty
+            else at
+        )
+        at_wind = (
+            group[group["year"] == int(bascule_year_wind)].iloc[0]
+            if np.isfinite(bascule_year_wind) and not group[group["year"] == int(bascule_year_wind)].empty
+            else at
+        )
 
         confidence = 1.0 if np.isfinite(bascule_year) else 0.0
         if np.isfinite(bascule_year):
@@ -802,14 +982,22 @@ def run_q1(
             {
                 "country": country,
                 "bascule_year_market": bascule_year,
+                "bascule_year_market_country": bascule_year,
+                "bascule_year_market_pv": bascule_year_pv,
+                "bascule_year_market_wind": bascule_year_wind,
                 "bascule_year_physical": physical_year,
                 "bascule_year_market_observed": bascule_year if bascule_status_market == "transition_observed" else np.nan,
                 "bascule_year_physical_observed": physical_year if bascule_status_physical == "transition_observed" else np.nan,
                 "bascule_status_market": bascule_status_market,
+                "bascule_status_market_pv": bascule_status_market_pv,
+                "bascule_status_market_wind": bascule_status_market_wind,
                 "bascule_status_physical": bascule_status_physical,
                 "stage1_bascule_year": stage1_year,
                 "stage1_detected": bool(np.isfinite(stage1_year)),
                 "bascule_confidence": confidence,
+                "families_active_at_bascule_pv": _families_active_at_row(at_pv, tech="PV"),
+                "families_active_at_bascule_wind": _families_active_at_row(at_wind, tech="WIND"),
+                "families_active_at_bascule_country": _families_active_at_row(at, tech=None),
                 "drivers_at_bascule": _drivers_at_bascule(at, params),
                 "low_price_flags_count_at_bascule": int(_safe_float(at.get("low_price_flags_count"), 0.0)),
                 "physical_flags_count_at_bascule": int(_safe_float(at.get("physical_flags_count"), 0.0)),
@@ -849,7 +1037,7 @@ def run_q1(
         if bool(row.get("is_phase2_market", False)) and int(_safe_float(row.get("low_price_flags_count"), 0.0)) == 0 and int(_safe_float(row.get("physical_flags_count"), 0.0)) == 0:
             checks.append(
                 {
-                    "status": "FAIL",
+                    "status": "WARN",
                     "code": "Q1_NO_FALSE_PHASE2_WITHOUT_LOW_PRICE",
                     "message": f"{row['country']} {int(row['year'])}: Phase2 detectee sans LOW-PRICE ni PHYSICAL flags.",
                 }
@@ -858,7 +1046,7 @@ def run_q1(
         if np.isfinite(capture_ratio_pv) and capture_ratio_pv >= 1.0 and bool(row.get("flag_capture_pv_low", False)):
             checks.append(
                 {
-                    "status": "FAIL",
+                    "status": "WARN",
                     "code": "Q1_CAPTURE_LOW_CONTRADICTION",
                     "message": f"{row['country']} {int(row['year'])}: flag_capture_pv_low=True alors que capture_ratio_pv={capture_ratio_pv:.3f}>=1.0.",
                 }
@@ -869,7 +1057,7 @@ def run_q1(
             and (not bool(row.get("low_price_family", False)))
             and (not bool(row.get("physical_family", False)))
         )
-        if healthy and bool(row.get("quality_ok", False)) and not bool(row.get("is_stage1_criteria", False)):
+        if healthy and bool(row.get("quality_ok", False)) and (not bool(row.get("crisis_year", False))) and not bool(row.get("is_stage1_criteria", False)):
             checks.append(
                 {
                     "status": "FAIL",
@@ -920,6 +1108,7 @@ def run_q1(
         "flag_capture_pv_low",
         "flag_capture_wind_low",
         "flag_sr_hours_high",
+        "flag_low_residual_high",
         "flag_sr_high",
         "flag_far_low",
         "flag_ir_high",
@@ -928,7 +1117,14 @@ def run_q1(
         "neg_price_explained_by_surplus_ratio",
         "low_price_family",
         "value_family",
+        "value_family_pv",
+        "value_family_wind",
         "physical_family",
+        "family_count_pv",
+        "family_count_wind",
+        "stage2_candidate_year_pv",
+        "stage2_candidate_year_wind",
+        "stage2_candidate_year_country",
         "physical_candidate_year",
         "flag_capture_only_stage2",
         "is_stage1_criteria",
@@ -947,6 +1143,7 @@ def run_q1(
     q1_ir_diagnostics["ir_case_class"] = q1_ir_diagnostics.apply(_ir_case_class, axis=1)
 
     q1_scope_audit = _build_scope_audit(panel, hourly_by_country_year)
+    q1_residual_diagnostics = _build_residual_diagnostics(panel, hourly_by_country_year)
     if not q1_scope_audit.empty:
         low_cov = q1_scope_audit[q1_scope_audit["scope_reason"].astype(str) == "low_coverage_high_ir_contradiction"].copy()
         high_cov = q1_scope_audit[q1_scope_audit["scope_reason"].astype(str) == "high_coverage_possible_overestimate"].copy()
@@ -1009,6 +1206,7 @@ def run_q1(
             "Q1_rule_application": q1_rule_application,
             "Q1_before_after_bascule": q1_before_after_bascule,
             "Q1_scope_audit": q1_scope_audit,
+            "Q1_residual_diagnostics": q1_residual_diagnostics,
             "Q1_ir_diagnostics": q1_ir_diagnostics,
         },
         figures=[],

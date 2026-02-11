@@ -32,6 +32,36 @@ def test_q4_soc_bounds(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, 
     assert (frontier["soc_min"] >= -1e-6).all()
 
 
+def test_q4_reduces_negative_hours_when_present(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+
+    raw = make_raw_panel(n=240)
+    raw.loc[raw.index[:120], "price_da_eur_mwh"] = -10.0
+    raw.loc[raw.index[120:], "price_da_eur_mwh"] = 90.0
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(
+        hourly,
+        assumptions,
+        {
+            "country": "FR",
+            "year": 2024,
+            "objective": "LOW_PRICE_TARGET",
+            "power_grid": [0.0, 250.0, 500.0, 1000.0],
+            "duration_grid": [2.0, 4.0],
+            "force_recompute": True,
+        },
+        "test",
+        dispatch_mode="SURPLUS_FIRST",
+    )
+    f = res.tables["Q4_bess_frontier"].copy()
+    h_before = pd.to_numeric(f["h_negative_before"], errors="coerce")
+    if pd.notna(h_before).any() and float(h_before.max()) > 0:
+        assert (pd.to_numeric(f["delta_h_negative"], errors="coerce") < 0).any()
+    fail_codes = {str(c.get("code", "")) for c in res.checks if str(c.get("status", "")).upper() == "FAIL"}
+    assert "Q4_BESS_INEFFECTIVE" not in fail_codes
+
+
 def test_q4_monotonic_surplus_reduction(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
 

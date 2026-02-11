@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 
 from src.constants import (
+    COL_LOW_RESIDUAL_HOUR,
+    COL_NRL,
     COL_PRICE_DA,
     COL_REGIME,
 )
@@ -37,6 +39,13 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
     scope_cov = row.get("must_run_scope_coverage", np.nan)
     h_regime_c = row.get("h_regime_c", np.nan)
     h_regime_d = row.get("h_regime_d", np.nan)
+    share_neg_ab = row.get("share_neg_price_hours_in_AB", np.nan)
+    share_neg_ab_or_low = row.get("share_neg_price_hours_in_AB_OR_LOW_RESIDUAL", np.nan)
+    load_total_twh = row.get("load_total_twh", np.nan)
+    load_net_twh = row.get("load_net_twh", np.nan)
+    psh_twh = row.get("psh_pumping_twh", np.nan)
+    must_run_twh = row.get("gen_must_run_twh", np.nan)
+    gen_total_twh = row.get("gen_primary_twh", row.get("gen_total_twh", np.nan))
 
     if _finite(sr) and not (0.0 <= float(sr) <= 1.0):
         checks.append({"status": "FAIL", "code": "RC_SR_RANGE", "message": f"{label}: SR hors [0,1]."})
@@ -70,6 +79,44 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
         checks.append({"status": "WARN", "code": "RC_TTL_LOW_SAMPLE", "message": f"{label}: TTL calcule sur trop peu d'heures C+D (<500)."})
     if _finite(scope_cov) and not (0.0 <= float(scope_cov) <= 1.0):
         checks.append({"status": "FAIL", "code": "RC_SCOPE_COVERAGE_RANGE", "message": f"{label}: must_run_scope_coverage hors [0,1]."})
+    if _finite(share_neg_ab) and float(share_neg_ab) < 0.50:
+        checks.append(
+            {
+                "status": "INFO",
+                "code": "RC_NEG_NOT_IN_AB",
+                "message": f"{label}: seulement {float(share_neg_ab):.1%} des heures negatives en A/B (check legacy).",
+            }
+        )
+    if _finite(share_neg_ab_or_low) and float(share_neg_ab_or_low) < 0.70:
+        checks.append(
+            {
+                "status": "WARN",
+                "code": "RC_NEG_NOT_IN_AB_OR_LOW_RESIDUAL",
+                "message": f"{label}: seulement {float(share_neg_ab_or_low):.1%} des heures negatives expliquees par A/B ou low residual.",
+            }
+        )
+    if _finite(load_total_twh) and _finite(load_net_twh) and _finite(psh_twh):
+        lhs = float(load_total_twh)
+        rhs = float(load_net_twh) + float(psh_twh)
+        rel_err = abs(lhs - rhs) / max(abs(lhs), 1e-9)
+        if rel_err > 0.001:
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "RC_LOAD_PSH_ENERGY_IDENTITY",
+                    "message": f"{label}: load_total_twh != load_net_twh + psh_pumping_twh (rel_err={rel_err:.2%}).",
+                }
+            )
+    if _finite(must_run_twh) and _finite(gen_total_twh) and float(gen_total_twh) > 0.0:
+        share = float(must_run_twh) / float(gen_total_twh)
+        if not (0.05 <= share <= 0.60):
+            checks.append(
+                {
+                    "status": "WARN",
+                    "code": "RC_MR_SHARE_IMPLAUSIBLE",
+                    "message": f"{label}: must_run_share={share:.1%} hors plage plausible [5%,60%].",
+                }
+            )
 
     return checks
 
@@ -85,10 +132,44 @@ def _check_hourly(hourly_df: pd.DataFrame, label: str = "") -> list[dict[str, st
 
     neg_total = int((p < 0).sum())
     if neg_total > 0:
-        neg_ab = int(((p < 0) & r.isin(["A", "B"])).sum())
-        ratio = neg_ab / neg_total
-        if ratio < 0.50:
-            checks.append({"status": "WARN", "code": "RC_NEG_NOT_IN_AB", "message": f"{name}: seulement {ratio:.1%} des heures negatives en regime A/B."})
+        neg_mask = p < 0
+        low_residual = (
+            pd.to_numeric(hourly_df.get(COL_LOW_RESIDUAL_HOUR), errors="coerce").fillna(0.0) > 0
+            if COL_LOW_RESIDUAL_HOUR in hourly_df.columns
+            else pd.Series(False, index=hourly_df.index)
+        )
+        neg_ab = int((neg_mask & r.isin(["A", "B"])).sum())
+        neg_ab_or_low = int((neg_mask & (r.isin(["A", "B"]) | low_residual)).sum())
+        ratio_ab = neg_ab / neg_total
+        ratio_ab_or_low = neg_ab_or_low / neg_total
+        if ratio_ab < 0.50:
+            checks.append({"status": "INFO", "code": "RC_NEG_NOT_IN_AB", "message": f"{name}: {ratio_ab:.1%} des heures negatives en regime A/B (check legacy)."})
+        if ratio_ab_or_low < 0.70:
+            nrl = pd.to_numeric(hourly_df.get(COL_NRL), errors="coerce")
+            neg_nrl = nrl[neg_mask]
+            p10 = float(neg_nrl.quantile(0.10)) if neg_nrl.notna().any() else float("nan")
+            p50 = float(neg_nrl.quantile(0.50)) if neg_nrl.notna().any() else float("nan")
+            p90 = float(neg_nrl.quantile(0.90)) if neg_nrl.notna().any() else float("nan")
+            causes: list[str] = []
+            mr = pd.to_numeric(hourly_df.get("gen_must_run_mw"), errors="coerce")
+            if mr.notna().mean() < 0.95:
+                causes.append("must_run_missing")
+            if "psh_pumping_data_status" in hourly_df.columns:
+                status = str(hourly_df["psh_pumping_data_status"].dropna().iloc[0]).lower() if hourly_df["psh_pumping_data_status"].notna().any() else "missing"
+                if status in {"missing", "partial"}:
+                    causes.append("psh_data_incomplete")
+            if not causes:
+                causes.append("price_or_regime_mapping")
+            checks.append(
+                {
+                    "status": "WARN",
+                    "code": "RC_NEG_NOT_IN_AB_OR_LOW_RESIDUAL",
+                    "message": (
+                        f"{name}: {ratio_ab_or_low:.1%} des heures negatives expliquees par A/B ou low residual "
+                        f"(nrl_neg_p10={p10:.1f}, p50={p50:.1f}, p90={p90:.1f}; causes={','.join(causes[:3])})."
+                    ),
+                }
+            )
 
     med_c = float(p[r == "C"].median()) if (r == "C").any() else np.nan
     med_d = float(p[r == "D"].median()) if (r == "D").any() else np.nan

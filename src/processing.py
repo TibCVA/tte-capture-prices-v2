@@ -44,9 +44,13 @@ from src.constants import (
     COL_NET_POSITION,
     COL_NRL,
     COL_NRL_POS,
+    COL_LOW_RESIDUAL_HOUR,
+    COL_LOW_RESIDUAL_THRESHOLD,
     COL_NRL_THRESHOLD,
     COL_PRICE_DA,
     COL_PSH_PUMP,
+    COL_PSH_PUMP_COVERAGE,
+    COL_PSH_PUMP_STATUS,
     COL_Q_ANY_CRITICAL_MISSING,
     COL_Q_BAD_LOAD_NET,
     COL_Q_MISSING_GENERATION,
@@ -204,6 +208,8 @@ def build_hourly_table(
     df[COL_LOAD_NET] = core[COL_LOAD_NET]
     df[COL_LOAD_NET_MODE] = core[COL_LOAD_NET_MODE]
     df[COL_PSH_PUMP] = core[COL_PSH_PUMP]
+    df[COL_PSH_PUMP_COVERAGE] = core.get(COL_PSH_PUMP_COVERAGE, np.nan)
+    df[COL_PSH_PUMP_STATUS] = core.get(COL_PSH_PUMP_STATUS, "missing")
     df[COL_GEN_MUST_RUN_OBS] = core["must_run_observed_mw"]
     df[COL_GEN_MUST_RUN] = core["must_run_mw"]
     df[COL_MUST_RUN_MODE] = core["must_run_mode"]
@@ -221,7 +227,7 @@ def build_hourly_table(
     df[COL_BESS_SOC] = _safe_series(df, COL_BESS_SOC, 0.0).fillna(0.0).clip(lower=0.0)
     df[COL_Q_BAD_LOAD_NET] = df[COL_LOAD_NET] < 0
     df.loc[df[COL_Q_BAD_LOAD_NET], COL_LOAD_NET] = np.nan
-    df[COL_Q_MISSING_PSH_PUMP] = df[COL_LOAD_NET_MODE].astype(str) != "net_of_psh_pump"
+    df[COL_Q_MISSING_PSH_PUMP] = df[COL_PSH_PUMP_STATUS].astype(str).str.lower().isin(["missing", "partial"])
 
     model_cfg = thresholds_cfg.get("model", {})
     regime, threshold = _classify_regime(
@@ -233,6 +239,19 @@ def build_hourly_table(
     )
     df[COL_REGIME] = regime
     df[COL_NRL_THRESHOLD] = threshold
+
+    # "Quasi-surplus" diagnostic signal (without changing A/B/C/D labels).
+    nrl = pd.to_numeric(df[COL_NRL], errors="coerce")
+    nrl_pos = nrl.clip(lower=0.0)
+    if nrl_pos.notna().any():
+        low_residual_threshold = float(nrl_pos.quantile(0.10))
+    else:
+        low_residual_threshold = float("nan")
+    df[COL_LOW_RESIDUAL_THRESHOLD] = low_residual_threshold
+    if np.isfinite(low_residual_threshold):
+        df[COL_LOW_RESIDUAL_HOUR] = (nrl >= 0.0) & (nrl <= low_residual_threshold)
+    else:
+        df[COL_LOW_RESIDUAL_HOUR] = False
 
     # Quality flags.
     df[COL_Q_MISSING_PRICE] = df[COL_PRICE_DA].isna()

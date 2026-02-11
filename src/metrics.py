@@ -16,7 +16,9 @@ from src.constants import (
     COL_DATA_VERSION_HASH,
     COL_ENTSOE_CODE_USED,
     COL_EXPORTS,
+    COL_FLEX_EXPORTS,
     COL_FLEX_OBS,
+    COL_FLEX_PSH,
     COL_GEN_MUST_RUN,
     COL_GEN_PRIMARY,
     COL_GEN_SOLAR,
@@ -27,11 +29,16 @@ from src.constants import (
     COL_LOAD_NET,
     COL_LOAD_NET_MODE,
     COL_LOAD_TOTAL,
+    COL_LOW_RESIDUAL_HOUR,
+    COL_LOW_RESIDUAL_THRESHOLD,
     COL_MUST_RUN_MODE,
     COL_NET_POSITION,
     COL_NRL,
     COL_NRL_PRICE_CORR,
     COL_PRICE_DA,
+    COL_PSH_PUMP,
+    COL_PSH_PUMP_COVERAGE,
+    COL_PSH_PUMP_STATUS,
     COL_Q_ANY_CRITICAL_MISSING,
     COL_Q_MISSING_GENERATION,
     COL_Q_MISSING_LOAD,
@@ -54,6 +61,14 @@ def _safe_div(a: float, b: float) -> float:
     if b is None or b == 0 or not np.isfinite(b):
         return float("nan")
     return float(a / b)
+
+
+def _safe_float(value: Any, default: float = np.nan) -> float:
+    try:
+        out = float(value)
+    except Exception:
+        return float(default)
+    return out if np.isfinite(out) else float(default)
 
 
 def _weighted_capture(price: pd.Series, gen: pd.Series) -> float:
@@ -139,9 +154,56 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
     h_below_5 = int((price <= 5).sum())
     days_spread_gt50, avg_daily_spread, max_daily_spread = _days_spread(price, timezone)
 
+    regime = df[COL_REGIME].astype(str) if COL_REGIME in df.columns else pd.Series(index=df.index, dtype=object)
+    neg_mask = price < 0
+    neg_count = int(neg_mask.sum())
+    neg_ab_count = int((neg_mask & regime.isin(["A", "B"])).sum()) if neg_count > 0 else 0
+    low_residual_flag = (
+        pd.to_numeric(df[COL_LOW_RESIDUAL_HOUR], errors="coerce").fillna(0.0) > 0
+        if COL_LOW_RESIDUAL_HOUR in df.columns
+        else pd.Series(False, index=df.index)
+    )
+    neg_low_residual_count = int((neg_mask & low_residual_flag).sum()) if neg_count > 0 else 0
+    neg_ab_or_low_residual_count = int((neg_mask & (regime.isin(["A", "B"]) | low_residual_flag)).sum()) if neg_count > 0 else 0
+    share_neg_price_hours_in_ab = _safe_div(float(neg_ab_count), float(neg_count)) if neg_count > 0 else float("nan")
+    share_neg_price_hours_in_low_residual = _safe_div(float(neg_low_residual_count), float(neg_count)) if neg_count > 0 else float("nan")
+    share_neg_price_hours_in_ab_or_low_residual = (
+        _safe_div(float(neg_ab_or_low_residual_count), float(neg_count)) if neg_count > 0 else float("nan")
+    )
+
+    nrl_series = pd.to_numeric(df[COL_NRL], errors="coerce")
+    residual_p10 = _percentile(nrl_series, 0.10)
+    residual_p50 = _percentile(nrl_series, 0.50)
+    residual_p90 = _percentile(nrl_series, 0.90)
+    low_residual_share = float(low_residual_flag.mean()) if len(low_residual_flag) else float("nan")
+    low_residual_threshold_mw = _safe_float(
+        pd.to_numeric(df[COL_LOW_RESIDUAL_THRESHOLD], errors="coerce").dropna().iloc[0],
+        np.nan,
+    ) if COL_LOW_RESIDUAL_THRESHOLD in df.columns and pd.to_numeric(df[COL_LOW_RESIDUAL_THRESHOLD], errors="coerce").notna().any() else np.nan
+    price_low_residual_median = _safe_float(price[low_residual_flag].median(), np.nan) if bool(low_residual_flag.any()) else np.nan
+    price_negative_median = _safe_float(price[neg_mask].median(), np.nan) if neg_count > 0 else np.nan
+    residual_negative_p50 = _safe_float(nrl_series[neg_mask].median(), np.nan) if neg_count > 0 else np.nan
+
     surplus_energy = float(pd.to_numeric(df[COL_SURPLUS], errors="coerce").fillna(0).clip(lower=0.0).sum())
     surplus_absorbed = float(pd.to_numeric(df[COL_SURPLUS_ABSORBED], errors="coerce").fillna(0).clip(lower=0.0).sum())
     surplus_unabs = float(pd.to_numeric(df[COL_SURPLUS_UNABS], errors="coerce").fillna(0).clip(lower=0.0).sum())
+    psh_pumping_mwh = float(pd.to_numeric(df.get(COL_PSH_PUMP), errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    flex_sink_exports_mwh = float(
+        pd.to_numeric(df.get(COL_FLEX_EXPORTS, df.get(COL_EXPORTS)), errors="coerce").fillna(0.0).clip(lower=0.0).sum()
+    )
+    flex_sink_psh_mwh = float(
+        pd.to_numeric(df.get(COL_FLEX_PSH, df.get(COL_PSH_PUMP)), errors="coerce").fillna(0.0).clip(lower=0.0).sum()
+    )
+    flex_sink_total_mwh = float(pd.to_numeric(df.get(COL_FLEX_OBS), errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    psh_pumping_coverage_share = _safe_float(
+        pd.to_numeric(df.get(COL_PSH_PUMP_COVERAGE), errors="coerce").dropna().iloc[0],
+        np.nan,
+    ) if COL_PSH_PUMP_COVERAGE in df.columns and pd.to_numeric(df.get(COL_PSH_PUMP_COVERAGE), errors="coerce").notna().any() else np.nan
+    psh_pumping_data_status = (
+        str(df[COL_PSH_PUMP_STATUS].dropna().iloc[0])
+        if COL_PSH_PUMP_STATUS in df.columns and df[COL_PSH_PUMP_STATUS].notna().any()
+        else "missing"
+    )
 
     load_energy = float(pd.to_numeric(df[COL_LOAD_NET], errors="coerce").fillna(0).sum())
     gen_primary_series = pd.to_numeric(df[COL_GEN_PRIMARY], errors="coerce") if COL_GEN_PRIMARY in df.columns else pd.Series(0.0, index=df.index, dtype=float)
@@ -221,6 +283,9 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         COL_DATA_VERSION_HASH: data_version_hash,
         "load_total_twh": float(pd.to_numeric(df[COL_LOAD_TOTAL], errors="coerce").fillna(0).sum()) / 1e6,
         "load_net_twh": load_energy / 1e6,
+        "psh_pumping_twh": psh_pumping_mwh / 1e6,
+        "psh_pumping_coverage_share": psh_pumping_coverage_share,
+        "psh_pumping_data_status": psh_pumping_data_status,
         "gen_solar_twh": pv_twh,
         "gen_wind_on_twh": float(pd.to_numeric(df[COL_GEN_WIND_ON], errors="coerce").fillna(0).sum()) / 1e6,
         "gen_wind_off_twh": float(pd.to_numeric(df[COL_GEN_WIND_OFF], errors="coerce").fillna(0).sum()) / 1e6,
@@ -228,6 +293,9 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "gen_primary_twh": gen_primary_twh,
         "gen_must_run_twh": float(pd.to_numeric(df[COL_GEN_MUST_RUN], errors="coerce").fillna(0).sum()) / 1e6,
         "exports_twh": float(pd.to_numeric(df[COL_EXPORTS], errors="coerce").fillna(0).sum()) / 1e6,
+        "flex_sink_exports_twh": flex_sink_exports_mwh / 1e6,
+        "flex_sink_psh_twh": flex_sink_psh_mwh / 1e6,
+        "flex_sink_total_twh": flex_sink_total_mwh / 1e6,
         "vre_penetration_share_gen": vre_pen_share,
         "pv_penetration_share_gen": pv_pen_share,
         "wind_penetration_share_gen": wind_pen_share,
@@ -252,11 +320,17 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "h_negative_obs": h_negative,
         "h_below_5": h_below_5,
         "h_below_5_obs": h_below_5,
+        "share_neg_price_hours_in_AB": share_neg_price_hours_in_ab,
+        "share_neg_price_hours_in_low_residual": share_neg_price_hours_in_low_residual,
+        "share_neg_price_hours_in_AB_OR_LOW_RESIDUAL": share_neg_price_hours_in_ab_or_low_residual,
         "days_spread_50_obs": days_spread_gt50,
         "days_spread_gt50": days_spread_gt50,
         "avg_daily_spread_obs": avg_daily_spread,
         "max_daily_spread_obs": max_daily_spread,
         "surplus_twh": surplus_energy / 1e6,
+        "surplus_energy_twh": surplus_energy / 1e6,
+        "absorbed_surplus_twh": surplus_absorbed / 1e6,
+        "unabsorbed_surplus_twh": surplus_unabs / 1e6,
         "surplus_unabsorbed_twh": surplus_unabs / 1e6,
         "sr_energy_share_load": sr_load,
         "sr_energy_share_gen": sr_gen,
@@ -283,6 +357,14 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "h_regime_b": int((df[COL_REGIME] == "B").sum()),
         "h_regime_c": int((df[COL_REGIME] == "C").sum()),
         "h_regime_d": int((df[COL_REGIME] == "D").sum()),
+        "low_residual_hours_share": low_residual_share,
+        "low_residual_threshold_mw": low_residual_threshold_mw,
+        "residual_load_p10_mw": residual_p10,
+        "residual_load_p50_mw": residual_p50,
+        "residual_load_p90_mw": residual_p90,
+        "price_low_residual_median_eur_mwh": price_low_residual_median,
+        "price_negative_hours_median_eur_mwh": price_negative_median,
+        "residual_load_p50_on_negative_price_mw": residual_negative_p50,
         COL_REGIME_COHERENCE: _regime_coherence(df),
         COL_NRL_PRICE_CORR: nrl_price_corr,
         COL_COMPLETENESS: completeness,
