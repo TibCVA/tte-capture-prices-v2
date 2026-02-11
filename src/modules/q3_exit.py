@@ -19,6 +19,9 @@ Q3_PARAMS = [
     "stage2_recent_sr_energy_min_scen",
     "trend_h_negative_max",
     "trend_capture_ratio_min",
+    "slope_capture_target",
+    "h_negative_target",
+    "h_below_5_target",
     "sr_energy_target",
     "far_target",
     "demand_k_max",
@@ -43,6 +46,43 @@ def _binary_search_lowest(fn, lo: float, hi: float, tol: float = 1e-4, max_iter:
     return best
 
 
+def _safe_array(df: pd.DataFrame, col: str) -> np.ndarray:
+    return pd.to_numeric(df.get(col), errors="coerce").to_numpy(dtype=float)
+
+
+def _infer_nrl_thresholds(ref: pd.DataFrame) -> tuple[float, float]:
+    nrl = pd.to_numeric(ref.get("nrl_mw"), errors="coerce")
+    price = pd.to_numeric(ref.get("price_da_eur_mwh"), errors="coerce")
+    valid = nrl.notna() & price.notna()
+    if not valid.any():
+        return np.nan, np.nan
+    nrl_v = nrl[valid]
+    price_v = price[valid]
+
+    nrl_neg = nrl_v[price_v < 0.0]
+    nrl_low5 = nrl_v[price_v <= 5.0]
+    if nrl_neg.empty:
+        neg_thr = float(nrl_v.quantile(0.10))
+    else:
+        # Largest NRL still associated with negative prices.
+        neg_thr = float(nrl_neg.max())
+    if nrl_low5.empty:
+        low5_thr = float(nrl_v.quantile(0.20))
+    else:
+        # Largest NRL still associated with <=5 EUR/MWh prices.
+        low5_thr = float(nrl_low5.max())
+    return neg_thr, low5_thr
+
+
+def _proxy_hours_from_nrl(nrl_tmp: np.ndarray, threshold: float) -> float:
+    if not np.isfinite(threshold):
+        return np.nan
+    finite = np.isfinite(nrl_tmp)
+    if not finite.any():
+        return np.nan
+    return float(np.sum(nrl_tmp[finite] <= threshold))
+
+
 def run_q3(
     annual_df: pd.DataFrame,
     hourly_by_country_year: dict[tuple[str, int], pd.DataFrame],
@@ -50,6 +90,10 @@ def run_q3(
     selection: dict[str, Any],
     run_id: str,
 ) -> ModuleResult:
+    all_params = {
+        str(r["param_name"]): float(r["param_value"])
+        for _, r in assumptions_df.iterrows()
+    }
     params = {
         str(r["param_name"]): float(r["param_value"])
         for _, r in assumptions_df[assumptions_df["param_name"].isin(Q3_PARAMS)].iterrows()
@@ -63,6 +107,9 @@ def run_q3(
     recent_hneg_min = recent_hneg_min_scen if is_scen else recent_hneg_min_hist
     trend_hneg_max = float(params.get("trend_h_negative_max", -10.0))
     trend_cap_min = float(params.get("trend_capture_ratio_min", 0.0))
+    slope_capture_target = float(params.get("slope_capture_target", 0.0))
+    h_negative_target = float(params.get("h_negative_target", all_params.get("stage1_h_negative_max", 100.0)))
+    h_below_5_target = float(params.get("h_below_5_target", all_params.get("stage1_h_below_5_max", 300.0)))
     sr_target = float(params.get("sr_energy_target", 0.01))
     far_target = float(params.get("far_target", 0.95))
     k_max = float(params.get("demand_k_max", 0.30))
@@ -98,11 +145,11 @@ def run_q3(
             has_recent_stage2 = recent_hneg >= recent_hneg_min
         if require_recent_stage2 and not has_recent_stage2:
             status = "hors_scope_stage2"
-        elif trend_hneg > 0 and trend_cap < 0:
+        elif trend_hneg > 0 and trend_cap < slope_capture_target:
             status = "degradation"
-        elif abs(trend_hneg) <= abs(trend_hneg_max) and abs(trend_cap) <= 0.01:
+        elif abs(trend_hneg) <= abs(trend_hneg_max) and abs(trend_cap - slope_capture_target) <= 0.01:
             status = "stabilisation"
-        elif trend_hneg <= trend_hneg_max and trend_cap >= trend_cap_min:
+        elif trend_hneg <= trend_hneg_max and trend_cap >= max(trend_cap_min, slope_capture_target):
             status = "amelioration"
         else:
             status = "transition_partielle"
@@ -113,44 +160,58 @@ def run_q3(
             warnings.append(f"{country}: horaire manquant pour {ref_year}, contre-factuels non calcules.")
             continue
 
-        def demand_condition(k: float) -> bool:
-            temp = ref.copy()
-            temp["load_tmp"] = pd.to_numeric(temp["load_mw"], errors="coerce") * (1 + k)
-            temp["nrl_tmp"] = temp["load_tmp"] - pd.to_numeric(temp["gen_vre_mw"], errors="coerce") - pd.to_numeric(temp["gen_must_run_mw"], errors="coerce")
-            temp["surplus_tmp"] = (-temp["nrl_tmp"]).clip(lower=0.0)
-            gen_primary_sum = float(pd.to_numeric(temp["gen_primary_mw"], errors="coerce").sum())
-            if gen_primary_sum <= 0:
-                return False
-            sr = float(temp["surplus_tmp"].sum()) / gen_primary_sum
-            return sr <= sr_target
+        if status == "hors_scope_stage2":
+            inversion_k = np.nan
+            inversion_r = np.nan
+            additional_abs_needed = np.nan
+            additional_sink_p95 = np.nan
+        else:
+            load_arr = _safe_array(ref, "load_mw")
+            vre_arr = _safe_array(ref, "gen_vre_mw")
+            mr_arr = _safe_array(ref, "gen_must_run_mw")
+            gen_primary_arr = _safe_array(ref, "gen_primary_mw")
+            neg_thr, low5_thr = _infer_nrl_thresholds(ref)
+            gen_primary_sum = float(np.nansum(np.where(np.isfinite(gen_primary_arr), gen_primary_arr, 0.0)))
 
-        inversion_k = _binary_search_lowest(demand_condition, 0.0, k_max)
+            def _targets_reached(nrl_tmp: np.ndarray) -> bool:
+                if gen_primary_sum <= 0:
+                    return False
+                surplus_tmp = np.maximum(0.0, -nrl_tmp)
+                sr = float(np.nansum(surplus_tmp)) / gen_primary_sum
+                hneg_proxy = _proxy_hours_from_nrl(nrl_tmp, neg_thr)
+                hlow5_proxy = _proxy_hours_from_nrl(nrl_tmp, low5_thr)
+                return bool(
+                    sr <= sr_target
+                    and np.isfinite(hneg_proxy)
+                    and np.isfinite(hlow5_proxy)
+                    and hneg_proxy <= h_negative_target
+                    and hlow5_proxy <= h_below_5_target
+                )
 
-        def must_run_condition(r: float) -> bool:
-            temp = ref.copy()
-            temp["mr_tmp"] = pd.to_numeric(temp["gen_must_run_mw"], errors="coerce") * (1 - r)
-            temp["nrl_tmp"] = pd.to_numeric(temp["load_mw"], errors="coerce") - pd.to_numeric(temp["gen_vre_mw"], errors="coerce") - temp["mr_tmp"]
-            temp["surplus_tmp"] = (-temp["nrl_tmp"]).clip(lower=0.0)
-            gen_primary_sum = float(pd.to_numeric(temp["gen_primary_mw"], errors="coerce").sum())
-            if gen_primary_sum <= 0:
-                return False
-            sr = float(temp["surplus_tmp"].sum()) / gen_primary_sum
-            return sr <= sr_target
+            def demand_condition(k: float) -> bool:
+                nrl_tmp = load_arr * (1.0 + k) - vre_arr - mr_arr
+                return _targets_reached(nrl_tmp)
 
-        inversion_r = _binary_search_lowest(must_run_condition, 0.0, 1.0)
+            def must_run_condition(r: float) -> bool:
+                mr_tmp = mr_arr * (1.0 - r)
+                nrl_tmp = load_arr - vre_arr - mr_tmp
+                return _targets_reached(nrl_tmp)
 
-        surplus_energy = float(pd.to_numeric(ref["surplus_mw"], errors="coerce").fillna(0).sum())
-        absorbed_current = float(pd.to_numeric(ref["surplus_absorbed_mw"], errors="coerce").fillna(0).sum())
-        absorbed_target = far_target * surplus_energy
-        additional_abs_needed = max(0.0, absorbed_target - absorbed_current)
-        additional_sink_p95 = float(pd.to_numeric(ref["surplus_unabsorbed_mw"], errors="coerce").fillna(0).quantile(0.95))
+            inversion_k = _binary_search_lowest(demand_condition, 0.0, k_max)
+            inversion_r = _binary_search_lowest(must_run_condition, 0.0, 1.0)
 
-        if inversion_k > 0.25:
-            checks.append({"status": "WARN", "code": "Q3_DEMAND_HIGH", "message": f"{country}: inversion_k_demand={inversion_k:.1%} (>25%)."})
-        if inversion_r > 0.50:
-            checks.append({"status": "WARN", "code": "Q3_MUSTRUN_HIGH", "message": f"{country}: inversion_r_mustrun={inversion_r:.1%} (>50%)."})
-        if additional_abs_needed == 0.0:
-            checks.append({"status": "INFO", "code": "Q3_FAR_ALREADY_REACHED", "message": f"{country}: FAR cible deja atteinte."})
+            surplus_energy = float(pd.to_numeric(ref["surplus_mw"], errors="coerce").fillna(0).sum())
+            absorbed_current = float(pd.to_numeric(ref["surplus_absorbed_mw"], errors="coerce").fillna(0).sum())
+            absorbed_target = far_target * surplus_energy
+            additional_abs_needed = max(0.0, absorbed_target - absorbed_current)
+            additional_sink_p95 = float(pd.to_numeric(ref["surplus_unabsorbed_mw"], errors="coerce").fillna(0).quantile(0.95))
+
+            if inversion_k > 0.25:
+                checks.append({"status": "WARN", "code": "Q3_DEMAND_HIGH", "message": f"{country}: inversion_k_demand={inversion_k:.1%} (>25%)."})
+            if inversion_r > 0.50:
+                checks.append({"status": "WARN", "code": "Q3_MUSTRUN_HIGH", "message": f"{country}: inversion_r_mustrun={inversion_r:.1%} (>50%)."})
+            if additional_abs_needed == 0.0:
+                checks.append({"status": "INFO", "code": "Q3_FAR_ALREADY_REACHED", "message": f"{country}: FAR cible deja atteinte."})
 
         rows.append(
             {

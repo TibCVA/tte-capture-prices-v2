@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import pearsonr
 
+from src.conventions import clip01, to_pct
 from src.constants import (
     COL_COMPLETENESS,
     COL_COUNTRY,
@@ -148,7 +149,8 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
     sr_load = _safe_div(surplus_energy, load_energy)
     sr_gen = _safe_div(surplus_energy, gen_primary)
 
-    far = float("nan") if surplus_energy <= 0 else _safe_div(surplus_absorbed, surplus_energy)
+    far_raw = float("nan") if surplus_energy <= 0 else _safe_div(surplus_absorbed, surplus_energy)
+    far = clip01(far_raw)
 
     p10_mr = _percentile(df[COL_GEN_MUST_RUN], 0.10)
     p10_load = _percentile(df[COL_LOAD_NET], 0.10)
@@ -165,7 +167,11 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
 
     gen_vre_twh = float(pd.to_numeric(df[COL_GEN_VRE], errors="coerce").fillna(0).sum()) / 1e6
     gen_primary_twh = gen_primary / 1e6
-    vre_pen_gen = _safe_div(gen_vre_twh, gen_primary_twh)
+    pv_twh = float(pd.to_numeric(df[COL_GEN_SOLAR], errors="coerce").fillna(0).sum()) / 1e6
+    wind_twh = float(wind_total.sum()) / 1e6
+    vre_pen_share = _safe_div(gen_vre_twh, gen_primary_twh)
+    pv_pen_share = _safe_div(pv_twh, gen_primary_twh)
+    wind_pen_share = _safe_div(wind_twh, gen_primary_twh)
     vre_pen_proxy = _safe_div(gen_vre_twh, load_energy / 1e6)
 
     if df[[COL_NRL, COL_PRICE_DA]].dropna().shape[0] >= 3:
@@ -193,16 +199,19 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         COL_DATA_VERSION_HASH: data_version_hash,
         "load_total_twh": float(pd.to_numeric(df[COL_LOAD_TOTAL], errors="coerce").fillna(0).sum()) / 1e6,
         "load_net_twh": load_energy / 1e6,
-        "gen_solar_twh": float(pd.to_numeric(df[COL_GEN_SOLAR], errors="coerce").fillna(0).sum()) / 1e6,
+        "gen_solar_twh": pv_twh,
         "gen_wind_on_twh": float(pd.to_numeric(df[COL_GEN_WIND_ON], errors="coerce").fillna(0).sum()) / 1e6,
         "gen_wind_off_twh": float(pd.to_numeric(df[COL_GEN_WIND_OFF], errors="coerce").fillna(0).sum()) / 1e6,
         "gen_vre_twh": gen_vre_twh,
         "gen_primary_twh": gen_primary_twh,
         "gen_must_run_twh": float(pd.to_numeric(df[COL_GEN_MUST_RUN], errors="coerce").fillna(0).sum()) / 1e6,
         "exports_twh": float(pd.to_numeric(df[COL_EXPORTS], errors="coerce").fillna(0).sum()) / 1e6,
-        "vre_penetration_pct_gen": vre_pen_gen,
-        "pv_penetration_pct_gen": _safe_div(float(pd.to_numeric(df[COL_GEN_SOLAR], errors="coerce").fillna(0).sum()) / 1e6, gen_primary_twh),
-        "wind_penetration_pct_gen": _safe_div((float(wind_total.sum()) / 1e6), gen_primary_twh),
+        "vre_penetration_share_gen": vre_pen_share,
+        "pv_penetration_share_gen": pv_pen_share,
+        "wind_penetration_share_gen": wind_pen_share,
+        "vre_penetration_pct_gen": to_pct(vre_pen_share),
+        "pv_penetration_pct_gen": to_pct(pv_pen_share),
+        "wind_penetration_pct_gen": to_pct(wind_pen_share),
         "vre_penetration_proxy": vre_pen_proxy,
         "baseload_price_eur_mwh": baseload,
         "peakload_price_eur_mwh": peak_price,
@@ -230,6 +239,7 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "sr_energy_share_load": sr_load,
         "sr_energy_share_gen": sr_gen,
         "sr_energy": sr_gen,
+        "sr_hours_share": float((pd.to_numeric(df[COL_SURPLUS], errors="coerce") > 0).mean()),
         "sr_hours": float((pd.to_numeric(df[COL_SURPLUS], errors="coerce") > 0).mean()),
         "far_observed": far,
         "far_energy": far,

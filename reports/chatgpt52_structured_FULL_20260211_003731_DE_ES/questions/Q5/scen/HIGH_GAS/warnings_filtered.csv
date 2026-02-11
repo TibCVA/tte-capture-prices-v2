@@ -1,0 +1,4 @@
+question_id,status,code,message,scope,scenario_id,mentioned_countries,is_global
+Q5,WARN,QUESTION_WARNING,Alpha negatif: ancre thermique potentiellement fragile sans contexte.,GLOBAL,,,True
+Q5,WARN,QUESTION_WARNING,Alpha negatif: ancre thermique potentiellement fragile sans contexte.,GLOBAL,,,True
+Q5,WARN,QUESTION_WARNING,Alpha negatif: ancre thermique potentiellement fragile sans contexte.,GLOBAL,,,True

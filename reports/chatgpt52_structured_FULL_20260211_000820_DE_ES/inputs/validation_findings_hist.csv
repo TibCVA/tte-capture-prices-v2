@@ -1,0 +1,15 @@
+severity,code,message,evidence,suggestion,country,year
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2018
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2022
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2018
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2022
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2023
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2024
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2023
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2024

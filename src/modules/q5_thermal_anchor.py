@@ -69,6 +69,30 @@ def _co2_required_non_negative(value: float) -> float:
     return max(0.0, float(value))
 
 
+def _safe_float(value: Any, default: float = np.nan) -> float:
+    try:
+        out = float(value)
+    except Exception:
+        return float(default)
+    return out if np.isfinite(out) else float(default)
+
+
+def _ttl_regression_estimate(cd: pd.DataFrame, tca_q95: float) -> float:
+    if cd is None or cd.empty or not np.isfinite(tca_q95):
+        return np.nan
+    x = pd.to_numeric(cd.get("tca_eur_mwh"), errors="coerce").to_numpy(dtype=float)
+    y = pd.to_numeric(cd.get("price_da_eur_mwh"), errors="coerce").to_numpy(dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    if int(mask.sum()) < 5:
+        return np.nan
+    x = x[mask]
+    y = y[mask]
+    if float(np.nanstd(x)) <= 1e-9:
+        return np.nan
+    slope, intercept = np.polyfit(x, y, deg=1)
+    return float(intercept + slope * tca_q95)
+
+
 def run_q5(
     hourly_df: pd.DataFrame,
     assumptions_df: pd.DataFrame,
@@ -78,10 +102,19 @@ def run_q5(
     ttl_target_eur_mwh: float | None = None,
     gas_override_eur_mwh_th: float | None = None,
     co2_override_eur_t: float | None = None,
+    ttl_method: str | None = None,
+    ttl_physical_margin_eur_mwh: float | None = None,
 ) -> ModuleResult:
     country = str(selection.get("country", ""))
     marginal_tech = str(selection.get("marginal_tech", "CCGT")).upper()
     eff, ef, vom = _tech_params(assumptions_df, marginal_tech)
+    method = str(ttl_method or selection.get("ttl_method", "physical")).strip().lower()
+    if method not in {"physical", "regression"}:
+        method = "physical"
+    margin = _safe_float(
+        ttl_physical_margin_eur_mwh if ttl_physical_margin_eur_mwh is not None else selection.get("ttl_physical_margin_eur_mwh", 0.0),
+        0.0,
+    )
 
     if commodity_daily is None:
         commodity_daily = load_commodity_daily()
@@ -95,9 +128,15 @@ def run_q5(
                     "year_range_used": "",
                     "marginal_tech": marginal_tech,
                     "ttl_obs": np.nan,
+                    "ttl_obs_price_cd": np.nan,
+                    "ttl_physical": np.nan,
+                    "ttl_regression": np.nan,
+                    "ttl_method": method,
                     "tca_q95": np.nan,
                     "alpha": np.nan,
+                    "alpha_effective": np.nan,
                     "corr_cd": np.nan,
+                    "anchor_confidence": np.nan,
                     "dTCA_dCO2": ef / eff if eff > 0 else np.nan,
                     "dTCA_dGas": 1 / eff if eff > 0 else np.nan,
                     "ttl_target": ttl_target_eur_mwh,
@@ -155,34 +194,48 @@ def run_q5(
         h["_regime_tmp"] = "C"
         regime_col = "_regime_tmp"
     cd = h[h[regime_col].isin(["C", "D"]) & h["price_da_eur_mwh"].notna() & h["tca_eur_mwh"].notna()].copy()
-    ttl_obs = float(cd["price_da_eur_mwh"].quantile(0.95)) if not cd.empty else np.nan
+    ttl_obs_price_cd = float(cd["price_da_eur_mwh"].quantile(0.95)) if not cd.empty else np.nan
     tca_q95 = float(cd["tca_eur_mwh"].quantile(0.95)) if not cd.empty else np.nan
-    alpha = ttl_obs - tca_q95 if np.isfinite(ttl_obs) and np.isfinite(tca_q95) else np.nan
+    ttl_physical = tca_q95 + margin if np.isfinite(tca_q95) else np.nan
+    ttl_regression = _ttl_regression_estimate(cd, tca_q95)
+    if method == "physical":
+        ttl_effective = ttl_physical
+        alpha_effective = margin if np.isfinite(margin) else np.nan
+    else:
+        ttl_effective = ttl_regression if np.isfinite(ttl_regression) else ttl_obs_price_cd
+        alpha_effective = ttl_effective - tca_q95 if np.isfinite(ttl_effective) and np.isfinite(tca_q95) else np.nan
+    alpha = ttl_obs_price_cd - tca_q95 if np.isfinite(ttl_obs_price_cd) and np.isfinite(tca_q95) else np.nan
     corr_cd = float(cd["price_da_eur_mwh"].corr(cd["tca_eur_mwh"])) if len(cd) >= 3 else np.nan
 
     dgas = 1.0 / eff if eff > 0 else np.nan
     dco2 = ef / eff if eff > 0 else np.nan
 
-    target = float(ttl_obs) if ttl_target_eur_mwh is None else float(ttl_target_eur_mwh)
+    target = float(ttl_effective) if ttl_target_eur_mwh is None else float(ttl_target_eur_mwh)
     base_q95_without_co2 = float((cd["gas_price_eur_mwh_th"] / eff + vom).quantile(0.95)) if not cd.empty else np.nan
-    co2_required_base = _co2_required(target, alpha, base_q95_without_co2, dco2)
+    co2_required_base = _co2_required(target, alpha_effective, base_q95_without_co2, dco2)
 
     co2_required_gas_override = np.nan
     if gas_override_eur_mwh_th is not None and not cd.empty:
         base_override = float((pd.Series(float(gas_override_eur_mwh_th), index=cd.index) / eff + vom).quantile(0.95))
-        co2_required_gas_override = _co2_required(target, alpha, base_override, dco2)
+        co2_required_gas_override = _co2_required(target, alpha_effective, base_override, dco2)
     co2_required_base_non_negative = _co2_required_non_negative(co2_required_base)
     co2_required_gas_override_non_negative = _co2_required_non_negative(co2_required_gas_override)
 
     checks: list[dict[str, str]] = []
+    warnings: list[str] = []
     if not (np.isfinite(dco2) and dco2 > 0):
         checks.append({"status": "FAIL", "code": "Q5_DCO2_SIGN", "message": "dTCA/dCO2 doit etre strictement positif."})
     if not (np.isfinite(dgas) and dgas > 0):
         checks.append({"status": "FAIL", "code": "Q5_DGAS_SIGN", "message": "dTCA/dGas doit etre strictement positif."})
     if np.isfinite(corr_cd) and corr_cd < 0.2:
         checks.append({"status": "WARN", "code": "Q5_LOW_CORR_CD", "message": "Relation prix-ancre faible sur regimes C/D (corr<0.2)."})
-    if np.isfinite(alpha) and alpha < -20.0:
-        checks.append({"status": "WARN", "code": "Q5_ALPHA_NEG", "message": "Alpha tres negatif: techno marginale possiblement inadaptee."})
+    if np.isfinite(alpha) and alpha < 0.0:
+        msg = "Alpha negatif: ancre thermique potentiellement fragile sans contexte."
+        checks.append({"status": "WARN", "code": "Q5_ALPHA_NEG", "message": msg})
+        warnings.append(msg)
+    if method == "regression" and not np.isfinite(ttl_regression):
+        checks.append({"status": "WARN", "code": "Q5_REGRESSION_UNSTABLE", "message": "Regression TTL instable; fallback TTL observe applique."})
+        warnings.append("Regression TTL instable; fallback observe applique.")
     if np.isfinite(co2_required_base) and co2_required_base < 0:
         checks.append(
             {
@@ -191,6 +244,14 @@ def run_q5(
                 "message": "CO2 requis brut negatif: cible TTL deja atteinte sans CO2 additionnel.",
             }
         )
+    anchor_confidence = 1.0
+    if np.isfinite(alpha) and alpha < 0.0:
+        anchor_confidence -= 0.2
+    if np.isfinite(corr_cd) and corr_cd < 0.2:
+        anchor_confidence -= 0.2
+    if method == "regression" and not np.isfinite(ttl_regression):
+        anchor_confidence -= 0.2
+    anchor_confidence = float(np.clip(anchor_confidence, 0.0, 1.0))
     if not checks:
         checks.append({"status": "PASS", "code": "Q5_PASS", "message": "Q5 checks passes."})
 
@@ -200,10 +261,16 @@ def run_q5(
                 "country": country,
                 "year_range_used": f"{int(h['year'].min())}-{int(h['year'].max())}" if "year" in h.columns and h["year"].notna().any() else "",
                 "marginal_tech": marginal_tech,
-                "ttl_obs": ttl_obs,
+                "ttl_obs": ttl_effective,
+                "ttl_obs_price_cd": ttl_obs_price_cd,
+                "ttl_physical": ttl_physical,
+                "ttl_regression": ttl_regression,
+                "ttl_method": method,
                 "tca_q95": tca_q95,
                 "alpha": alpha,
+                "alpha_effective": alpha_effective,
                 "corr_cd": corr_cd,
+                "anchor_confidence": anchor_confidence,
                 "dTCA_dCO2": dco2,
                 "dTCA_dGas": dgas,
                 "ttl_target": target,
@@ -226,12 +293,19 @@ def run_q5(
         run_id=run_id,
         selection=selection,
         assumptions_used=assumptions_subset(assumptions_df, Q5_PARAMS),
-        kpis={"ttl_obs": ttl_obs, "corr_cd": corr_cd, "dTCA_dCO2": dco2, "dTCA_dGas": dgas},
+        kpis={
+            "ttl_obs": ttl_effective,
+            "ttl_method": method,
+            "corr_cd": corr_cd,
+            "anchor_confidence": anchor_confidence,
+            "dTCA_dCO2": dco2,
+            "dTCA_dGas": dgas,
+        },
         tables={"Q5_summary": summary},
         figures=[],
         narrative_md=narrative,
         checks=checks,
-        warnings=[],
+        warnings=warnings,
         mode=str(selection.get("mode", "HIST")).upper(),
         scenario_id=selection.get("scenario_id"),
         horizon_year=selection.get("horizon_year"),

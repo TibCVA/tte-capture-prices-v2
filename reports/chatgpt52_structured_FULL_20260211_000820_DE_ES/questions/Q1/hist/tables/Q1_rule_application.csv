@@ -1,0 +1,15 @@
+country,year,stage2_market_score,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_stage2,flag_days_spread_stage2,flag_non_capture_stage2,flag_capture_only_stage2,signal_low_price,signal_value,signal_physical,is_stage1_criteria,is_phase2_market,is_phase2_physical,phase_market,stress_phys_state,quality_ok,flag_sr_stress,flag_far_tension,flag_ir_high
+DE,2018,3,False,False,True,False,0,True,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel,True,False,False,False
+DE,2019,4,True,False,True,False,1,False,True,True,False,False,True,False,phase2,pas_de_surplus_structurel,True,False,False,False
+DE,2020,5,True,True,True,False,1,False,True,True,False,False,True,False,phase2,pas_de_surplus_structurel,True,False,False,False
+DE,2021,4,False,False,True,True,0,True,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel,True,False,False,False
+DE,2022,4,False,False,True,True,1,False,False,True,True,False,True,False,phase2,pas_de_surplus_structurel,True,False,False,False
+DE,2023,8,True,True,True,True,2,False,True,True,True,False,True,False,phase2,surplus_present_mais_absorbe,True,True,False,False
+DE,2024,8,True,True,True,True,2,False,True,True,True,False,True,False,phase2,surplus_present_mais_absorbe,True,True,False,False
+ES,2018,0,False,False,False,False,0,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel,True,False,False,False
+ES,2019,1,False,False,True,False,0,True,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel,True,False,False,False
+ES,2020,3,False,False,True,False,0,True,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel,True,False,False,False
+ES,2021,3,False,False,True,False,1,False,False,True,True,False,True,False,phase2,pas_de_surplus_structurel,True,False,False,False
+ES,2022,4,False,False,True,True,1,False,False,True,True,False,True,False,phase2,pas_de_surplus_structurel,True,False,False,False
+ES,2023,5,False,True,True,True,2,False,True,True,True,False,True,False,phase2,surplus_present_mais_absorbe,True,True,False,False
+ES,2024,6,True,True,True,True,2,False,True,True,True,False,True,False,phase2,surplus_present_mais_absorbe,True,True,False,False

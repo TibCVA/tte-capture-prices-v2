@@ -1,0 +1,9 @@
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q5_LOW_CORR_CD,Relation prix-ancre faible sur regimes C/D (corr<0.2).,Q5,,True
+WARN,Q5_ALPHA_NEG,Alpha negatif: ancre thermique potentiellement fragile sans contexte.,Q5,,True
+WARN,Q5_LOW_CORR_CD,Relation prix-ancre faible sur regimes C/D (corr<0.2).,Q5,,True
+WARN,Q5_ALPHA_NEG,Alpha negatif: ancre thermique potentiellement fragile sans contexte.,Q5,,True
+WARN,Q5_LOW_CORR_CD,Relation prix-ancre faible sur regimes C/D (corr<0.2).,Q5,,True
+PASS,Q5_PASS,Q5 checks passes.,Q5,,True
+PASS,Q5_PASS,Q5 checks passes.,Q5,,True
+WARN,Q5_LOW_CORR_CD,Relation prix-ancre faible sur regimes C/D (corr<0.2).,Q5,,True

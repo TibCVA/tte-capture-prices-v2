@@ -208,19 +208,16 @@ def build_hourly_table(
 
     df[COL_EXPORTS] = _safe_series(df, COL_NET_POSITION, np.nan).clip(lower=0.0)
 
-    # load_net treatment with psh
+    # Keep load on ENTSO-E total-load basis; treat pumping only as optional flex sink.
     psh_missing_share = float(df[COL_PSH_PUMP].isna().mean())
+    df[COL_LOAD_NET_MODE] = "entsoe_total_load_no_pumping_adjust"
+    df[COL_LOAD_NET] = _safe_series(df, COL_LOAD_TOTAL)
+    df[COL_Q_BAD_LOAD_NET] = df[COL_LOAD_NET] < 0
+    df.loc[df[COL_Q_BAD_LOAD_NET], COL_LOAD_NET] = np.nan
     if psh_missing_share <= 0.05:
-        df[COL_LOAD_NET_MODE] = "minus_psh_pump"
-        df[COL_LOAD_NET] = _safe_series(df, COL_LOAD_TOTAL) - _safe_series(df, COL_PSH_PUMP, 0).fillna(0)
-        df[COL_Q_BAD_LOAD_NET] = df[COL_LOAD_NET] < 0
-        df.loc[df[COL_Q_BAD_LOAD_NET], COL_LOAD_NET] = np.nan
         df[COL_FLEX_PSH] = _safe_series(df, COL_PSH_PUMP, 0).clip(lower=0.0)
         df[COL_Q_MISSING_PSH_PUMP] = False
     else:
-        df[COL_LOAD_NET_MODE] = "includes_pumping"
-        df[COL_LOAD_NET] = _safe_series(df, COL_LOAD_TOTAL)
-        df[COL_Q_BAD_LOAD_NET] = False
         df[COL_FLEX_PSH] = 0.0
         df[COL_Q_MISSING_PSH_PUMP] = True
 

@@ -1,0 +1,5 @@
+country,tech,x_axis_used,x_unit,phase2_years,slope,slope_simple,slope_conditional_ttl,intercept,r2,p_value,n,slope_method,robust_flag,mean_sr_energy_phase2,mean_far_energy_phase2,mean_ir_p10_phase2,mean_ttl_phase2,vre_load_corr_phase2,surplus_load_trough_share_phase2
+DE,PV,none,,,,,,,,,0,NONE_NO_BASCULE,NON_TESTABLE,,,,,,
+DE,WIND,none,,,,,,,,,0,NONE_NO_BASCULE,NON_TESTABLE,,,,,,
+ES,PV,none,,,,,,,,,0,NONE_NO_BASCULE,NON_TESTABLE,,,,,,
+ES,WIND,none,,,,,,,,,0,NONE_NO_BASCULE,NON_TESTABLE,,,,,,

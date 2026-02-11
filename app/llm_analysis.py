@@ -226,14 +226,22 @@ def get_methodology_context(question_id: str) -> str:
 # ---------------------------------------------------------------------------
 # OpenAI client
 # ---------------------------------------------------------------------------
-def get_openai_client():
-    """Resolve API key and return OpenAI client, or None if key missing."""
+def resolve_openai_api_key() -> str | None:
+    """Resolve API key from Streamlit secrets or environment."""
     try:
         key = st.secrets.get("OPENAI_API_KEY", None)
     except Exception:
         key = None
     if not key:
         key = os.getenv("OPENAI_API_KEY")
+    if isinstance(key, str):
+        key = key.strip()
+    return key or None
+
+
+def get_openai_client(api_key_override: str | None = None):
+    """Return OpenAI client, or None if key missing."""
+    key = (api_key_override or "").strip() or resolve_openai_api_key()
     if not key:
         return None
     try:
@@ -501,9 +509,10 @@ def run_llm_analysis(
     question_id: str,
     bundle_hash: str,
     bundle_data: dict[str, Any],
+    api_key_override: str | None = None,
 ) -> dict[str, Any]:
     """Call OpenAI Responses API and return the report dict. Saves to disk on success."""
-    client = get_openai_client()
+    client = get_openai_client(api_key_override=api_key_override)
     if client is None:
         return {"error": "Cle API OpenAI non configuree. Ajouter OPENAI_API_KEY dans .env ou Streamlit secrets."}
 

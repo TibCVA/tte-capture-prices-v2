@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
-import json
 import re
 
 import pandas as pd
@@ -13,298 +13,258 @@ from app.ui_components import (
     render_interpretation,
     render_kpi_cards_styled,
 )
-from src.reporting.evidence_loader import (
-    REQUIRED_QUESTIONS,
-    assemble_complete_run_from_fragments,
-    discover_complete_runs,
-    latest_fragment_per_question,
-)
+from src.reporting.evidence_loader import REQUIRED_QUESTIONS, discover_complete_runs
 
 
-def _safe_read_text(path: Path) -> str:
-    if not path.exists():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8")
-    except Exception:
-        return ""
-
-
-def _safe_read_csv(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        return pd.read_csv(path)
-    except Exception:
-        return pd.DataFrame()
-
-
-def _safe_read_json(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def _report_paths(run_id: str) -> dict[str, Path]:
-    reports = Path("reports")
-    return {
-        "detailed": reports / f"conclusions_v2_detailed_{run_id}.md",
-        "executive": reports / f"conclusions_v2_executive_{run_id}.md",
-        "evidence": reports / f"evidence_catalog_{run_id}.csv",
-        "traceability": reports / f"test_traceability_{run_id}.csv",
-        "slides_traceability": reports / f"slides_traceability_{run_id}.csv",
-        "qc": reports / f"report_qc_{run_id}.json",
-    }
-
-
-def _discover_report_run_ids(reports_dir: Path = Path("reports")) -> list[str]:
-    if not reports_dir.exists():
+def _scenario_ids(question_dir: Path) -> list[str]:
+    scen_root = question_dir / "scen"
+    if not scen_root.exists():
         return []
-    run_ids: set[str] = set()
-    pat = re.compile(r"^conclusions_v2_(?:detailed|executive)_(.+)\.md$")
-    for f in reports_dir.glob("conclusions_v2_*_*.md"):
-        m = pat.match(f.name)
-        if m:
-            run_ids.add(m.group(1))
-    return sorted(run_ids, reverse=True)
+    return sorted([p.name for p in scen_root.iterdir() if p.is_dir()])
 
 
-def _split_report_sections(md: str) -> list[tuple[str, str]]:
-    """Split a markdown report into sections by H2 headers."""
-    if not md:
-        return []
-    parts = re.split(r"(?=^## )", md, flags=re.MULTILINE)
-    sections: list[tuple[str, str]] = []
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        lines = part.split("\n", 1)
-        title = lines[0].lstrip("#").strip() if lines else "Section"
-        body = lines[1].strip() if len(lines) > 1 else ""
-        sections.append((title, body))
-    return sections
+def _collect_question_full_pairs(question_dir: Path) -> list[tuple[str, Path]]:
+    pairs: list[tuple[str, Path]] = []
+    for path in sorted(question_dir.rglob("*.csv")):
+        rel = path.relative_to(question_dir).as_posix().replace("/", "__").replace(".csv", "")
+        pairs.append((f"all__{rel}", path))
+    return pairs
 
 
-def _render_report_artifacts(paths: dict[str, Path]) -> None:
-    # --- Executive summary in styled card ---
-    st.markdown("## Resume executif")
-    exec_md = _safe_read_text(paths["executive"])
-    if exec_md:
-        st.markdown('<div class="tte-exec-card">', unsafe_allow_html=True)
-        st.markdown(exec_md)
-        st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        st.info("Aucun resume executif genere pour ce run.")
+def _collect_hist_pairs(question_dir: Path) -> list[tuple[str, Path]]:
+    pairs: list[tuple[str, Path]] = []
+    hist_tables = question_dir / "hist" / "tables"
+    if hist_tables.exists():
+        for path in sorted(hist_tables.glob("*.csv")):
+            pairs.append((f"hist__{path.stem}", path))
+    hist_summary = question_dir / "hist" / "summary.csv"
+    if hist_summary.exists():
+        pairs.append(("hist__summary", hist_summary))
+    return pairs
 
-    # --- QC verdict banner ---
-    qc = _safe_read_json(paths["qc"])
-    if qc:
-        verdict = str(qc.get("verdict", "UNKNOWN"))
-        n_checks = len(qc.get("checks", []))
-        n_pass = sum(1 for c in qc.get("checks", []) if str(c.get("status", "")).upper() == "PASS")
-        if verdict == "PASS":
-            st.success(f"Verdict qualite: PASS ({n_pass}/{n_checks} checks reussis)")
-        else:
-            st.warning(f"Verdict qualite: {verdict} ({n_pass}/{n_checks} checks reussis)")
-        render_interpretation(
-            f"Le rapport a ete verifie par {n_checks} quality gates automatiques. "
-            + ("Tous les checks sont passes." if verdict == "PASS" else "Certains checks ne sont pas passes, verifier les details dans les annexes.")
+
+def _collect_audit_pairs(question_dir: Path) -> list[tuple[str, Path]]:
+    pairs: list[tuple[str, Path]] = []
+    for name in ["test_ledger.csv", "comparison_hist_vs_scen.csv", "checks_filtered.csv", "warnings_filtered.csv"]:
+        path = question_dir / name
+        if path.exists():
+            pairs.append((f"audit__{path.stem}", path))
+
+    for scenario_id in _scenario_ids(question_dir):
+        scen_dir = question_dir / "scen" / scenario_id
+        for name in ["checks_filtered.csv", "warnings_filtered.csv", "test_ledger.csv", "comparison_hist_vs_scen.csv"]:
+            path = scen_dir / name
+            if path.exists():
+                pairs.append((f"audit__{scenario_id}__{path.stem}", path))
+    return pairs
+
+
+def _collect_scenario_pairs(question_dir: Path, scenario_id: str) -> list[tuple[str, Path]]:
+    pairs: list[tuple[str, Path]] = []
+    scen_dir = question_dir / "scen" / str(scenario_id)
+    tables_dir = scen_dir / "tables"
+
+    if tables_dir.exists():
+        for path in sorted(tables_dir.glob("*.csv")):
+            pairs.append((f"{scenario_id}__tbl__{path.stem}", path))
+
+    for name in ["checks_filtered.csv", "warnings_filtered.csv", "test_ledger.csv", "comparison_hist_vs_scen.csv"]:
+        path = scen_dir / name
+        if path.exists():
+            pairs.append((f"{scenario_id}__{path.stem}", path))
+    return pairs
+
+
+def _sheet_name(raw_name: str, used: set[str]) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", raw_name).strip("_")
+    if not cleaned:
+        cleaned = "sheet"
+    cleaned = cleaned[:31]
+    candidate = cleaned
+    idx = 2
+    while candidate in used:
+        suffix = f"_{idx}"
+        candidate = f"{cleaned[: max(1, 31 - len(suffix))]}{suffix}"
+        idx += 1
+    used.add(candidate)
+    return candidate
+
+
+@st.cache_data(show_spinner=False)
+def _build_excel_bytes_cached(
+    csv_paths: tuple[str, ...],
+    csv_mtimes: tuple[int, ...],
+    sheet_labels: tuple[str, ...],
+) -> bytes:
+    _ = csv_mtimes
+    buffer = BytesIO()
+    used_sheet_names: set[str] = set()
+    manifest_rows: list[dict[str, object]] = []
+
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        for path_str, label in zip(csv_paths, sheet_labels):
+            path = Path(path_str)
+            df = pd.read_csv(path)
+            sheet = _sheet_name(label, used_sheet_names)
+            df.to_excel(writer, sheet_name=sheet, index=False)
+            manifest_rows.append(
+                {
+                    "sheet_name": sheet,
+                    "source_csv": path_str,
+                    "rows": int(len(df)),
+                    "columns": int(len(df.columns)),
+                }
+            )
+
+        manifest_df = pd.DataFrame(manifest_rows)
+        manifest_sheet = _sheet_name("_manifest", used_sheet_names)
+        manifest_df.to_excel(writer, sheet_name=manifest_sheet, index=False)
+
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def _build_excel_bytes_from_pairs(pairs: list[tuple[str, Path]]) -> bytes:
+    if not pairs:
+        raise ValueError("Aucun fichier CSV a exporter.")
+
+    ordered = sorted(pairs, key=lambda x: x[0])
+    csv_paths = tuple(str(path.resolve()) for _, path in ordered)
+    csv_mtimes = tuple(int(Path(path).stat().st_mtime_ns) for path in csv_paths)
+    labels = tuple(label for label, _ in ordered)
+    return _build_excel_bytes_cached(csv_paths, csv_mtimes, labels)
+
+
+def _source_inventory_df(question_dir: Path) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for path in sorted(question_dir.rglob("*.csv")):
+        try:
+            df = pd.read_csv(path)
+            n_rows = int(len(df))
+            n_cols = int(len(df.columns))
+        except Exception:
+            n_rows = -1
+            n_cols = -1
+        rows.append(
+            {
+                "relative_path": path.relative_to(question_dir).as_posix(),
+                "rows": n_rows,
+                "columns": n_cols,
+            }
         )
-
-    # --- Detailed report in navigable expanders ---
-    st.markdown("## Rapport detaille")
-    detailed_md = _safe_read_text(paths["detailed"])
-    if detailed_md:
-        sections = _split_report_sections(detailed_md)
-        if sections:
-            for i, (title, body) in enumerate(sections):
-                with st.expander(title, expanded=(i == 0)):
-                    st.markdown(body)
-        else:
-            st.markdown(detailed_md)
-    else:
-        st.warning("Rapport detaille non trouve. Clique sur le bouton de generation ci-dessus.")
-
-    # --- Annexes ---
-    st.markdown("## Annexes de preuve")
-    ev = _safe_read_csv(paths["evidence"])
-    tt = _safe_read_csv(paths["traceability"])
-    stx = _safe_read_csv(paths["slides_traceability"])
-
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["Evidence catalog", "Test traceability", "Slides coverage", "Quality gates"]
-    )
-    with tab1:
-        if ev.empty:
-            st.info("Evidence catalog indisponible.")
-        else:
-            st.dataframe(ev, use_container_width=True)
-            render_interpretation("Chaque ligne lie un test a une preuve (table, chart, valeur). Permet de remonter de la conclusion a la donnee.")
-
-    with tab2:
-        if tt.empty:
-            st.info("Test traceability indisponible.")
-        else:
-            st.dataframe(tt, use_container_width=True)
-            render_interpretation("Trace chaque test jusqu'a sa reference slides TTE. Verifie que toutes les exigences sont couvertes.")
-
-    with tab3:
-        if stx.empty:
-            st.info("Slides traceability indisponible.")
-        else:
-            # Slides coverage with color
-            if "covered" in stx.columns:
-                def _color_coverage(row: pd.Series) -> list[str]:
-                    covered = str(row.get("covered", "")).lower()
-                    if covered in ("yes", "true", "1"):
-                        return ["background-color: #f0fdf4"] * len(row)
-                    else:
-                        return ["background-color: #fef2f2"] * len(row)
-
-                st.dataframe(stx.style.apply(_color_coverage, axis=1), use_container_width=True, hide_index=True)
-            else:
-                st.dataframe(stx, use_container_width=True)
-
-            missing = stx[stx["covered"].astype(str).str.lower() == "no"] if "covered" in stx.columns else pd.DataFrame()
-            st.markdown("### Ecarts de couverture")
-            if missing.empty:
-                st.success("Aucun ecart de couverture slides.")
-            else:
-                st.error(f"{len(missing)} exigence(s) slides non couverte(s).")
-                st.dataframe(missing, use_container_width=True)
-
-    with tab4:
-        if not qc:
-            st.info("Fichier report_qc indisponible.")
-        else:
-            st.json(qc)
-
-
-def _run_has_all_questions(run_dir: Path) -> bool:
-    for q in REQUIRED_QUESTIONS:
-        if not (run_dir / q / "summary.json").exists():
-            return False
-    return True
-
-
-def _generate_reports_for_run(run_id: str, strict: bool = True) -> tuple[bool, str]:
-    try:
-        from generate_report import generate_report
-
-        result = generate_report(
-            run_id=run_id,
-            strict=strict,
-            country_scope=[],
-            docx_paths=[],
-            output_dir=Path("reports"),
-        )
-        return True, f"Rapport genere. Verdict: {result.qc.get('verdict', 'UNKNOWN')}"
-    except RuntimeError as exc:
-        paths = _report_paths(run_id)
-        if paths["detailed"].exists() or paths["executive"].exists():
-            return True, f"Rapport genere avec ecarts quality-gate: {exc}"
-        return False, f"Echec generation rapport (strict): {exc}"
-    except Exception as exc:
-        return False, f"Echec generation rapport: {exc}"
+    return pd.DataFrame(rows)
 
 
 def render() -> None:
     inject_theme()
     guided_header(
-        title="Conclusions",
-        purpose="Rapport final dense, tracable et annexes de preuve.",
-        step_now="Conclusions: synthese executive + rapport detaille",
+        title="Conclusions - Exports Auditables",
+        purpose="Telechargement des resultats bruts en Excel, question par question et analyse par analyse.",
+        step_now="Conclusions: export brut auditable",
         step_next="Fin du parcours",
     )
 
-    # --- KPI dashboard executif ---
-    prebuilt_runs = _discover_report_run_ids(Path("reports"))
     complete_runs = discover_complete_runs(Path("outputs/combined"))
+    if not complete_runs:
+        st.warning("Aucun run combine complet (Q1..Q5) detecte dans outputs/combined.")
+        st.info("Lance d'abord un run global depuis la page Accueil.")
+        return
+
+    run_ids = [p.name for p in complete_runs]
+    preferred_run = str(st.session_state.get("last_full_refresh_run_id", ""))
+    default_index = run_ids.index(preferred_run) if preferred_run in run_ids else 0
+    selected_run = st.selectbox("Run combine", run_ids, index=default_index)
+    run_dir = Path("outputs/combined") / selected_run
+
+    questions_available = [q for q in REQUIRED_QUESTIONS if (run_dir / q).exists()]
+    if not questions_available:
+        st.error(f"Run {selected_run} invalide: aucune question Q1..Q5 trouvee.")
+        return
+
+    selected_question = st.selectbox("Question", questions_available, index=0)
+    question_dir = run_dir / selected_question
+    scenarios = _scenario_ids(question_dir)
+    question_csv_count = len(list(question_dir.rglob("*.csv")))
 
     render_kpi_cards_styled(
         [
-            {"label": "Runs combines", "value": len(complete_runs), "help": "Nombre de runs Q1-Q5 complets disponibles."},
-            {"label": "Rapports pre-generes", "value": len(prebuilt_runs), "help": "Rapports deja generes dans reports/."},
-            {"label": "Questions requises", "value": len(REQUIRED_QUESTIONS), "help": "Q1-Q5 doivent toutes etre executees."},
+            {"label": "Run ID", "value": selected_run, "help": "Run combine source des exports."},
+            {"label": "Question", "value": selected_question, "help": "Question audit selectionnee."},
+            {"label": "CSV detectes", "value": question_csv_count, "help": "Nombre total de fichiers CSV exportables."},
+            {"label": "Scenarios", "value": len(scenarios), "help": "Scenarios prospectifs disponibles pour cette question."},
         ]
     )
 
-    st.markdown("## Run combine complet")
-    if not complete_runs:
-        st.warning("Aucun run combine complet (Q1..Q5) n'est disponible dans `outputs/combined`.")
+    st.markdown("## Export par analyse")
+    full_pairs = _collect_question_full_pairs(question_dir)
+    hist_pairs = _collect_hist_pairs(question_dir)
+    audit_pairs = _collect_audit_pairs(question_dir)
 
-        if prebuilt_runs:
-            st.info("Des rapports pre-generes sont disponibles meme sans run combine local.")
-            selected_prebuilt = st.selectbox("Selection du rapport pre-genere", prebuilt_runs, index=0)
-            st.caption(f"Run rapport selectionne: `{selected_prebuilt}`")
-            _render_report_artifacts(_report_paths(selected_prebuilt))
-            st.markdown("---")
-            st.markdown("### Optionnel: reconstruire un run combine local")
-            st.caption("Necessaire uniquement si vous voulez relancer les analyses Q1..Q5 depuis l'UI.")
-
-        fragments = latest_fragment_per_question(Path("outputs/combined"))
-        st.markdown("### Fragments detectes par question")
-        frag_rows = []
-        for q in REQUIRED_QUESTIONS:
-            p = fragments.get(q)
-            frag_rows.append(
-                {
-                    "question": q,
-                    "disponible": p is not None,
-                    "source_fragment": str(p) if p is not None else "",
-                }
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if full_pairs:
+            st.download_button(
+                label=f"Telecharger {selected_question} - COMPLET",
+                data=_build_excel_bytes_from_pairs(full_pairs),
+                file_name=f"{selected_run}_{selected_question}_FULL.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
             )
-        st.dataframe(pd.DataFrame(frag_rows), use_container_width=True)
+        else:
+            st.info("Aucun CSV disponible pour l'export complet.")
+    with c2:
+        if hist_pairs:
+            st.download_button(
+                label=f"Telecharger {selected_question} - HIST",
+                data=_build_excel_bytes_from_pairs(hist_pairs),
+                file_name=f"{selected_run}_{selected_question}_HIST.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        else:
+            st.info("Aucun export historique disponible.")
+    with c3:
+        if audit_pairs:
+            st.download_button(
+                label=f"Telecharger {selected_question} - AUDIT",
+                data=_build_excel_bytes_from_pairs(audit_pairs),
+                file_name=f"{selected_run}_{selected_question}_AUDIT.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        else:
+            st.info("Aucun export audit disponible.")
 
-        missing = [q for q in REQUIRED_QUESTIONS if q not in fragments]
-        if missing:
-            st.error(f"Impossible d'assembler automatiquement un run complet. Questions manquantes: {missing}")
-            st.info("Lance au moins une analyse complete sur chaque page Q1..Q5, puis reviens ici.")
-            return
+    st.markdown("## Export scenario par scenario")
+    if not scenarios:
+        st.info("Aucun scenario disponible pour cette question.")
+    else:
+        for scenario_id in scenarios:
+            scen_pairs = _collect_scenario_pairs(question_dir, scenario_id)
+            left, right = st.columns([3, 2])
+            with left:
+                st.markdown(f"**{scenario_id}** - {len(scen_pairs)} fichier(s) CSV")
+            with right:
+                if scen_pairs:
+                    st.download_button(
+                        label=f"Telecharger {scenario_id}",
+                        data=_build_excel_bytes_from_pairs(scen_pairs),
+                        file_name=f"{selected_run}_{selected_question}_{scenario_id}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key=f"dl_{selected_run}_{selected_question}_{scenario_id}",
+                    )
+                else:
+                    st.caption("Aucun fichier scenario.")
 
-        if st.button("Assembler un run complet a partir des derniers fragments Q1..Q5", type="primary"):
-            try:
-                run_dir = assemble_complete_run_from_fragments(Path("outputs/combined"))
-                st.success(f"Run assemble: {run_dir.name}")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Echec assemblage run complet: {exc}")
-        return
+    st.markdown("## Inventaire des sources CSV")
+    inventory = _source_inventory_df(question_dir)
+    if inventory.empty:
+        st.info("Aucun CSV detecte.")
+    else:
+        st.dataframe(inventory, use_container_width=True, hide_index=True)
 
-    labels = [p.name for p in complete_runs if _run_has_all_questions(p)]
-    if not labels:
-        st.error("Aucun run contenant Q1..Q5 n'a ete detecte.")
-        return
-
-    selected_run = st.selectbox("Selection du run", labels, index=0)
-    run_dir = Path("outputs/combined") / selected_run
-    paths = _report_paths(selected_run)
-
-    st.caption(f"Run selectionne: `{run_dir}`")
-
-    st.markdown("## Generation du rapport")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Generer / mettre a jour le rapport pour ce run", type="primary"):
-            with st.spinner("Generation rapport en cours..."):
-                ok, msg = _generate_reports_for_run(selected_run, strict=False)
-            if ok:
-                st.success(msg)
-                st.rerun()
-            else:
-                st.error(msg)
-    with col2:
-        if st.button("Verifier quality gates (strict)"):
-            with st.spinner("Generation rapport (strict) en cours..."):
-                ok, msg = _generate_reports_for_run(selected_run, strict=True)
-            if ok:
-                st.success(msg)
-                st.rerun()
-            else:
-                st.error(msg)
-
-    _render_report_artifacts(paths)
+    render_interpretation(
+        "Chaque fichier Excel contient un onglet `_manifest` qui trace les feuilles, les chemins CSV sources "
+        "et leurs dimensions. Cela permet un audit direct table par table."
+    )

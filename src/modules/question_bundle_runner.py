@@ -857,12 +857,8 @@ def _annotate_comparison_interpretability(question_id: str, comparison: pd.DataF
         scen_status = str(row.get("scen_status", "")).lower().strip()
 
         if qid == "Q3" and scen_status == "hors_scope_stage2":
-            if np.isfinite(h) and np.isfinite(s) and np.isfinite(d) and s <= 1e-6:
-                statuses.append("INFORMATIVE")
-                reasons.append("scenario_de_stressed_hors_scope_stage2")
-            else:
-                statuses.append("NON_TESTABLE")
-                reasons.append("scenario_hors_scope_stage2")
+            statuses.append("NON_TESTABLE")
+            reasons.append("scenario_hors_scope_stage2")
             continue
         if not (np.isfinite(h) and np.isfinite(s) and np.isfinite(d)):
             statuses.append("NON_TESTABLE")

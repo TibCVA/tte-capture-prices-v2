@@ -30,10 +30,12 @@ Q1_PARAMS = [
     "h_negative_stage2_min",
     "h_negative_stage2_strong",
     "h_below_5_stage2_min",
+    "capture_ratio_pv_stage2_max",
     "capture_ratio_pv_vs_ttl_stage2_max",
     "capture_ratio_pv_vs_ttl_crisis_max",
     "days_spread_gt50_stage2_min",
     "sr_energy_material_min",
+    "sr_hours_material_min",
     "far_energy_tension_max",
     "ir_p10_high_min",
     "regime_coherence_min_for_causality",
@@ -109,21 +111,57 @@ def _market_score(row: pd.Series, p: dict[str, float]) -> int:
 
 
 def _phase2_market_condition(row: pd.Series, p: dict[str, float]) -> bool:
-    score = float(row.get("stage2_market_score", 0.0))
-    if score < 2:
+    signal_low_price = bool(row.get("signal_low_price", False))
+    signal_value = bool(row.get("signal_value", False))
+    signal_physical = bool(row.get("signal_physical", False))
+    signal_capture_only = bool(row.get("flag_capture_only_stage2", False))
+    if signal_capture_only:
         return False
+    return bool((signal_low_price and (signal_value or signal_physical)) or (signal_value and signal_physical))
 
-    require_non_capture = int(_safe_param(p, "q1_require_non_capture_signal", 1.0)) == 1
-    if not require_non_capture:
-        return True
 
-    non_capture_flags = [
-        bool(row.get("flag_h_negative_stage2", False)),
-        bool(row.get("flag_h_below_5_stage2", False)),
-        bool(row.get("flag_days_spread_stage2", False)),
-    ]
-    min_non_capture = int(_safe_param(p, "q1_min_non_capture_flags", 1.0))
-    return int(sum(non_capture_flags)) >= max(1, min_non_capture)
+def _phase2_physical_condition(row: pd.Series, p: dict[str, float]) -> bool:
+    sr_energy_share_load = _safe_float(row.get("sr_energy_share_load"), np.nan)
+    if not np.isfinite(sr_energy_share_load):
+        sr_energy_share_load = _safe_float(row.get("sr_energy"), np.nan)
+    sr_hours_share = _safe_float(row.get("sr_hours_share"), np.nan)
+    if not np.isfinite(sr_hours_share):
+        sr_hours_share = _safe_float(row.get("sr_hours"), np.nan)
+    ir_p10 = _safe_float(row.get("ir_p10"), np.nan)
+    far_energy = _safe_float(row.get("far_energy"), np.nan)
+    signal_surplus = (
+        (np.isfinite(sr_energy_share_load) and sr_energy_share_load >= _safe_param(p, "sr_energy_material_min", 0.01))
+        or (np.isfinite(sr_hours_share) and sr_hours_share >= _safe_param(p, "sr_hours_material_min", 0.05))
+    )
+    signal_rigidity = (
+        (np.isfinite(ir_p10) and ir_p10 >= _safe_param(p, "ir_p10_high_min", 0.70))
+        or (np.isfinite(far_energy) and far_energy <= _safe_param(p, "far_energy_tension_max", 0.95))
+    )
+    return bool(signal_surplus and signal_rigidity)
+
+
+def _first_year_two_of_three(group: pd.DataFrame, col: str) -> float:
+    if group.empty or col not in group.columns:
+        return float("nan")
+    years = pd.to_numeric(group["year"], errors="coerce")
+    flags = group[col].fillna(False).astype(bool).to_numpy()
+    for i in range(len(group)):
+        j0 = max(0, i - 2)
+        if flags[i] and int(flags[j0 : i + 1].sum()) >= 2:
+            y = _safe_float(years.iloc[i], np.nan)
+            if np.isfinite(y):
+                return float(int(y))
+    return float("nan")
+
+
+def _is_market_persistent(group: pd.DataFrame, bascule_year: float) -> bool:
+    if not np.isfinite(bascule_year):
+        return False
+    y0 = int(bascule_year)
+    subset = group[(group["year"] >= y0) & (group["year"] <= y0 + 2)]
+    if subset.empty:
+        return False
+    return int(subset["is_phase2_market"].fillna(False).astype(bool).sum()) >= 2
 
 
 def _is_stage1(row: pd.Series, p: dict[str, float]) -> bool:
@@ -144,15 +182,20 @@ def _build_rule_definition(params: dict[str, float]) -> pd.DataFrame:
                 "h_negative_stage2_min": _safe_param(params, "h_negative_stage2_min", 200.0),
                 "h_negative_stage2_strong": _safe_param(params, "h_negative_stage2_strong", 300.0),
                 "h_below_5_stage2_min": _safe_param(params, "h_below_5_stage2_min", 500.0),
+                "capture_ratio_pv_stage2_max": _safe_param(params, "capture_ratio_pv_stage2_max", 0.90),
                 "capture_ratio_pv_vs_ttl_stage2_max": _safe_param(params, "capture_ratio_pv_vs_ttl_stage2_max", 0.8),
                 "capture_ratio_pv_vs_ttl_crisis_max": _safe_param(params, "capture_ratio_pv_vs_ttl_crisis_max", 0.7),
                 "days_spread_gt50_stage2_min": _safe_param(params, "days_spread_gt50_stage2_min", 150.0),
                 "q1_require_non_capture_signal": _safe_param(params, "q1_require_non_capture_signal", 1.0),
                 "q1_min_non_capture_flags": _safe_param(params, "q1_min_non_capture_flags", 1.0),
                 "sr_energy_material_min": _safe_param(params, "sr_energy_material_min", 0.01),
+                "sr_hours_material_min": _safe_param(params, "sr_hours_material_min", 0.05),
                 "far_energy_tension_max": _safe_param(params, "far_energy_tension_max", 0.95),
                 "ir_p10_high_min": _safe_param(params, "ir_p10_high_min", 0.70),
-                "rule_logic": "stage2_market_score>=2 + gate non_capture + stress SR/FAR/IR; no price circularity.",
+                "rule_logic": (
+                    "is_phase2_market=((signal_low_price AND (signal_value OR signal_physical)) "
+                    "OR (signal_value AND signal_physical)); capture_only interdit."
+                ),
             }
         ]
     )
@@ -326,20 +369,34 @@ def run_q1(
         for _, r in assumptions_df[assumptions_df["param_name"].isin(Q1_PARAMS)].iterrows()
     }
 
+    if "sr_energy_share_load" not in panel.columns:
+        panel["sr_energy_share_load"] = panel.get("sr_energy", np.nan)
+    if "sr_hours_share" not in panel.columns:
+        panel["sr_hours_share"] = panel.get("sr_hours", np.nan)
+    if "capture_ratio_pv" not in panel.columns:
+        panel["capture_ratio_pv"] = panel.get("capture_ratio_pv_vs_baseload", np.nan)
+
     panel["stage2_market_score"] = panel.apply(lambda row: _market_score(row, params), axis=1)
     panel["flag_h_negative_stage2"] = panel["h_negative_obs"] >= _safe_param(params, "h_negative_stage2_min", 200.0)
     panel["flag_h_below_5_stage2"] = panel["h_below_5_obs"] >= _safe_param(params, "h_below_5_stage2_min", 500.0)
-    panel["flag_capture_stage2"] = panel["capture_ratio_pv_vs_ttl"] <= _safe_param(params, "capture_ratio_pv_vs_ttl_stage2_max", 0.8)
-    panel["flag_days_spread_stage2"] = panel["days_spread_gt50"] >= _safe_param(params, "days_spread_gt50_stage2_min", 150.0)
-    panel["flag_non_capture_stage2"] = (
-        panel["flag_h_negative_stage2"].astype(int)
-        + panel["flag_h_below_5_stage2"].astype(int)
-        + panel["flag_days_spread_stage2"].astype(int)
+    panel["flag_capture_stage2"] = (
+        (panel["capture_ratio_pv"] <= _safe_param(params, "capture_ratio_pv_stage2_max", 0.90))
+        | (panel["capture_ratio_pv_vs_ttl"] <= _safe_param(params, "capture_ratio_pv_vs_ttl_stage2_max", 0.8))
     )
-    panel["flag_capture_only_stage2"] = panel["flag_capture_stage2"] & (panel["flag_non_capture_stage2"] == 0)
+    panel["flag_days_spread_stage2"] = panel["days_spread_gt50"] >= _safe_param(params, "days_spread_gt50_stage2_min", 150.0)
+    panel["signal_low_price"] = panel["flag_h_negative_stage2"] | panel["flag_h_below_5_stage2"]
+    panel["signal_value"] = panel["flag_capture_stage2"]
+    panel["signal_physical"] = (
+        (panel["sr_energy_share_load"] >= _safe_param(params, "sr_energy_material_min", 0.01))
+        | (panel["sr_hours_share"] >= _safe_param(params, "sr_hours_material_min", 0.05))
+        | (panel["ir_p10"] >= _safe_param(params, "ir_p10_high_min", 0.70))
+    )
+    panel["flag_non_capture_stage2"] = panel["signal_low_price"].astype(int) + panel["signal_physical"].astype(int)
+    panel["flag_capture_only_stage2"] = panel["signal_value"] & (~panel["signal_low_price"]) & (~panel["signal_physical"])
 
     panel["is_stage1_criteria"] = panel.apply(lambda row: _is_stage1(row, params), axis=1)
     panel["is_phase2_market"] = panel.apply(lambda row: _phase2_market_condition(row, params), axis=1)
+    panel["is_phase2_physical"] = panel.apply(lambda row: _phase2_physical_condition(row, params), axis=1)
     panel["phase_market"] = np.select(
         [
             panel["is_phase2_market"],
@@ -354,10 +411,10 @@ def run_q1(
 
     panel["stress_phys_state"] = np.select(
         [
-            panel["sr_energy"] < _safe_param(params, "sr_energy_material_min", 0.01),
-            (panel["sr_energy"] >= _safe_param(params, "sr_energy_material_min", 0.01))
+            panel["sr_energy_share_load"] < _safe_param(params, "sr_energy_material_min", 0.01),
+            (panel["sr_energy_share_load"] >= _safe_param(params, "sr_energy_material_min", 0.01))
             & (panel["far_energy"] > _safe_param(params, "far_energy_tension_max", 0.95)),
-            (panel["sr_energy"] >= _safe_param(params, "sr_energy_material_min", 0.01))
+            (panel["sr_energy_share_load"] >= _safe_param(params, "sr_energy_material_min", 0.01))
             & (panel["far_energy"] <= _safe_param(params, "far_energy_tension_max", 0.95)),
         ],
         [
@@ -369,7 +426,7 @@ def run_q1(
     )
 
     panel["quality_ok"] = panel["quality_flag"].fillna("WARN") != "FAIL"
-    panel["flag_sr_stress"] = panel["sr_energy"] >= _safe_param(params, "sr_energy_material_min", 0.01)
+    panel["flag_sr_stress"] = panel["sr_energy_share_load"] >= _safe_param(params, "sr_energy_material_min", 0.01)
     panel["flag_far_tension"] = panel["far_energy"] <= _safe_param(params, "far_energy_tension_max", 0.95)
     panel["flag_ir_high"] = panel["ir_p10"] >= _safe_param(params, "ir_p10_high_min", 0.70)
 
@@ -384,14 +441,8 @@ def run_q1(
             & (group["quality_ok"])
             & (group["capture_ratio_pv_vs_ttl"].notna())
         ]
-        physical_candidates = group[
-            (group["sr_energy"] >= _safe_param(params, "sr_energy_material_min", 0.01))
-            & (group["far_energy"] <= _safe_param(params, "far_energy_tension_max", 0.95))
-            & (group["quality_ok"])
-        ]
-
         market_year = int(market_candidates["year"].min()) if not market_candidates.empty else np.nan
-        physical_year = int(physical_candidates["year"].min()) if not physical_candidates.empty else np.nan
+        physical_year = _first_year_two_of_three(group[group["quality_ok"]], "is_phase2_physical")
 
         at = group[group["year"] == market_year].iloc[0] if np.isfinite(market_year) else group.iloc[-1]
         drivers: list[str] = []
@@ -405,14 +456,28 @@ def run_q1(
             drivers.append("h_negative")
         if at.get("flag_capture_stage2", False):
             drivers.append("capture_ratio")
+        if at.get("signal_low_price", False):
+            drivers.append("low_price")
 
         confidence = 1.0 if np.isfinite(market_year) else 0.0
-        if float(at.get("regime_coherence", 1.0)) < _safe_param(params, "regime_coherence_min_for_causality", 0.55):
-            confidence -= 0.30
-            warnings.append(f"{country}: regime_coherence faible autour de la bascule.")
-        if float(at.get("completeness", 1.0)) < 0.98:
-            confidence -= 0.20
-            warnings.append(f"{country}: completude < 0.98 autour de la bascule.")
+        if np.isfinite(market_year):
+            y0 = int(market_year)
+            around = group[(group["year"] >= y0 - 1) & (group["year"] <= y0 + 1)].copy()
+            if not around.empty:
+                low_coherence = pd.to_numeric(around.get("regime_coherence"), errors="coerce") < 0.20
+                if bool(low_coherence.fillna(False).any()):
+                    confidence -= 0.25
+                    warnings.append(f"{country}: regime_coherence < 0.20 autour de la bascule.")
+                if bool(around.get("flag_capture_only_stage2", pd.Series(False)).fillna(False).any()):
+                    confidence -= 0.20
+                    warnings.append(f"{country}: capture-only detecte autour de la bascule.")
+                bad_quality = around.get("quality_flag", pd.Series(dtype=object)).astype(str).str.upper() != "OK"
+                if bool(bad_quality.fillna(False).any()):
+                    confidence -= 0.15
+                    warnings.append(f"{country}: quality_flag != OK autour de la bascule.")
+            if not _is_market_persistent(group, market_year):
+                confidence -= 0.20
+                warnings.append(f"{country}: bascule marche non persistante (fenetre +2 ans).")
         confidence = max(0.0, min(1.0, confidence))
 
         if np.isfinite(market_year) and pd.isna(at.get("capture_ratio_pv_vs_ttl", np.nan)):
@@ -452,6 +517,21 @@ def run_q1(
                     "message": f"{row['country']} {int(row['year'])}: signal stage2 majoritairement capture-only.",
                 }
             )
+        if (
+            bool(row.get("is_phase2_market", False))
+            and float(row.get("h_negative_obs", np.nan)) == 0.0
+            and float(row.get("h_below_5_obs", np.nan)) < _safe_param(params, "h_below_5_stage2_min", 500.0)
+            and float(row.get("sr_energy_share_load", np.nan)) < _safe_param(params, "sr_energy_material_min", 0.01)
+        ):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q1_NO_FALSE_PHASE2_WITHOUT_LOW_PRICE",
+                    "message": (
+                        f"{row['country']} {int(row['year'])}: Phase2 marche detectee sans prix bas ni stress physique."
+                    ),
+                }
+            )
         if row["phase_market"] == "phase2" and float(row.get("h_negative_obs", 0.0)) < 100 and float(row.get("capture_ratio_pv_vs_ttl", 1.0)) > 0.9:
             checks.append(
                 {
@@ -478,8 +558,12 @@ def run_q1(
         "flag_days_spread_stage2",
         "flag_non_capture_stage2",
         "flag_capture_only_stage2",
+        "signal_low_price",
+        "signal_value",
+        "signal_physical",
         "is_stage1_criteria",
         "is_phase2_market",
+        "is_phase2_physical",
         "phase_market",
         "stress_phys_state",
         "quality_ok",

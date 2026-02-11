@@ -104,6 +104,7 @@ def _precompute_low_high_masks(price: np.ndarray, day_ranges: list[tuple[int, in
 
 def _simulate_dispatch_arrays(
     price: np.ndarray,
+    nrl: np.ndarray,
     surplus: np.ndarray,
     surplus_unabs: np.ndarray,
     pv: np.ndarray,
@@ -136,10 +137,12 @@ def _simulate_dispatch_arrays(
             desired_discharge = 0.0
 
             if dispatch_mode == "SURPLUS_FIRST":
-                if surplus_unabs[i] > 0.0:
-                    desired_charge = surplus_unabs[i]
-                if high_mask[i]:
-                    desired_discharge = pmax
+                # Conservative stress-absorption mode:
+                # charge only on physical surplus (NRL<0), discharge only when NRL>0.
+                if nrl[i] < 0.0 and surplus_unabs[i] > 0.0:
+                    desired_charge = min(surplus_unabs[i], abs(nrl[i]))
+                if nrl[i] > 0.0:
+                    desired_discharge = min(pmax, nrl[i])
             elif dispatch_mode == "PRICE_ARBITRAGE_SIMPLE":
                 if low_mask[i]:
                     desired_charge = pmax
@@ -372,6 +375,16 @@ def run_q4(
         pv = np.where(np.isfinite(_to_float_array(base, "gen_solar_mw")), _to_float_array(base, "gen_solar_mw"), 0.0)
         flex_sink_observed = np.where(np.isfinite(_to_float_array(base, "flex_sink_observed_mw")), _to_float_array(base, "flex_sink_observed_mw"), 0.0)
         absorbed_base = np.where(np.isfinite(_to_float_array(base, "surplus_absorbed_mw")), _to_float_array(base, "surplus_absorbed_mw"), 0.0)
+        if "nrl_mw" in base.columns:
+            nrl = np.where(np.isfinite(_to_float_array(base, "nrl_mw")), _to_float_array(base, "nrl_mw"), 0.0)
+        elif {"load_mw", "gen_vre_mw", "gen_must_run_mw"}.issubset(set(base.columns)):
+            load_arr = np.where(np.isfinite(_to_float_array(base, "load_mw")), _to_float_array(base, "load_mw"), 0.0)
+            vre_arr = np.where(np.isfinite(_to_float_array(base, "gen_vre_mw")), _to_float_array(base, "gen_vre_mw"), 0.0)
+            must_run_arr = np.where(np.isfinite(_to_float_array(base, "gen_must_run_mw")), _to_float_array(base, "gen_must_run_mw"), 0.0)
+            nrl = load_arr - vre_arr - must_run_arr
+        else:
+            # Fallback when NRL inputs are missing.
+            nrl = np.where(surplus > 0.0, -surplus, 0.0)
 
         base_far = _compute_far_array(surplus, absorbed_base)
         unabs_before_twh = float(np.sum(surplus_unabs) / 1e6)
@@ -405,6 +418,7 @@ def run_q4(
                 )
                 sim = _simulate_dispatch_arrays(
                     price=price,
+                    nrl=nrl,
                     surplus=surplus,
                     surplus_unabs=surplus_unabs,
                     pv=pv,
@@ -518,6 +532,46 @@ def run_q4(
                         "status": "FAIL",
                         "code": "Q4_FAR_NON_MONOTONIC",
                         "message": f"FAR diminue quand la puissance augmente (duration={d}h).",
+                    }
+                )
+        # Pairwise dominance monotonicity: if (P2>=P1 and E2>=E1), stress should not worsen.
+        if not frontier.empty:
+            p = pd.to_numeric(frontier["required_bess_power_mw"], errors="coerce")
+            e = pd.to_numeric(frontier["required_bess_energy_mwh"], errors="coerce")
+            unabs = pd.to_numeric(frontier["surplus_unabs_energy_after"], errors="coerce")
+            far_vals = pd.to_numeric(frontier["far_after"], errors="coerce")
+            n_rows = len(frontier)
+            surplus_dominance_fail = False
+            far_dominance_fail = False
+            for i in range(n_rows):
+                if not (np.isfinite(p.iloc[i]) and np.isfinite(e.iloc[i]) and np.isfinite(unabs.iloc[i]) and np.isfinite(far_vals.iloc[i])):
+                    continue
+                dominating = (
+                    (p >= p.iloc[i] - 1e-9)
+                    & (e >= e.iloc[i] - 1e-9)
+                    & np.isfinite(unabs)
+                    & np.isfinite(far_vals)
+                )
+                if (unabs[dominating] > unabs.iloc[i] + 1e-9).any():
+                    surplus_dominance_fail = True
+                if (far_vals[dominating] < far_vals.iloc[i] - 1e-9).any():
+                    far_dominance_fail = True
+                if surplus_dominance_fail and far_dominance_fail:
+                    break
+            if surplus_dominance_fail:
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q4_SURPLUS_NON_MONOTONIC_DOMINANCE",
+                        "message": "Surplus non absorbe non monotone en dominance (P,E).",
+                    }
+                )
+            if far_dominance_fail:
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q4_FAR_NON_MONOTONIC_DOMINANCE",
+                        "message": "FAR non monotone en dominance (P,E).",
                     }
                 )
 

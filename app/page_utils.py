@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+import subprocess
+import sys
 
 import pandas as pd
 import streamlit as st
@@ -20,6 +23,8 @@ from src.storage import (
     load_scenario_hourly,
     load_scenario_validation_findings,
 )
+
+APP_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _mtime_ns(path: Path) -> int:
@@ -77,6 +82,105 @@ def run_pipeline_ui(country: str, year: int) -> dict | None:
         st.write(res)
         return res
     return None
+
+
+def all_configured_countries() -> list[str]:
+    countries_cfg = load_countries()
+    return sorted(str(c) for c in countries_cfg.get("countries", {}).keys())
+
+
+def _extract_run_id_from_stdout(stdout: str) -> str:
+    match = re.search(r"^RUN_ID\s+(\S+)", stdout, flags=re.MULTILINE)
+    if not match:
+        raise RuntimeError("RUN_ID introuvable dans la sortie de build_full_combined_run.py")
+    return str(match.group(1)).strip()
+
+
+def refresh_all_analyses_no_cache_ui(
+    countries: list[str] | None = None,
+    hist_year_start: int = 2018,
+    hist_year_end: int = 2024,
+    scenario_years: list[int] | None = None,
+) -> dict[str, object]:
+    selected_countries = [str(c) for c in (countries or all_configured_countries()) if str(c).strip()]
+    if not selected_countries:
+        raise ValueError("Aucun pays selectionne pour le refresh global.")
+
+    hist_years = list(range(int(hist_year_start), int(hist_year_end) + 1))
+    if not hist_years:
+        raise ValueError("Fenetre historique invalide.")
+
+    scen_years = [int(y) for y in (scenario_years or list(range(2025, 2036)))]
+    if not scen_years:
+        raise ValueError("Aucune annee scenario selectionnee.")
+
+    total_jobs = len(selected_countries) * len(hist_years)
+    hard_error_total = 0
+
+    progress = st.progress(0.0)
+    status = st.empty()
+
+    done = 0
+    for country in selected_countries:
+        for year in hist_years:
+            done += 1
+            status.text(f"Recalcul historique {country}-{year} ({done}/{total_jobs}) via raw ENTSO-E local")
+            result = build_country_year(
+                country=country,
+                year=year,
+                force_refresh=False,
+                use_cache_only=True,
+            )
+            hard_error_total += int(result.get("hard_error_count", 0))
+            progress.progress(done / total_jobs)
+
+    status.text("Execution du run combine Q1..Q5...")
+    cmd = [
+        sys.executable,
+        "scripts/build_full_combined_run.py",
+        "--countries",
+        ",".join(selected_countries),
+        "--hist-year-start",
+        str(hist_year_start),
+        "--hist-year-end",
+        str(hist_year_end),
+        "--scenario-years",
+        ",".join(str(y) for y in scen_years),
+    ]
+    proc = subprocess.run(
+        cmd,
+        cwd=str(APP_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        stderr_tail = (proc.stderr or "").strip()
+        stdout_tail = (proc.stdout or "").strip()
+        raise RuntimeError(
+            "Echec build_full_combined_run.py\n"
+            + f"Command: {' '.join(cmd)}\n"
+            + f"STDOUT:\n{stdout_tail}\nSTDERR:\n{stderr_tail}"
+        )
+
+    run_id = _extract_run_id_from_stdout(proc.stdout or "")
+    progress.progress(1.0)
+    status.empty()
+    progress.empty()
+
+    st.cache_data.clear()
+
+    return {
+        "run_id": run_id,
+        "countries": selected_countries,
+        "hist_year_start": int(hist_year_start),
+        "hist_year_end": int(hist_year_end),
+        "scenario_years": scen_years,
+        "historical_jobs": total_jobs,
+        "historical_hard_error_total": hard_error_total,
+        "command": " ".join(cmd),
+        "stdout": proc.stdout,
+    }
 
 
 def load_hourly_safe(country: str, year: int) -> pd.DataFrame | None:

@@ -72,6 +72,50 @@ def _delta_slope_two_point(x: pd.Series, y: pd.Series) -> dict[str, float]:
     return {"slope": float(slope), "intercept": float(intercept), "r2": np.nan, "p_value": np.nan, "n": n}
 
 
+def _classify_robust_flag(n: int, p_value: float, r2: float, slope_method: str, slope: float) -> str:
+    if n <= 0 or not np.isfinite(slope):
+        return "NON_TESTABLE"
+    if slope_method == "two_point":
+        return "FRAGILE"
+    if np.isfinite(p_value) and p_value > 0.25:
+        return "NOT_SIGNIFICANT"
+    if np.isfinite(r2) and r2 < 0.10:
+        return "NOT_SIGNIFICANT"
+    if n >= 6 and np.isfinite(p_value) and p_value <= 0.10 and np.isfinite(r2) and r2 >= 0.30:
+        return "ROBUST"
+    if (3 <= n <= 5) or (np.isfinite(p_value) and 0.10 < p_value <= 0.25) or (np.isfinite(r2) and 0.10 <= r2 < 0.30):
+        return "FRAGILE"
+    return "FRAGILE"
+
+
+def _x_unit_for_axis(x_axis: str) -> str:
+    return "pct_point" if "_pct_" in str(x_axis) else "share_point"
+
+
+def _slope_conditional_ttl(gp: pd.DataFrame, x_col: str, y_col: str) -> float:
+    cols = [x_col, y_col, "ttl_eur_mwh"]
+    if any(c not in gp.columns for c in cols):
+        return np.nan
+    tmp = gp[cols].copy()
+    tmp[x_col] = pd.to_numeric(tmp[x_col], errors="coerce")
+    tmp[y_col] = pd.to_numeric(tmp[y_col], errors="coerce")
+    tmp["ttl_eur_mwh"] = pd.to_numeric(tmp["ttl_eur_mwh"], errors="coerce")
+    tmp = tmp.dropna()
+    if len(tmp) < 3:
+        return np.nan
+    x1 = tmp[x_col].to_numpy(dtype=float)
+    x2 = tmp["ttl_eur_mwh"].to_numpy(dtype=float)
+    y = tmp[y_col].to_numpy(dtype=float)
+    X = np.column_stack([np.ones(len(tmp)), x1, x2])
+    try:
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    except Exception:
+        return np.nan
+    if len(beta) < 2:
+        return np.nan
+    return float(beta[1])
+
+
 def run_q2(
     annual_df: pd.DataFrame,
     assumptions_df: pd.DataFrame,
@@ -171,10 +215,12 @@ def run_q2(
                 x = pd.to_numeric(gp.get("pv_penetration_pct_gen"), errors="coerce")
                 y = pd.to_numeric(gp.get("capture_ratio_pv_vs_ttl"), errors="coerce")
                 x_axis = "pv_penetration_pct_gen"
+                y_col = "capture_ratio_pv_vs_ttl"
             else:
                 x = pd.to_numeric(gp.get("wind_penetration_pct_gen"), errors="coerce")
                 y = pd.to_numeric(gp.get("capture_ratio_wind_vs_ttl"), errors="coerce")
                 x_axis = "wind_penetration_pct_gen"
+                y_col = "capture_ratio_wind_vs_ttl"
 
             if x.notna().sum() < min_points:
                 x = pd.to_numeric(gp.get("sr_energy"), errors="coerce")
@@ -187,13 +233,21 @@ def run_q2(
                 reg_delta = _delta_slope_two_point(x, y)
                 if np.isfinite(reg_delta["slope"]):
                     reg = reg_delta
-                    slope_method = "DELTA_2PT"
-            robust_flag = "ROBUST" if reg["n"] >= min_points else "FRAGILE"
-            if reg["n"] <= 0:
-                robust_flag = "NON_TESTABLE"
+                    slope_method = "two_point"
+            robust_flag = _classify_robust_flag(
+                n=int(reg["n"]),
+                p_value=float(reg.get("p_value", np.nan)),
+                r2=float(reg.get("r2", np.nan)),
+                slope_method=slope_method,
+                slope=float(reg.get("slope", np.nan)),
+            )
+            slope_conditional_ttl = _slope_conditional_ttl(gp, x_axis, y_col)
+            x_unit = _x_unit_for_axis(x_axis)
 
             if robust_flag == "FRAGILE":
                 checks.append({"status": "WARN", "code": "Q2_FRAGILE", "message": f"{country}-{tech}: n={reg['n']} < {min_points}."})
+            if robust_flag == "NOT_SIGNIFICANT":
+                checks.append({"status": "WARN", "code": "Q2_NOT_SIGNIFICANT", "message": f"{country}-{tech}: signal statistique faible (p-value/R2)."})
             if tech == "PV" and np.isfinite(reg["slope"]) and reg["slope"] > 0 and reg.get("p_value", 1.0) < 0.05:
                 checks.append({"status": "WARN", "code": "Q2_POSITIVE_PV_SLOPE", "message": f"{country}: slope PV positive et significative."})
             if np.isfinite(reg.get("r2", np.nan)) and reg["r2"] < 0.1:
@@ -204,8 +258,11 @@ def run_q2(
                     "country": country,
                     "tech": tech,
                     "x_axis_used": x_axis,
+                    "x_unit": x_unit,
                     "phase2_years": f"{int(gp['year'].min())}-{int(gp['year'].max())}" if not gp.empty else "",
                     "slope": reg["slope"],
+                    "slope_simple": reg["slope"],
+                    "slope_conditional_ttl": slope_conditional_ttl,
                     "intercept": reg["intercept"],
                     "r2": reg["r2"],
                     "p_value": reg["p_value"],

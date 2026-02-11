@@ -70,3 +70,40 @@ def test_q1_scope_review_check_triggers(annual_panel_fixture, make_raw_panel, co
     scope = res.tables["Q1_scope_audit"]
     assert not scope.empty
     assert float(scope.iloc[0]["scope_coverage_ratio"]) < 0.70
+
+
+def test_q1_no_false_phase2_without_low_prices(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    df = annual_panel_fixture.copy()
+    mask = (df["country"] == "FR") & (df["year"] == 2024)
+    df.loc[mask, "h_negative_obs"] = 0.0
+    df.loc[mask, "h_below_5_obs"] = 50.0
+    df.loc[mask, "sr_energy"] = 0.0
+    df.loc[mask, "sr_hours"] = 0.0
+    df.loc[mask, "ir_p10"] = 0.4
+    df.loc[mask, "capture_ratio_pv"] = 0.5
+    df.loc[mask, "capture_ratio_pv_vs_ttl"] = 0.5
+
+    res = run_q1(df, assumptions, {"countries": ["FR"], "years": [2024]}, "test")
+    panel = res.tables["Q1_year_panel"]
+    row = panel[(panel["country"] == "FR") & (panel["year"] == 2024)].iloc[0]
+    assert bool(row["is_phase2_market"]) is False
+
+
+def test_q1_confidence_penalizes_low_quality(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    base = annual_panel_fixture.copy()
+    base = base[base["country"] == "FR"].copy()
+
+    good = base.copy()
+    good["regime_coherence"] = 0.9
+    good_res = run_q1(good, assumptions, {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]}, "test")
+    good_conf = float(good_res.tables["Q1_country_summary"].iloc[0]["bascule_confidence"])
+
+    bad = base.copy()
+    bad["regime_coherence"] = 0.01
+    bad_res = run_q1(bad, assumptions, {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]}, "test")
+    bad_conf = float(bad_res.tables["Q1_country_summary"].iloc[0]["bascule_confidence"])
+
+    assert bad_conf < good_conf
+    assert bad_conf < 0.8

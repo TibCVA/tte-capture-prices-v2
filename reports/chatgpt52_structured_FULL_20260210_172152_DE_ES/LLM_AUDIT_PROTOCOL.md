@@ -22,6 +22,12 @@ For each `questions/Qx`:
 5. Read `comparison_hist_vs_scen.csv` (delta and interpretability_status).
 6. Read `checks_filtered.csv` + `warnings_filtered.csv`.
 
+### Q1 additional mandatory tables
+- `hist/tables/Q1_scope_audit.csv`
+- `hist/tables/Q1_ir_diagnostics.csv`
+- `hist/tables/Q1_rule_definition.csv`
+- `hist/tables/Q1_before_after_bascule.csv`
+
 ## 4) Robustness rubric
 - Robust: status PASS and interpretable deltas with non-null denominators.
 - Fragile: WARN or low statistical strength (`n`, `p_value`, `r2`) or low coherence.

@@ -21,12 +21,22 @@
     "LOW_RIGIDITY"
   ],
   "country_filter_notes": {
-    "hist_unfilterable_tables": [],
+    "hist_unfilterable_tables": [
+      "Q1_rule_definition.csv"
+    ],
     "scen_unfilterable_tables_by_scenario": {
-      "BASE": [],
-      "DEMAND_UP": [],
-      "FLEX_UP": [],
-      "LOW_RIGIDITY": []
+      "BASE": [
+        "Q1_rule_definition.csv"
+      ],
+      "DEMAND_UP": [
+        "Q1_rule_definition.csv"
+      ],
+      "FLEX_UP": [
+        "Q1_rule_definition.csv"
+      ],
+      "LOW_RIGIDITY": [
+        "Q1_rule_definition.csv"
+      ]
     }
   }
 }

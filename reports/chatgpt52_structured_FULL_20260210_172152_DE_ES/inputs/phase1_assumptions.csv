@@ -1,6 +1,7 @@
 param_group,param_name,param_value,unit,description,source,last_updated,owner
 PHASE_THRESHOLDS,capture_ratio_pv_vs_ttl_crisis_max,0.7,ratio,Seuil crise capture ratio pv/ttl,default,2026-02-09,system
 PHASE_THRESHOLDS,capture_ratio_pv_vs_ttl_stage2_max,0.8,ratio,Seuil capture ratio pv/ttl,default,2026-02-09,system
+PHASE_THRESHOLDS,capture_ratio_pv_stage2_max,0.9,ratio,Seuil capture ratio pv en declenchement phase2,default,2026-02-10,system
 PHASE_THRESHOLDS,days_spread_gt50_stage2_min,150.0,days,Seuil jours spread>50,default,2026-02-09,system
 PHASE_THRESHOLDS,h_below_5_stage2_min,500.0,hours,Seuil heures basses,default,2026-02-09,system
 PHASE_THRESHOLDS,h_negative_stage2_min,200.0,hours,Seuil heures negatives stage2,default,2026-02-09,system
@@ -12,6 +13,7 @@ PHASE_THRESHOLDS,stage1_h_negative_max,100.0,hours,Stage1 max negative hours,def
 PHYSICS_THRESHOLDS,far_energy_tension_max,0.95,ratio,Seuil far tension,default,2026-02-09,system
 PHYSICS_THRESHOLDS,ir_p10_high_min,0.7,ratio,Seuil inflexibilite haute,default,2026-02-09,system
 PHYSICS_THRESHOLDS,sr_energy_material_min,0.01,ratio,Seuil surplus ratio materialite,default,2026-02-09,system
+PHYSICS_THRESHOLDS,sr_hours_material_min,0.05,share,Seuil part d'heures de surplus materialite,default,2026-02-10,system
 Q2,exclude_year_2022,0.0,bool,Exclude 2022 from regressions (1=yes),default,2026-02-10,system
 Q2,min_points_regression,3.0,count,Nombre minimal de points regression,default,2026-02-09,system
 Q3,demand_k_max,0.3,ratio,Borne max hausse demande,default,2026-02-09,system
@@ -22,6 +24,9 @@ Q3,stage2_recent_h_negative_min,200.0,hours,Recent stage2 threshold on negative 
 Q3,trend_capture_ratio_min,0.0,ratio/year,Improvement threshold for capture trend,default,2026-02-10,system
 Q3,trend_h_negative_max,-10.0,hours/year,Improvement threshold for h_negative trend,default,2026-02-10,system
 Q3,trend_window_years,3.0,years,Fenetre tendance Q3,default,2026-02-09,system
+Q3,h_negative_target,100.0,hours,Target max negative hours for phase3 inversion proxy,default,2026-02-10,system
+Q3,h_below_5_target,300.0,hours,Target max hours below 5 EUR/MWh for phase3 inversion proxy,default,2026-02-10,system
+Q3,slope_capture_target,0.0,ratio/year,Target minimum capture-ratio slope for phase3 trend status,default,2026-02-10,system
 Q4,bess_eta_roundtrip,0.88,ratio,Rendement roundtrip BESS,default,2026-02-09,system
 Q4,bess_max_cycles_per_day,1.0,cycles/day,Cycles max journaliers BESS,default,2026-02-09,system
 Q4,bess_soc_init_frac,0.5,ratio,SOC initial fraction,default,2026-02-09,system

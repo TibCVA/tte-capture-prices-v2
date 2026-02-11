@@ -1,0 +1,15 @@
+country,year,configured_components,candidate_components,scope_coverage_ratio,h_negative_obs,neg_in_ab_share,neg_in_cd_share,sr_energy,far_energy,scope_status,scope_reason,priority_case
+DE,2018,"lignite,hydro_ror,biomass","biomass,coal,gas,lignite,nuclear",0.5733611137298917,133.0,0.3383458646616541,0.6616541353383458,0.0002671835702335,1.0,REVIEW,scope_coverage_below_0.70,True
+DE,2019,"lignite,hydro_ror,biomass","biomass,gas,lignite,nuclear",0.5243618369616029,211.0,0.4407582938388625,0.5592417061611374,0.000554157034082,0.9876496247366532,REVIEW,scope_coverage_below_0.70,False
+DE,2020,"lignite,hydro_ror,biomass","biomass,gas,lignite,nuclear",0.4820971339970477,298.0,0.3691275167785235,0.6308724832214765,0.0006991788301744,1.0,REVIEW,scope_coverage_below_0.70,False
+DE,2021,"lignite,hydro_ror,biomass","biomass,gas,lignite,nuclear",0.5192053502829911,139.0,0.4100719424460431,0.5899280575539568,0.0003675803989361,1.0,REVIEW,scope_coverage_below_0.70,False
+DE,2022,"lignite,hydro_ror,biomass","biomass,coal,lignite,nuclear",0.6828256592247528,69.0,0.7391304347826086,0.2608695652173913,0.001843457392513,1.0,REVIEW,scope_coverage_below_0.70,False
+DE,2023,"lignite,hydro_ror,biomass","biomass,gas,lignite",0.749529645782708,300.0,0.8633333333333333,0.1366666666666666,0.0057522727927743,1.0,OK,scope_coverage_sufficient,False
+DE,2024,"lignite,hydro_ror,biomass","biomass,gas,lignite",0.7284780237108159,457.0,0.7899343544857768,0.2100656455142232,0.0068809540140638,1.0,OK,scope_coverage_sufficient,False
+ES,2018,"nuclear,hydro_ror,biomass","coal,gas,nuclear",0.4915716652051057,0.0,,,6.030734663893564e-06,1.0,REVIEW,scope_coverage_below_0.70,False
+ES,2019,"nuclear,hydro_ror,biomass","gas,nuclear",0.5143877551020408,0.0,,,1.308843921710153e-05,1.0,REVIEW,scope_coverage_below_0.70,False
+ES,2020,"nuclear,hydro_ror,biomass","gas,nuclear",0.517483338026847,0.0,,,0.0006026351526537,1.0,REVIEW,scope_coverage_below_0.70,False
+ES,2021,"nuclear,hydro_ror,biomass","gas,nuclear",0.5692791119062364,0.0,,,0.0012885678805332,1.0,REVIEW,scope_coverage_below_0.70,False
+ES,2022,"nuclear,hydro_ror,biomass","gas,nuclear",0.5544847223743292,0.0,,,0.0023960111216853,1.0,REVIEW,scope_coverage_below_0.70,False
+ES,2023,"nuclear,hydro_ror,biomass","gas,nuclear",0.6359959555106168,0.0,,,0.0115130277941151,0.9995587759526864,REVIEW,scope_coverage_below_0.70,False
+ES,2024,"nuclear,hydro_ror,biomass","gas,nuclear",0.670547147846333,247.0,0.7165991902834008,0.2834008097165992,0.0147292050339075,0.9994023008613372,REVIEW,scope_coverage_below_0.70,False

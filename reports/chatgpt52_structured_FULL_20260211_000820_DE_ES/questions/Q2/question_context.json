@@ -1,0 +1,38 @@
+{
+  "question_id": "Q2",
+  "objective": "Mesurer la pente de cannibalisation (PV/Wind) et qualifier ses drivers et sa robustesse statistique.",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "run_id": "FULL_20260211_000820",
+  "source_summary_file": "outputs\\combined\\FULL_20260211_000820\\Q2\\summary.json",
+  "source_refs_in_ledger": [
+    "SPEC2-Q2",
+    "SPEC2-Q2/Slides 10",
+    "SPEC2-Q2/Slides 10-12",
+    "SPEC2-Q2/Slides 11",
+    "Slides 10-13"
+  ],
+  "scenarios": [
+    "BASE",
+    "HIGH_CO2",
+    "HIGH_GAS"
+  ],
+  "country_filter_notes": {
+    "hist_unfilterable_tables": [
+      "Q2_driver_correlations.csv"
+    ],
+    "scen_unfilterable_tables_by_scenario": {
+      "BASE": [
+        "Q2_driver_correlations.csv"
+      ],
+      "HIGH_CO2": [
+        "Q2_driver_correlations.csv"
+      ],
+      "HIGH_GAS": [
+        "Q2_driver_correlations.csv"
+      ]
+    }
+  }
+}

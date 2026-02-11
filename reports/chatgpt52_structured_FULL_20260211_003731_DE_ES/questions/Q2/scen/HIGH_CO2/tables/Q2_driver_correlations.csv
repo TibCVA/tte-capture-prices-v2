@@ -1,0 +1,7 @@
+driver_name,corr_with_slope_pv,corr_with_slope_wind,n_countries
+mean_sr_energy_phase2,-1.0,-1.0,7
+mean_far_energy_phase2,-0.9999999999999998,-1.0,7
+mean_ir_p10_phase2,-1.0,-1.0,7
+mean_ttl_phase2,-0.9999999999999998,-0.9999999999999998,7
+vre_load_corr_phase2,-1.0,-1.0,7
+surplus_load_trough_share_phase2,-1.0,-1.0,7
