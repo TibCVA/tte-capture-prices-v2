@@ -1,0 +1,8 @@
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+PASS,Q4_PASS,Q4 invariants et checks passes.,Q4,,True
+PASS,Q4_PASS,Q4 invariants et checks passes.,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True

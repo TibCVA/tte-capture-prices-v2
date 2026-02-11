@@ -1,0 +1,25 @@
+test_id,question_id,source_ref,mode,scenario_group,title,what_is_tested,metric_rule,severity_if_fail
+Q1-H-01,Q1,SPEC2-Q1/Slides 2-4,HIST,HIST_BASE,Score marche de bascule,La signature marche de phase 2 est calculee et exploitable.,stage2_market_score present et non vide,HIGH
+Q1-H-02,Q1,SPEC2-Q1/Slides 3-4,HIST,HIST_BASE,Stress physique SR/FAR/IR,La bascule physique est fondee sur SR/FAR/IR.,sr_energy/far_energy/ir_p10 presentes,CRITICAL
+Q1-H-03,Q1,SPEC2-Q1,HIST,HIST_BASE,Concordance marche vs physique,La relation entre bascule marche et bascule physique est mesurable.,bascule_year_market et bascule_year_physical comparables,MEDIUM
+Q1-H-04,Q1,Slides 4-6,HIST,HIST_BASE,Robustesse seuils,Le diagnostic reste stable sous variation raisonnable de seuils.,delta bascules sous choc de seuil <= 50%,MEDIUM
+Q1-S-01,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Bascule projetee par scenario,Chaque scenario fournit un diagnostic de bascule projetee.,Q1_country_summary non vide en SCEN,HIGH
+Q1-S-02,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Effets DEMAND_UP/FLEX_UP/LOW_RIGIDITY,Les leviers scenario modifient la bascule vs BASE.,delta bascule_year_market vs BASE effectivement observable (finite_share/nonzero_share),MEDIUM
+Q1-S-03,Q1,SPEC2-Q1,SCEN,DEFAULT,Qualite de causalite,Le regime_coherence respecte le seuil d'interpretation.,part regime_coherence >= seuil min,MEDIUM
+Q2-H-01,Q2,SPEC2-Q2/Slides 10,HIST,HIST_BASE,Pentes OLS post-bascule,Les pentes PV/Wind sont estimees en historique.,Q2_country_slopes non vide,HIGH
+Q2-H-02,Q2,SPEC2-Q2/Slides 10-12,HIST,HIST_BASE,Robustesse statistique,R2/p-value/n sont disponibles pour qualifier la robustesse.,"colonnes r2,p_value,n presentes",MEDIUM
+Q2-H-03,Q2,Slides 10-13,HIST,HIST_BASE,Drivers physiques,Les drivers SR/FAR/IR/corr VRE-load sont exploites.,driver correlations non vides,MEDIUM
+Q2-S-01,Q2,SPEC2-Q2/Slides 11,SCEN,DEFAULT,Pentes projetees,Les pentes sont reproduites en mode scenario.,Q2_country_slopes non vide en SCEN,HIGH
+Q2-S-02,Q2,SPEC2-Q2,SCEN,DEFAULT,Delta pente vs BASE,Les differences de pente vs BASE sont calculables.,delta slope par pays/tech vs BASE,MEDIUM
+Q3-H-01,Q3,SPEC2-Q3/Slides 16,HIST,HIST_BASE,Tendances glissantes,Les tendances h_negative et capture_ratio sont estimees.,Q3_status non vide,HIGH
+Q3-H-02,Q3,SPEC2-Q3,HIST,HIST_BASE,Statuts sortie phase 2,Les statuts degradation/stabilisation/amelioration sont attribues.,status dans ensemble attendu,MEDIUM
+Q3-S-01,Q3,SPEC2-Q3/Slides 17,SCEN,DEFAULT,Conditions minimales d'inversion,Les besoins demande/must-run/flex sont quantifies en scenario.,"inversion_k, inversion_r et additional_absorbed presentes",HIGH
+Q3-S-02,Q3,Slides 17-19,SCEN,DEFAULT,Validation entree phase 3,Le statut prospectif est interpretable pour la transition phase 3.,status non vide en SCEN,MEDIUM
+Q4-H-01,Q4,SPEC2-Q4/Slides 22,HIST,HIST_BASE,Simulation BESS 3 modes,"SURPLUS_FIRST, PRICE_ARBITRAGE_SIMPLE et PV_COLOCATED sont executes.",3 modes executes avec sorties non vides,CRITICAL
+Q4-H-02,Q4,SPEC2-Q4,HIST,HIST_BASE,Invariants physiques BESS,Bornes SOC/puissance/energie respectees.,aucun check FAIL Q4,CRITICAL
+Q4-S-01,Q4,SPEC2-Q4/Slides 23,SCEN,DEFAULT,Comparaison effet batteries par scenario,Impact FAR/surplus/capture compare entre scenarios utiles.,Q4 summary non vide pour >=1 scenario,HIGH
+Q4-S-02,Q4,Slides 23-25,SCEN,DEFAULT,Sensibilite valeur commodites,Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.,delta pv_capture ou revenus vs BASE,MEDIUM
+Q5-H-01,Q5,SPEC2-Q5/Slides 28,HIST,HIST_BASE,Ancre thermique historique,TTL/TCA/alpha/corr sont estimes hors surplus.,Q5_summary non vide avec ttl_obs et tca_q95,HIGH
+Q5-H-02,Q5,SPEC2-Q5,HIST,HIST_BASE,Sensibilites analytiques,dTCA/dCO2 et dTCA/dGas sont positives.,dTCA_dCO2 > 0 et dTCA_dGas > 0,CRITICAL
+Q5-S-01,Q5,SPEC2-Q5/Slides 29,SCEN,DEFAULT,Sensibilites scenarisees,BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.,Q5_summary non vide sur scenarios selectionnes,HIGH
+Q5-S-02,Q5,SPEC2-Q5/Slides 31,SCEN,DEFAULT,CO2 requis pour TTL cible,Le CO2 requis est calcule et interpretable.,co2_required_* non NaN,MEDIUM
