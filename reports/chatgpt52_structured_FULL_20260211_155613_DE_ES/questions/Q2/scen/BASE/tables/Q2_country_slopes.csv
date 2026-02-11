@@ -1,0 +1,5 @@
+country,tech,phase2_start_year_for_slope,phase2_start_reason,phase2_end_year,years_used,x_axis_used,x_unit,slope,intercept,r2,p_value,n,slope_method,insufficient_points,robust_flag,reason_code,outlier_years_count,slope_all_years,slope_excluding_outliers,mean_sr_energy_phase2,mean_far_energy_phase2,mean_ir_p10_phase2,mean_ttl_phase2,vre_load_corr_phase2,surplus_load_trough_share_phase2
+DE,PV,,q1_no_bascule,,,none,pct_point,,,,,0,insufficient,True,NON_TESTABLE,q1_no_bascule,0,,,,,,,,
+DE,WIND,,q1_no_bascule,,,none,pct_point,,,,,0,insufficient,True,NON_TESTABLE,q1_no_bascule,0,,,,,,,,
+ES,PV,,q1_no_bascule,,,none,pct_point,,,,,0,insufficient,True,NON_TESTABLE,q1_no_bascule,0,,,,,,,,
+ES,WIND,,q1_no_bascule,,,none,pct_point,,,,,0,insufficient,True,NON_TESTABLE,q1_no_bascule,0,,,,,,,,

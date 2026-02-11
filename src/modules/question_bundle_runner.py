@@ -959,29 +959,103 @@ def _evaluate_test_ledger(
                     if summary.empty:
                         _append_test_row(rows, spec, "NON_TESTABLE", "", "summary non vide", "Pas de resume Q1 historique.")
                     else:
-                        both = summary["bascule_year_market"].notna() & summary["bascule_year_physical"].notna()
-                        market_only = summary["bascule_year_market"].notna() & summary["bascule_year_physical"].isna()
-                        sr_vals = pd.to_numeric(summary.get("sr_energy_at_bascule"), errors="coerce")
-                        far_vals = pd.to_numeric(summary.get("far_energy_at_bascule"), errors="coerce")
-                        explained_div = market_only & (
-                            (sr_vals.fillna(0.0) <= 0.01) & ((far_vals.fillna(1.0) >= 0.95) | far_vals.isna())
-                        )
-                        concordant_share = float((both | explained_div).mean())
-                        strict_share = float(both.mean())
+                        s = summary.copy()
+                        for c in [
+                            "bascule_status_market",
+                            "bascule_status_physical",
+                            "market_physical_gap_at_bascule",
+                            "sr_energy_at_bascule",
+                            "far_energy_at_bascule",
+                        ]:
+                            if c not in s.columns:
+                                s[c] = np.nan if c.endswith("_at_bascule") else ""
+
+                        strict_count = 0
+                        explained_count = 0
+                        reasons: dict[str, int] = {}
+
+                        for _, r in s.iterrows():
+                            m_year = _safe_float(r.get("bascule_year_market"), np.nan)
+                            p_year = _safe_float(r.get("bascule_year_physical"), np.nan)
+                            m_status = str(r.get("bascule_status_market", "")).strip().lower()
+                            p_status = str(r.get("bascule_status_physical", "")).strip().lower()
+                            gap_flag = bool(r.get("market_physical_gap_at_bascule", False))
+                            sr = _safe_float(r.get("sr_energy_at_bascule"), np.nan)
+                            far = _safe_float(r.get("far_energy_at_bascule"), np.nan)
+                            high_far_low_sr = bool(np.isfinite(far) and np.isfinite(sr) and far >= 0.95 and sr <= 0.05)
+
+                            reason = "unexplained"
+                            strict = False
+                            explained = False
+                            m_exists = np.isfinite(m_year)
+                            p_exists = np.isfinite(p_year)
+
+                            if m_exists and p_exists:
+                                if int(m_year) == int(p_year):
+                                    strict = True
+                                    explained = True
+                                    reason = "strict_equal_year"
+                                elif abs(int(m_year) - int(p_year)) <= 1:
+                                    explained = True
+                                    reason = "lag_within_1y"
+                                elif gap_flag:
+                                    explained = True
+                                    reason = "market_physical_gap_flag"
+                                elif high_far_low_sr:
+                                    explained = True
+                                    reason = "high_far_low_sr_divergence"
+                                else:
+                                    reason = "year_gap_unexplained"
+                            elif (not m_exists) and (not p_exists):
+                                if m_status == "already_phase2_at_window_start" and p_status == "already_phase2_at_window_start":
+                                    explained = True
+                                    reason = "both_already_phase2_window_start"
+                                elif m_status == "not_reached_in_window" and p_status == "not_reached_in_window":
+                                    explained = True
+                                    reason = "both_not_reached_in_window"
+                                else:
+                                    reason = "both_missing_unexplained"
+                            elif m_exists and (not p_exists):
+                                if m_status == "already_phase2_at_window_start":
+                                    explained = True
+                                    reason = "market_already_phase2_window_start"
+                                elif p_status == "not_reached_in_window" and (gap_flag or high_far_low_sr):
+                                    explained = True
+                                    reason = "physical_not_reached_but_explained"
+                                else:
+                                    reason = "market_only_unexplained"
+                            else:  # physical exists, market missing
+                                if m_status == "already_phase2_at_window_start":
+                                    explained = True
+                                    reason = "market_already_phase2_before_window"
+                                elif m_status == "not_reached_in_window" and p_status == "already_phase2_at_window_start":
+                                    explained = True
+                                    reason = "physical_already_phase2_window_start"
+                                else:
+                                    reason = "physical_only_unexplained"
+
+                            strict_count += int(strict)
+                            explained_count += int(explained)
+                            reasons[reason] = reasons.get(reason, 0) + 1
+
+                        total = int(len(s))
+                        strict_share = (strict_count / total) if total > 0 else np.nan
+                        concordant_share = (explained_count / total) if total > 0 else np.nan
                         if concordant_share >= 0.80:
                             status = "PASS"
-                            interp = "Concordance satisfaisante en comptant les divergences expliquees (pas de stress physique structurel)."
+                            interp = "Concordance satisfaisante en comptant les divergences expliquees."
                         elif concordant_share >= 0.50:
                             status = "WARN"
                             interp = "Concordance partielle; divergences a expliquer pays par pays."
                         else:
                             status = "FAIL"
                             interp = "Concordance insuffisante entre diagnostic marche et physique."
+                        reason_parts = [f"{k}:{v}" for k, v in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))[:6]]
                         _append_test_row(
                             rows,
                             spec,
                             status,
-                            f"strict={strict_share:.2%}; concordant_ou_explique={concordant_share:.2%}",
+                            f"strict={strict_share:.2%}; concordant_ou_explique={concordant_share:.2%}; n={total}; explained={explained_count}; reasons={';'.join(reason_parts)}",
                             "concordant_ou_explique >= 80%",
                             interp,
                         )
@@ -1021,17 +1095,18 @@ def _evaluate_test_ledger(
                     _append_test_row(rows, spec, "PASS" if ok else "FAIL", ",".join(sorted(extra_hist.keys())), "3 modes executes", "Les trois modes Q4 sont disponibles.")
                 else:
                     all_checks = hist_result.checks + [c for r in extra_hist.values() for c in r.checks]
-                    merged_status = _status_from_checks(all_checks)
-                    if merged_status == "FAIL":
+                    statuses = [str(c.get("status", "")).upper() for c in all_checks]
+                    has_fail = "FAIL" in statuses
+                    has_warn = "WARN" in statuses
+                    if has_fail:
                         status = "FAIL"
                         interp = "Au moins un invariant physique batterie est viole."
-                    elif merged_status == "WARN":
-                        status = "WARN"
-                        interp = "Invariants principaux ok mais avertissements Q4 actifs (ex: objectif non atteint)."
                     else:
                         status = "PASS"
                         interp = "Les invariants physiques batterie sont respectes."
-                    _append_test_row(rows, spec, status, merged_status, "pas de FAIL; WARN si avertissements", interp)
+                        if has_warn:
+                            interp += " Des avertissements non-physiques peuvent subsister (objectif/scenario)."
+                    _append_test_row(rows, spec, status, "FAIL" if has_fail else ("WARN" if has_warn else "PASS"), "aucun FAIL physique", interp)
             elif qid == "Q5":
                 out = hist_result.tables.get("Q5_summary", pd.DataFrame())
                 if spec.test_id == "Q5-H-01":

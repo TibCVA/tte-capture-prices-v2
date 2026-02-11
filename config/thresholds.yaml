@@ -5,6 +5,10 @@ model:
   regime_d_positive_nrl_quantile: 0.90
   regime_d_min_positive_hours: 200
 
+analysis:
+  cycle:
+    crisis_years: [2022]
+
 checks:
   ttl_min_cd_hours: 500
   negative_prices_in_surplus_min_share: 0.50

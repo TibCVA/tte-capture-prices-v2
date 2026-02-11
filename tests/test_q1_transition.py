@@ -154,3 +154,67 @@ def test_q1_stage1_healthy_year_is_tagged(annual_panel_fixture):
     res = run_q1(df, assumptions, {"countries": ["FR"], "years": [2024]}, "test")
     row = res.tables["Q1_year_panel"].iloc[0]
     assert bool(row["is_stage1_criteria"]) is True
+
+
+def test_q1_crisis_years_are_explicitly_configured(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q1(
+        annual_panel_fixture,
+        assumptions,
+        {"countries": ["FR"], "years": [2021, 2022, 2023, 2024], "crisis_years": [2022]},
+        "test",
+    )
+    panel = res.tables["Q1_year_panel"]
+    crisis_map = {int(r["year"]): bool(r["crisis_year"]) for _, r in panel.iterrows()}
+    assert crisis_map[2022] is True
+    assert crisis_map[2021] is False
+    assert crisis_map[2023] is False
+    assert crisis_map[2024] is False
+
+
+def test_q1_stage2_candidate_not_blocked_by_market_physical_gap(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    df = annual_panel_fixture.copy()
+    mask = (df["country"] == "FR") & (df["year"] == 2024)
+    df.loc[mask, "quality_flag"] = "OK"
+    df.loc[mask, "h_negative_obs"] = 400.0
+    df.loc[mask, "h_below_5_obs"] = 700.0
+    df.loc[mask, "capture_ratio_pv"] = 0.70
+    df.loc[mask, "capture_ratio_wind"] = 0.85
+    df.loc[mask, "sr_hours"] = 0.12
+    df.loc[mask, "sr_hours_share"] = 0.12
+    df.loc[mask, "far_energy"] = 0.93
+    df.loc[mask, "far_observed"] = 0.93
+    df.loc[mask, "ir_p10"] = 1.7
+
+    findings = pd.DataFrame(
+        [
+            {
+                "country": "FR",
+                "year": 2024,
+                "code": "RC_NEG_NOT_IN_SURPLUS",
+                "evidence": "ratio=0.10",
+            }
+        ]
+    )
+    res = run_q1(
+        df,
+        assumptions,
+        {"countries": ["FR"], "years": [2024], "crisis_years": [2022]},
+        "test",
+        validation_findings_df=findings,
+    )
+    row = res.tables["Q1_year_panel"].iloc[0]
+    assert bool(row["market_physical_gap_flag"]) is True
+    assert bool(row["quality_ok"]) is True
+    assert bool(row["stage2_candidate_year"]) is True
+
+
+def test_q1_country_summary_has_bascule_status_columns(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q1(annual_panel_fixture, assumptions, {"countries": ["FR", "DE"], "years": [2021, 2022, 2023, 2024]}, "test")
+    summary = res.tables["Q1_country_summary"]
+    assert "bascule_status_market" in summary.columns
+    assert "bascule_status_physical" in summary.columns
+    assert summary["bascule_status_market"].astype(str).str.len().gt(0).all()
+    assert summary["bascule_status_physical"].astype(str).str.len().gt(0).all()

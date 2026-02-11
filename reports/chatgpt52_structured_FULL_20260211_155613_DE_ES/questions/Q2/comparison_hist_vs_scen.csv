@@ -1,0 +1,13 @@
+country,tech,scenario_id,metric,hist_value,scen_value,delta,scen_status,interpretability_status,interpretability_reason
+DE,PV,BASE,slope,-0.0396146214059804,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,WIND,BASE,slope,-0.0023504301471102,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,PV,BASE,slope,-0.0532886418490506,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,WIND,BASE,slope,-0.0099368792215686,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,PV,HIGH_CO2,slope,-0.0396146214059804,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,WIND,HIGH_CO2,slope,-0.0023504301471102,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,PV,HIGH_CO2,slope,-0.0532886418490506,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,WIND,HIGH_CO2,slope,-0.0099368792215686,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,PV,HIGH_GAS,slope,-0.0396146214059804,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,WIND,HIGH_GAS,slope,-0.0023504301471102,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,PV,HIGH_GAS,slope,-0.0532886418490506,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,WIND,HIGH_GAS,slope,-0.0099368792215686,,,,NON_TESTABLE,delta_non_interpretable_nan

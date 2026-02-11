@@ -2,18 +2,31 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from src.constants import COL_GEN_TOTAL, COL_LOAD_NET, COL_MUST_RUN_MODE
+from src.config_loader import load_thresholds
 from src.core.definitions import compute_scope_coverage_lowload
 from src.modules.common import assumptions_subset
 from src.modules.reality_checks import build_common_checks
 from src.modules.result import ModuleResult
 
-Q1_RULE_VERSION = "q1_rule_v3_2026_02_11"
+Q1_RULE_VERSION = "q1_rule_v4_2026_02_11"
+DEFAULT_CRISIS_YEARS = {2022}
+DATA_QUALITY_BLOCKING_FLAGS = {
+    "FAIL",
+    "DATA_GAP",
+    "OUT_OF_RANGE",
+    "OUT_OF_BOUNDS",
+    "INVALID_BOUNDS",
+    "INVALID_UNIT",
+    "MISSING",
+    "ERROR",
+}
 
 Q1_PARAMS = [
     "h_negative_stage2_min",
@@ -69,6 +82,73 @@ def _quantile(series: pd.Series, q: float) -> float:
     return float(s.quantile(q))
 
 
+def _parse_year_set(value: Any) -> set[int]:
+    if value is None:
+        return set()
+    if isinstance(value, (list, tuple, set)):
+        out: set[int] = set()
+        for v in value:
+            fv = _safe_float(v, np.nan)
+            if np.isfinite(fv):
+                out.add(int(fv))
+        return out
+    txt = str(value).strip()
+    if not txt:
+        return set()
+    out: set[int] = set()
+    for tok in txt.split(","):
+        fv = _safe_float(tok.strip(), np.nan)
+        if np.isfinite(fv):
+            out.add(int(fv))
+    return out
+
+
+@lru_cache(maxsize=1)
+def _load_crisis_years_from_config() -> tuple[set[int], dict[str, set[int]]]:
+    years = set(DEFAULT_CRISIS_YEARS)
+    per_country: dict[str, set[int]] = {}
+    try:
+        cfg = load_thresholds()
+    except Exception:
+        return years, per_country
+
+    analysis = cfg.get("analysis", {}) if isinstance(cfg, dict) else {}
+    cycle = analysis.get("cycle", {}) if isinstance(analysis, dict) else {}
+
+    years_cfg = _parse_year_set(cycle.get("crisis_years"))
+    if years_cfg:
+        years = years_cfg
+
+    overrides = cycle.get("crisis_years_by_country", {})
+    if isinstance(overrides, dict):
+        for country, v in overrides.items():
+            parsed = _parse_year_set(v)
+            if parsed:
+                per_country[str(country)] = parsed
+    return years, per_country
+
+
+def _resolve_crisis_years(selection: dict[str, Any]) -> tuple[set[int], dict[str, set[int]]]:
+    global_years, per_country = _load_crisis_years_from_config()
+    out_global = set(global_years)
+    out_country = {str(k): set(v) for k, v in per_country.items()}
+
+    sel_years = _parse_year_set(selection.get("crisis_years"))
+    if sel_years:
+        out_global = sel_years
+
+    sel_per_country = selection.get("crisis_years_by_country", {})
+    if isinstance(sel_per_country, dict):
+        for country, v in sel_per_country.items():
+            parsed = _parse_year_set(v)
+            if parsed:
+                out_country[str(country)] = parsed
+
+    if not out_global:
+        out_global = set(DEFAULT_CRISIS_YEARS)
+    return out_global, out_country
+
+
 def _is_stage1(row: pd.Series, p: dict[str, float]) -> bool:
     low_price_ok = bool(
         float(row.get("h_negative_obs", np.nan)) < _safe_param(p, "stage1_h_negative_max", _safe_param(p, "h_negative_stage2_min", 200.0))
@@ -84,7 +164,7 @@ def _is_stage1(row: pd.Series, p: dict[str, float]) -> bool:
     )
 
 
-def _build_rule_definition(params: dict[str, float]) -> pd.DataFrame:
+def _build_rule_definition(params: dict[str, float], crisis_years: set[int]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
@@ -103,11 +183,13 @@ def _build_rule_definition(params: dict[str, float]) -> pd.DataFrame:
                 "stage1_sr_hours_max": _safe_param(params, "stage1_sr_hours_max", 0.05),
                 "stage1_far_min": _safe_param(params, "stage1_far_min", 0.95),
                 "stage1_ir_p10_max": _safe_param(params, "stage1_ir_p10_max", 1.5),
-                "persistence_window_years": 2.0,
+                "persistence_window_years": _safe_param(params, "q1_persistence_window_years", 2.0),
+                "crisis_years_explicit": ",".join([str(int(y)) for y in sorted(crisis_years)]),
                 "rule_logic": (
                     "stage2_candidate=(>=2 familles LOW_PRICE/VALUE/PHYSICAL) "
-                    "sur 2 annees consecutives hors crise; "
-                    "stage1_candidate=(familles toutes inactives) sur 2 annees consecutives hors crise."
+                    "hors annees de crise explicites et avec quality_ok data-only; "
+                    "stage1_candidate=(familles toutes inactives) hors crise. "
+                    "NEG_NOT_IN_SURPLUS reste un diagnostic marche/physique et ne bloque pas quality_ok."
                 ),
             }
         ]
@@ -137,9 +219,13 @@ def _flag_list(row: pd.Series) -> str:
 def _apply_phase2_logic(
     panel: pd.DataFrame,
     p: dict[str, float],
+    crisis_years_global: set[int],
+    crisis_years_by_country: dict[str, set[int]] | None = None,
     quality_overrides: dict[tuple[str, int], str] | None = None,
+    market_physical_gap_ratios: dict[tuple[str, int], float] | None = None,
 ) -> pd.DataFrame:
     out = panel.copy()
+    crisis_years_by_country = crisis_years_by_country or {}
     if "capture_ratio_pv" not in out.columns:
         out["capture_ratio_pv"] = out.get("capture_ratio_pv_vs_baseload", np.nan)
     if "capture_ratio_wind" not in out.columns:
@@ -179,10 +265,16 @@ def _apply_phase2_logic(
     out["flag_far_low"] = far < _safe_param(p, "far_stage2_min", 0.95)
     out["flag_ir_high"] = ir >= _safe_param(p, "ir_p10_stage2_min", 1.5)
     out["flag_spread_high"] = pd.to_numeric(out.get("days_spread_gt50"), errors="coerce") > _safe_param(p, "days_spread_gt50_stage2_min", 150.0)
-    out["crisis_year"] = (
-        (pd.to_numeric(out.get("avg_daily_spread_obs"), errors="coerce") > _safe_param(p, "avg_daily_spread_crisis_min", 50.0))
-        & (pd.to_numeric(out.get("days_spread_gt50"), errors="coerce") > _safe_param(p, "days_spread_gt50_stage2_min", 150.0))
-    )
+    crisis = pd.Series(False, index=out.index, dtype=bool)
+    for i, row in out[["country", "year"]].iterrows():
+        country = str(row.get("country", ""))
+        year = _safe_float(row.get("year"), np.nan)
+        if not np.isfinite(year):
+            continue
+        y = int(year)
+        years_set = crisis_years_by_country.get(country, crisis_years_global)
+        crisis.at[i] = y in years_set
+    out["crisis_year"] = crisis
 
     out["low_price_family"] = out["flag_h_negative_stage2"] | out["flag_h_below_5_stage2"]
     out["value_family"] = out["flag_capture_pv_low"] | out["flag_capture_wind_low"]
@@ -208,16 +300,42 @@ def _apply_phase2_logic(
         axis=1,
     )
 
-    # Quality gate.
+    # Data-quality gate (coverage/units/bounds only).
     out["quality_flag"] = out.get("quality_flag", pd.Series("OK", index=out.index)).astype(str).str.upper()
     if quality_overrides:
         for i, row in out[["country", "year"]].iterrows():
-            key = (str(row["country"]), int(row["year"]))
+            y = _safe_float(row.get("year"), np.nan)
+            if not np.isfinite(y):
+                continue
+            key = (str(row["country"]), int(y))
             override = quality_overrides.get(key)
             if override:
                 out.at[i, "quality_flag"] = str(override).upper()
-    out.loc[out["crisis_year"].fillna(False), "quality_flag"] = "CRISIS"
-    out["quality_ok"] = ~out["quality_flag"].isin(["FAIL", "CRISIS", "NEG_NOT_IN_SURPLUS"])
+    out["quality_ok"] = ~out["quality_flag"].isin(DATA_QUALITY_BLOCKING_FLAGS)
+
+    out["neg_price_explained_by_surplus_ratio"] = pd.to_numeric(
+        out.get("neg_price_explained_by_surplus_ratio", np.nan),
+        errors="coerce",
+    )
+    if "market_physical_gap_flag" in out.columns:
+        out["market_physical_gap_flag"] = out["market_physical_gap_flag"].fillna(False).astype(bool)
+    else:
+        out["market_physical_gap_flag"] = False
+    if market_physical_gap_ratios:
+        for i, row in out[["country", "year"]].iterrows():
+            y = _safe_float(row.get("year"), np.nan)
+            if not np.isfinite(y):
+                continue
+            key = (str(row["country"]), int(y))
+            ratio = market_physical_gap_ratios.get(key)
+            if ratio is None:
+                continue
+            out.at[i, "neg_price_explained_by_surplus_ratio"] = float(ratio)
+            out.at[i, "market_physical_gap_flag"] = bool(ratio < 0.5)
+    out["market_physical_gap_flag"] = out["market_physical_gap_flag"] | (
+        pd.to_numeric(out["neg_price_explained_by_surplus_ratio"], errors="coerce") < 0.5
+    )
+    out["market_physical_gap_flag"] = out["market_physical_gap_flag"].fillna(False).astype(bool)
 
     out["stage2_candidate_year"] = (
         (out["family_count"] >= 2)
@@ -227,7 +345,12 @@ def _apply_phase2_logic(
     out["phase2_candidate_year"] = out["stage2_candidate_year"]
     out["flag_capture_only_stage2"] = out["value_family"] & (~out["low_price_family"]) & (~out["physical_family"])
     out["is_phase2_market"] = out["stage2_candidate_year"]
-    out["is_phase2_physical"] = out["physical_family"]
+    out["physical_candidate_year"] = (
+        out["physical_family"]
+        & out["quality_ok"].fillna(False)
+        & (~out["crisis_year"].fillna(False))
+    )
+    out["is_phase2_physical"] = out["physical_candidate_year"]
     out["signal_low_price"] = out["low_price_family"]
     out["signal_value"] = out["value_family"]
     out["signal_physical"] = out["physical_family"]
@@ -260,39 +383,57 @@ def _apply_phase2_logic(
 
 
 def _first_persistent_year(group: pd.DataFrame, col: str, window_years: int) -> float:
+    start, _ = _persistent_run_start_and_status(group, col, window_years)
+    return start
+
+
+def _persistent_run_start_and_status(group: pd.DataFrame, col: str, window_years: int) -> tuple[float, str]:
     if group.empty or col not in group.columns:
-        return float("nan")
-    years = pd.to_numeric(group["year"], errors="coerce")
-    flags = group[col].fillna(False).astype(bool)
-    for i in range(len(group) - 1):
+        return float("nan"), "not_reached_in_window"
+
+    w = max(1, int(window_years))
+    g = group.sort_values("year").copy()
+    years = pd.to_numeric(g["year"], errors="coerce")
+    flags = g[col].fillna(False).astype(bool)
+    if years.notna().sum() == 0:
+        return float("nan"), "not_reached_in_window"
+
+    first_year = int(years.dropna().iloc[0])
+    n = len(g)
+    i = 0
+    while i < n:
         y0 = _safe_float(years.iloc[i], np.nan)
-        y1 = _safe_float(years.iloc[i + 1], np.nan)
-        if not (np.isfinite(y0) and np.isfinite(y1)):
+        if not (np.isfinite(y0) and bool(flags.iloc[i])):
+            i += 1
             continue
-        if int(y1) != int(y0) + 1:
-            continue
-        if bool(flags.iloc[i]) and bool(flags.iloc[i + 1]):
-            return float(int(y0))
-    return float("nan")
+        run_start = int(y0)
+        run_len = 1
+        j = i + 1
+        prev = int(y0)
+        while j < n:
+            yj = _safe_float(years.iloc[j], np.nan)
+            if not (np.isfinite(yj) and bool(flags.iloc[j]) and int(yj) == prev + 1):
+                break
+            run_len += 1
+            prev = int(yj)
+            j += 1
+        if run_len >= w:
+            status = "already_phase2_at_window_start" if run_start == first_year else "transition_observed"
+            return float(run_start), status
+        i = max(j, i + 1)
+
+    return float("nan"), "not_reached_in_window"
 
 
-def _is_market_persistent(group: pd.DataFrame, bascule_year: float) -> bool:
+def _is_market_persistent(group: pd.DataFrame, bascule_year: float, window_years: int = 2) -> bool:
     if not np.isfinite(bascule_year):
         return False
     y0 = int(bascule_year)
-    subset = group[(group["year"] >= y0) & (group["year"] <= y0 + 2)]
+    subset = group[group["year"] >= y0].sort_values("year").copy()
     if subset.empty:
         return False
-    # Slide logic: two consecutive years with stage2 candidate.
-    subset = subset.sort_values("year")
-    years = pd.to_numeric(subset["year"], errors="coerce")
-    flags = subset["stage2_candidate_year"].fillna(False).astype(bool)
-    for i in range(len(subset) - 1):
-        y0i = _safe_float(years.iloc[i], np.nan)
-        y1i = _safe_float(years.iloc[i + 1], np.nan)
-        if np.isfinite(y0i) and np.isfinite(y1i) and int(y1i) == int(y0i) + 1 and bool(flags.iloc[i]) and bool(flags.iloc[i + 1]):
-            return True
-    return False
+    start, _ = _persistent_run_start_and_status(subset, "stage2_candidate_year", window_years)
+    return bool(np.isfinite(start) and int(start) == y0)
 
 
 def _parse_evidence_ratio(evidence: Any) -> float:
@@ -310,8 +451,8 @@ def _parse_evidence_ratio(evidence: Any) -> float:
         return float("nan")
 
 
-def _quality_overrides_from_findings(validation_findings_df: pd.DataFrame | None) -> dict[tuple[str, int], str]:
-    overrides: dict[tuple[str, int], str] = {}
+def _market_physical_gap_from_findings(validation_findings_df: pd.DataFrame | None) -> dict[tuple[str, int], float]:
+    overrides: dict[tuple[str, int], float] = {}
     if validation_findings_df is None or validation_findings_df.empty:
         return overrides
     req = {"country", "year", "code"}
@@ -326,8 +467,8 @@ def _quality_overrides_from_findings(validation_findings_df: pd.DataFrame | None
         return overrides
     for _, row in vf.iterrows():
         ratio = _parse_evidence_ratio(row.get("evidence", ""))
-        if np.isfinite(ratio) and ratio < 0.5:
-            overrides[(str(row["country"]), int(row["year"]))] = "NEG_NOT_IN_SURPLUS"
+        if np.isfinite(ratio):
+            overrides[(str(row["country"]), int(row["year"]))] = float(ratio)
     return overrides
 
 
@@ -391,11 +532,27 @@ def _adjust_for_lever(group: pd.DataFrame, demand_uplift: float = 0.0, flex_upli
     return g
 
 
-def _required_lever_to_avoid_phase2(group: pd.DataFrame, p: dict[str, float], lever: str, max_uplift: float) -> tuple[float | None, str]:
+def _required_lever_to_avoid_phase2(
+    group: pd.DataFrame,
+    p: dict[str, float],
+    lever: str,
+    max_uplift: float,
+    crisis_years_global: set[int] | None = None,
+    crisis_years_by_country: dict[str, set[int]] | None = None,
+) -> tuple[float | None, str]:
     scoped = group.sort_values("year").copy()
     if scoped.empty:
         return None, "insufficient_data"
-    baseline = _apply_phase2_logic(scoped, p)
+    if crisis_years_global is None:
+        crisis_years_global, cfg_by_country = _load_crisis_years_from_config()
+        crisis_years_by_country = cfg_by_country
+    crisis_years_by_country = crisis_years_by_country or {}
+    baseline = _apply_phase2_logic(
+        scoped,
+        p,
+        crisis_years_global=crisis_years_global,
+        crisis_years_by_country=crisis_years_by_country,
+    )
     y0 = _first_persistent_year(baseline, "stage2_candidate_year", _safe_param(p, "q1_persistence_window_years", 3.0))
     if not np.isfinite(y0):
         return 0.0, "already_not_phase2"
@@ -408,7 +565,12 @@ def _required_lever_to_avoid_phase2(group: pd.DataFrame, p: dict[str, float], le
             adj = _adjust_for_lever(scoped, demand_uplift=x, flex_uplift=0.0)
         else:
             adj = _adjust_for_lever(scoped, demand_uplift=0.0, flex_uplift=x)
-        panel_x = _apply_phase2_logic(adj, p)
+        panel_x = _apply_phase2_logic(
+            adj,
+            p,
+            crisis_years_global=crisis_years_global,
+            crisis_years_by_country=crisis_years_by_country,
+        )
         return not np.isfinite(_first_persistent_year(panel_x, "stage2_candidate_year", _safe_param(p, "q1_persistence_window_years", 3.0)))
 
     if _cond(lo):
@@ -567,8 +729,16 @@ def run_q1(
         for _, r in assumptions_df[assumptions_df["param_name"].isin(Q1_PARAMS)].iterrows()
     }
 
-    quality_overrides = _quality_overrides_from_findings(validation_findings_df)
-    panel = _apply_phase2_logic(panel, params, quality_overrides=quality_overrides)
+    crisis_years_global, crisis_years_by_country = _resolve_crisis_years(selection)
+    market_physical_gap_overrides = _market_physical_gap_from_findings(validation_findings_df)
+    panel = _apply_phase2_logic(
+        panel,
+        params,
+        crisis_years_global=crisis_years_global,
+        crisis_years_by_country=crisis_years_by_country,
+        quality_overrides=None,
+        market_physical_gap_ratios=market_physical_gap_overrides,
+    )
 
     checks: list[dict[str, str]] = []
     warnings: list[str] = []
@@ -578,9 +748,9 @@ def run_q1(
 
     for country, group in panel.groupby("country"):
         group = group.sort_values("year").copy()
-        bascule_year = _first_persistent_year(group, "stage2_candidate_year", persist_window)
-        physical_year = _first_persistent_year(group, "physical_family", persist_window)
-        stage1_year = _first_persistent_year(group, "stage1_candidate_year", persist_window)
+        bascule_year, bascule_status_market = _persistent_run_start_and_status(group, "stage2_candidate_year", persist_window)
+        physical_year, bascule_status_physical = _persistent_run_start_and_status(group, "physical_candidate_year", persist_window)
+        stage1_year, _ = _persistent_run_start_and_status(group, "stage1_candidate_year", persist_window)
         if np.isfinite(bascule_year):
             at_rows = group[group["year"] == int(bascule_year)]
             at = at_rows.iloc[0] if not at_rows.empty else group.iloc[-1]
@@ -597,18 +767,34 @@ def run_q1(
                     confidence -= 0.25
                 if bool(around.get("flag_capture_only_stage2", pd.Series(False)).fillna(False).any()):
                     confidence -= 0.20
-                bad_quality = around.get("quality_flag", pd.Series(dtype=object)).astype(str).str.upper() != "OK"
+                bad_quality = ~around.get("quality_ok", pd.Series(False, index=around.index)).fillna(False).astype(bool)
                 if bool(bad_quality.fillna(False).any()):
                     confidence -= 0.10
-            if not _is_market_persistent(group, bascule_year):
+            if not _is_market_persistent(group, bascule_year, persist_window):
                 confidence -= 0.20
         confidence = float(np.clip(confidence, 0.0, 1.0))
 
-        req_demand, req_demand_status = _required_lever_to_avoid_phase2(group, params, "demand", max_uplift=max_lever)
-        req_flex, req_flex_status = _required_lever_to_avoid_phase2(group, params, "flex", max_uplift=max_lever)
+        req_demand, req_demand_status = _required_lever_to_avoid_phase2(
+            group,
+            params,
+            "demand",
+            max_uplift=max_lever,
+            crisis_years_global=crisis_years_global,
+            crisis_years_by_country=crisis_years_by_country,
+        )
+        req_flex, req_flex_status = _required_lever_to_avoid_phase2(
+            group,
+            params,
+            "flex",
+            max_uplift=max_lever,
+            crisis_years_global=crisis_years_global,
+            crisis_years_by_country=crisis_years_by_country,
+        )
 
-        if np.isfinite(bascule_year):
+        if bascule_status_market == "transition_observed":
             rationale = "Bascule validee: >=2 familles actives (LOW_PRICE/VALUE/PHYSICAL) sur 2 annees consecutives hors crise."
+        elif bascule_status_market == "already_phase2_at_window_start":
+            rationale = "Phase2 deja active au debut de fenetre: transition anterieure au scope observe."
         else:
             rationale = "Pas de bascule persistante sur la fenetre."
 
@@ -617,6 +803,10 @@ def run_q1(
                 "country": country,
                 "bascule_year_market": bascule_year,
                 "bascule_year_physical": physical_year,
+                "bascule_year_market_observed": bascule_year if bascule_status_market == "transition_observed" else np.nan,
+                "bascule_year_physical_observed": physical_year if bascule_status_physical == "transition_observed" else np.nan,
+                "bascule_status_market": bascule_status_market,
+                "bascule_status_physical": bascule_status_physical,
                 "stage1_bascule_year": stage1_year,
                 "stage1_detected": bool(np.isfinite(stage1_year)),
                 "bascule_confidence": confidence,
@@ -638,6 +828,8 @@ def run_q1(
                 "capture_ratio_pv_vs_ttl_at_bascule": at.get("capture_ratio_pv_vs_ttl", np.nan),
                 "capture_ratio_pv_at_bascule": at.get("capture_ratio_pv", np.nan),
                 "capture_ratio_wind_at_bascule": at.get("capture_ratio_wind", np.nan),
+                "market_physical_gap_at_bascule": bool(at.get("market_physical_gap_flag", False)),
+                "neg_price_explained_by_surplus_ratio_at_bascule": _safe_float(at.get("neg_price_explained_by_surplus_ratio"), np.nan),
                 "h_negative_at_bascule": at.get("h_negative_obs", np.nan),
                 "notes_quality": "coherence_low"
                 if float(at.get("regime_coherence", 1.0)) < _safe_param(params, "regime_coherence_min_for_causality", 0.55)
@@ -697,7 +889,15 @@ def run_q1(
                 )
 
     summary = pd.DataFrame(summary_rows)
-    q1_rule_definition = _build_rule_definition(params)
+    for col, default in {
+        "bascule_status_market": "not_reached_in_window",
+        "bascule_status_physical": "not_reached_in_window",
+        "bascule_year_market": np.nan,
+        "bascule_year_physical": np.nan,
+    }.items():
+        if col not in summary.columns:
+            summary[col] = default
+    q1_rule_definition = _build_rule_definition(params, crisis_years=crisis_years_global)
     q1_rule_application_cols = [
         "country",
         "year",
@@ -724,9 +924,12 @@ def run_q1(
         "flag_far_low",
         "flag_ir_high",
         "flag_spread_high",
+        "market_physical_gap_flag",
+        "neg_price_explained_by_surplus_ratio",
         "low_price_family",
         "value_family",
         "physical_family",
+        "physical_candidate_year",
         "flag_capture_only_stage2",
         "is_stage1_criteria",
         "is_phase2_market",
@@ -788,9 +991,9 @@ def run_q1(
     }
 
     narrative = (
-        "Q1 identifie la bascule Phase 1 -> Phase 2 avec un gating strict: "
-        "LOW-PRICE ou PHYSICAL obligatoire, CAPTURE-only interdit, score + persistance requis. "
-        "Les sorties incluent la decomposition des flags, le score, la rationale et des solveurs required-lever."
+        "Q1 identifie la bascule Phase 1 -> Phase 2 avec gating explicite: "
+        ">=2 familles LOW_PRICE/VALUE/PHYSICAL, hors annees de crise configurees, et qualite data uniquement. "
+        "Les diagnostics NEG_NOT_IN_SURPLUS restent visibles via market_physical_gap_flag mais ne bloquent pas la classification."
     )
 
     return ModuleResult(

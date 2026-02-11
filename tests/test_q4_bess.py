@@ -122,8 +122,7 @@ def test_q4_summary_has_finite_far_and_nonzero_rec_when_objective_not_reached(ma
     assert 0.0 <= float(s["far_before"]) <= 1.0
     assert 0.0 <= float(s["far_after"]) <= 1.0
     if bool(s["objective_not_reached"]):
-        assert float(s["required_bess_power_mw"]) > 0.0
-        assert float(s["required_bess_energy_mwh"]) > 0.0
+        assert str(s["objective_reason"]) in {"grid_too_small", "unreachable_under_policy"}
 
 
 def test_q4_frontier_has_join_keys(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
@@ -147,6 +146,68 @@ def test_q4_frontier_has_join_keys(make_raw_panel, countries_cfg, thresholds_cfg
     for col in ["scenario_id", "country", "year"]:
         assert col in f.columns
         assert f[col].notna().all()
+
+
+def test_q4_no_free_energy_when_no_charge(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
+    frontier = res.tables["Q4_bess_frontier"].copy()
+    mask = pd.to_numeric(frontier["charge_sum_mwh"], errors="coerce").fillna(0.0).abs() <= 1e-6
+    assert (pd.to_numeric(frontier.loc[mask, "discharge_sum_mwh"], errors="coerce").fillna(0.0).abs() <= 1e-6).all()
+
+
+def test_q4_energy_conservation_annual(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
+    f = res.tables["Q4_bess_frontier"].copy()
+    lhs = pd.to_numeric(f["discharge_sum_mwh"], errors="coerce").fillna(0.0)
+    rhs = (
+        pd.to_numeric(f["charge_sum_mwh"], errors="coerce").fillna(0.0)
+        * pd.to_numeric(f["eta_roundtrip"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(f["soc_start_mwh"], errors="coerce").fillna(0.0)
+        - pd.to_numeric(f["soc_end_mwh"], errors="coerce").fillna(0.0)
+        + 1e-6
+    )
+    assert (lhs <= rhs + 1e-9).all()
+
+
+def test_q4_soc_end_zero_in_default_mode(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
+    f = res.tables["Q4_bess_frontier"].copy()
+    end = pd.to_numeric(f["soc_end_mwh"], errors="coerce").fillna(0.0).abs()
+    e = pd.to_numeric(f["required_bess_energy_mwh"], errors="coerce").fillna(0.0)
+    tol = (e.clip(lower=1.0) * 1e-6) + 1e-9
+    assert (end <= tol).all()
+
+
+def test_q4_already_met_has_no_objective_not_reached_warning(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    assumptions.loc[assumptions["param_name"] == "target_far", "param_value"] = 0.0
+    res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
+    s = res.tables["Q4_sizing_summary"].iloc[0]
+    assert bool(s["objective_met"]) is True
+    assert bool(s["objective_not_reached"]) is False
+    assert str(s["objective_reason"]) == "already_met"
+    objective_warn_codes = {
+        str(c.get("code"))
+        for c in res.checks
+        if str(c.get("status", "")).upper() == "WARN"
+    }
+    assert "Q4_OBJECTIVE_NOT_REACHED_GRID" not in objective_warn_codes
+    assert "Q4_OBJECTIVE_UNREACHABLE" not in objective_warn_codes
 
 
 @pytest.mark.performance

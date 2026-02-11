@@ -288,7 +288,7 @@ Nous testons si la pente est correlee au ratio d'absorption par flexibilite.
 Nous testons si la pente est correlee a un indicateur de correlation production solaire et demande.
 
 Test 4. Tests de robustesse.
-Nous excluons les annees de crise et nous verifions si la pente reste du meme ordre de grandeur.
+Nous excluons les annees de crise definies explicitement par configuration (par defaut 2022 en Europe) et nous verifions si la pente reste du meme ordre de grandeur.
 Nous testons la stabilite du resultat si on change la periode et si on change le pays de reference.
 
 ---
@@ -633,7 +633,7 @@ sensible car le thermique ne marginalise qu'en pointe.
 Slide 28 -- Question 5 -- Tests empiriques
 
 T5.1. Pass-through "grosses mailles". On compare l'evolution de TTL avec l'evolution des prix \
-gaz et CO2, annee par annee, par pays. On teste si le lien est stable hors annees de crise.
+gaz et CO2, annee par annee, par pays. On teste si le lien est stable hors annees de crise explicites.
 
 T5.2. Decomposition "niveau vs valeur relative". On observe separement le baseload, le TTL, et \
 le capture price PV. On verifie si la hausse de TTL s'accompagne d'une hausse du capture price \

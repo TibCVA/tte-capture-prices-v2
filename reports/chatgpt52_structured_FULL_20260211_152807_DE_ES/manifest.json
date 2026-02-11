@@ -1,0 +1,18 @@
+{
+  "package_name": "chatgpt52_structured_FULL_20260211_152807_DE_ES",
+  "run_id": "FULL_20260211_152807",
+  "run_dir": "outputs\\combined\\FULL_20260211_152807",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "generated_at_utc": "2026-02-11T15:34:30.971280+00:00",
+  "questions": [
+    "Q1",
+    "Q2",
+    "Q3",
+    "Q4",
+    "Q5"
+  ],
+  "method_reference_file": "AUDIT_METHODS_Q1_Q5.md"
+}

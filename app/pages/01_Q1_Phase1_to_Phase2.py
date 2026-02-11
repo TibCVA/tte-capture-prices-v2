@@ -136,11 +136,11 @@ def render() -> None:
             {
                 "metric": "Stage2 Market Score",
                 "definition": "Score de symptomes marche de phase 2.",
-                "formula": "Points sur h_negative, h_below_5, capture_ratio_pv_vs_ttl, spread journalier",
+                "formula": "Score = familles actives LOW_PRICE + VALUE + PHYSICAL (0..3); stage2_candidate=(score>=2) & quality_ok_data & hors crisis_year explicite",
                 "intuition": "Plus le score monte, plus la pression de cannibalisation est visible.",
                 "interpretation": "Score eleve + stress physique eleve => bascule robuste.",
                 "limits": "Seuils parametriques et non causaux.",
-                "dependencies": "qualite prix, seuils hypotheses, regime_coherence.",
+                "dependencies": "qualite data (coverage/unites/bornes), seuils hypotheses, liste explicite des annees de crise.",
             },
             {
                 "metric": "Stress physique",
