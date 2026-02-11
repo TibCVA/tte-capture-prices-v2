@@ -1,7 +1,7 @@
 # PAYLOAD LLM - Audit DE/ES
 
 Ce document est prêt à être copié-collé dans un autre LLM pour un audit rigoureux.
-Généré le: `2026-02-11 16:00:15 UTC`
+Généré le: `2026-02-11 16:05:43 UTC`
 Package source: `reports\chatgpt52_structured_FULL_20260211_155613_DE_ES`
 Run ID: `FULL_20260211_155613`
 Countries scope: `DE, ES`
