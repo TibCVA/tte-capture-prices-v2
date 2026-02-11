@@ -49,6 +49,8 @@ def main() -> None:
     if not annual_path.exists():
         raise FileNotFoundError(f"Missing historical annual metrics: {annual_path}")
     annual_hist = pd.read_parquet(annual_path)
+    validation_findings_path = Path("data/metrics/validation_findings.parquet")
+    validation_findings_hist = pd.read_parquet(validation_findings_path) if validation_findings_path.exists() else pd.DataFrame()
     assumptions_phase1 = load_assumptions_table()
     assumptions_phase2 = load_phase2_assumptions()
     countries_cfg = load_countries().get("countries", {})
@@ -118,6 +120,7 @@ def main() -> None:
             assumptions_phase2=assumptions_phase2,
             selection=selections[qid],
             run_id=run_id,
+            validation_findings_hist=validation_findings_hist,
         )
         export_question_bundle(bundle)
         status_counts = bundle.test_ledger["status"].astype(str).value_counts().to_dict() if not bundle.test_ledger.empty else {}

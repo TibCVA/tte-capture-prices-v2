@@ -47,6 +47,14 @@ class BessConfig:
         return float(np.sqrt(self.eta_roundtrip))
 
 
+def _safe_float(value: Any, default: float = np.nan) -> float:
+    try:
+        out = float(value)
+    except Exception:
+        return float(default)
+    return out if np.isfinite(out) else float(default)
+
+
 def _ensure_ts_index(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(df.index, pd.DatetimeIndex):
         out = df.copy()
@@ -215,7 +223,9 @@ def _simulate_dispatch_arrays(
 def _compute_far_array(surplus: np.ndarray, absorbed: np.ndarray) -> float:
     s = float(np.nansum(np.where(np.isfinite(surplus), surplus, 0.0)))
     a = float(np.nansum(np.where(np.isfinite(absorbed), absorbed, 0.0)))
-    return np.nan if s <= 0.0 else a / s
+    if s <= 0.0:
+        return 1.0
+    return a / s
 
 
 def _pv_capture(price: np.ndarray, pv: np.ndarray) -> float:
@@ -347,6 +357,9 @@ def run_q4(
 
     country = str(selection.get("country", ""))
     year = int(selection.get("year", 0))
+    scenario_id = str(selection.get("scenario_id", "") or "")
+    mode = str(selection.get("mode", "HIST")).upper()
+    scenario_id_effective = scenario_id if scenario_id else ("HIST" if mode == "HIST" else "SCEN")
     assumption_hash = _assumption_hash(
         assumptions_df=assumptions_df,
         dispatch_mode=dispatch_mode,
@@ -372,6 +385,23 @@ def run_q4(
             frontier["engine_version"] = str(cached_meta.get("engine_version", Q4_ENGINE_VERSION))
         if "compute_time_sec" not in frontier.columns:
             frontier["compute_time_sec"] = float(cached_meta.get("compute_time_sec", 0.0))
+        if "scenario_id" not in frontier.columns:
+            frontier["scenario_id"] = scenario_id_effective
+        else:
+            sid = frontier["scenario_id"].astype(str).replace({"nan": "", "None": ""})
+            sid = sid.mask(sid.str.strip().eq(""), scenario_id_effective)
+            frontier["scenario_id"] = sid
+        if "country" not in frontier.columns:
+            frontier["country"] = country
+        else:
+            ctry = frontier["country"].astype(str).replace({"nan": "", "None": ""})
+            ctry = ctry.mask(ctry.str.strip().eq(""), country)
+            frontier["country"] = ctry
+        if "year" not in frontier.columns:
+            frontier["year"] = year
+        else:
+            y = pd.to_numeric(frontier["year"], errors="coerce")
+            frontier["year"] = y.fillna(year).astype(int)
         frontier["cache_hit"] = True
         if progress_callback:
             progress_callback("Chargement cache Q4", 0.95)
@@ -400,6 +430,10 @@ def run_q4(
         base_far = _compute_far_array(surplus, absorbed_base_model)
         unabs_before_twh = float(np.sum(surplus_unabs_model) / 1e6)
         pv_before = _pv_capture(price, pv)
+        baseload_before = float(np.nanmean(price)) if len(price) else np.nan
+        capture_ratio_pv_before = (pv_before / baseload_before) if np.isfinite(pv_before) and np.isfinite(baseload_before) and abs(baseload_before) > 1e-12 else np.nan
+        h_negative_before = int(np.nansum(np.where(np.isfinite(price), price < 0.0, 0)))
+        h_below_5_before = int(np.nansum(np.where(np.isfinite(price), price <= 5.0, 0)))
         day_ranges = _day_slices(base.index)
 
         if progress_callback:
@@ -452,9 +486,13 @@ def run_q4(
                     pv_after = np.nan if den <= 0 else float(np.sum(np.where(np.isfinite(price), price, 0.0) * delivered) / den)
                 else:
                     pv_after = pv_before
+                capture_ratio_pv_after = (pv_after / baseload_before) if np.isfinite(pv_after) and np.isfinite(baseload_before) and abs(baseload_before) > 1e-12 else np.nan
 
                 rows.append(
                     {
+                        "scenario_id": scenario_id_effective,
+                        "country": country,
+                        "year": year,
                         "dispatch_mode": dispatch_mode,
                         "objective": objective,
                         "required_bess_power_mw": cfg.power_mw,
@@ -462,6 +500,13 @@ def run_q4(
                         "required_bess_duration_h": cfg.duration_h,
                         "far_before": base_far,
                         "far_after": far_after,
+                        "h_negative_before": h_negative_before,
+                        "h_negative_after": h_negative_before,
+                        "h_below_5_before": h_below_5_before,
+                        "h_below_5_after": h_below_5_before,
+                        "baseload_price_before": baseload_before,
+                        "capture_ratio_pv_before": capture_ratio_pv_before,
+                        "capture_ratio_pv_after": capture_ratio_pv_after,
                         "surplus_unabs_energy_before": unabs_before_twh,
                         "surplus_unabs_energy_after": unabs_after_twh,
                         "pv_capture_price_before": pv_before,
@@ -496,6 +541,15 @@ def run_q4(
         frontier["engine_version"] = Q4_ENGINE_VERSION
         frontier["compute_time_sec"] = compute_time_sec
         frontier["cache_hit"] = False
+        frontier["scenario_id"] = frontier["scenario_id"].astype(str).replace({"nan": "", "None": ""})
+        frontier.loc[frontier["scenario_id"].str.strip().eq(""), "scenario_id"] = scenario_id_effective
+        frontier["country"] = frontier["country"].astype(str).replace({"nan": "", "None": ""})
+        frontier.loc[frontier["country"].str.strip().eq(""), "country"] = country
+        frontier["year"] = pd.to_numeric(frontier["year"], errors="coerce").fillna(year).astype(int)
+        # Aliases kept for downstream joins expecting frontier-style names.
+        frontier["bess_power_mw"] = pd.to_numeric(frontier["required_bess_power_mw"], errors="coerce")
+        frontier["duration_h"] = pd.to_numeric(frontier["required_bess_duration_h"], errors="coerce")
+        frontier["bess_energy_mwh"] = pd.to_numeric(frontier["required_bess_energy_mwh"], errors="coerce")
         _save_cache(
             frontier=frontier,
             frontier_path=frontier_path,
@@ -512,6 +566,11 @@ def run_q4(
         )
         if progress_callback:
             progress_callback("Aggregation et sauvegarde cache Q4", 0.92)
+
+    # Keep stable frontier aliases for downstream joins, including cache-hit runs.
+    frontier["bess_power_mw"] = pd.to_numeric(frontier.get("required_bess_power_mw"), errors="coerce")
+    frontier["duration_h"] = pd.to_numeric(frontier.get("required_bess_duration_h"), errors="coerce")
+    frontier["bess_energy_mwh"] = pd.to_numeric(frontier.get("required_bess_energy_mwh"), errors="coerce")
 
     checks: list[dict[str, str]] = []
     warnings: list[str] = []
@@ -598,6 +657,7 @@ def run_q4(
 
     objective_not_reached = False
     objective_recommendation = ""
+    objective_target_value = target_far if objective == "FAR_TARGET" else target_unabs
     if feasible.empty:
         objective_not_reached = True
         if objective == "FAR_TARGET":
@@ -605,17 +665,17 @@ def run_q4(
         else:
             best = frontier.sort_values(["surplus_unabs_energy_after", "required_bess_power_mw", "required_bess_energy_mwh"]).iloc[0]
 
-        # Never recommend 0 MW if non-zero meaningfully improves objective.
+        # Never recommend 0 MW when objective is not reached and non-zero options exist.
         non_zero = frontier[pd.to_numeric(frontier["required_bess_power_mw"], errors="coerce") > 0.0]
         if not non_zero.empty:
+            max_power = float(pd.to_numeric(non_zero["required_bess_power_mw"], errors="coerce").max())
+            boundary = non_zero[pd.to_numeric(non_zero["required_bess_power_mw"], errors="coerce") >= max_power - 1e-9]
             if objective == "FAR_TARGET":
-                nz_best = non_zero.sort_values(["far_after", "required_bess_power_mw", "required_bess_energy_mwh"], ascending=[False, True, True]).iloc[0]
-                if float(best["required_bess_power_mw"]) <= 0.0 and float(nz_best["far_after"]) > float(best["far_after"]) + 0.01:
-                    best = nz_best
+                boundary_best = boundary.sort_values(["far_after", "required_bess_energy_mwh"], ascending=[False, False]).iloc[0]
             else:
-                nz_best = non_zero.sort_values(["surplus_unabs_energy_after", "required_bess_power_mw", "required_bess_energy_mwh"], ascending=[True, True, True]).iloc[0]
-                if float(best["required_bess_power_mw"]) <= 0.0 and float(nz_best["surplus_unabs_energy_after"]) + 1e-6 < float(best["surplus_unabs_energy_after"]):
-                    best = nz_best
+                boundary_best = boundary.sort_values(["surplus_unabs_energy_after", "required_bess_energy_mwh"], ascending=[True, False]).iloc[0]
+            if float(best["required_bess_power_mw"]) <= 0.0:
+                best = boundary_best
 
         objective_recommendation = "increase_grid_upper_bound"
         warnings.append("Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.")
@@ -632,10 +692,12 @@ def run_q4(
     summary = pd.DataFrame(
         [
             {
+                "scenario_id": scenario_id_effective,
                 "country": country,
                 "year": year,
                 **best.to_dict(),
                 "objective_not_reached": objective_not_reached,
+                "objective_target_value": objective_target_value,
                 "objective_recommendation": objective_recommendation,
                 "pv_capacity_proxy_mw": float(pv_capacity_proxy),
                 "power_grid_max_mw": float(max(power_grid)) if power_grid else np.nan,
@@ -644,11 +706,46 @@ def run_q4(
             }
         ]
     )
+    summary["bess_power_mw"] = pd.to_numeric(summary["required_bess_power_mw"], errors="coerce")
+    summary["duration_h"] = pd.to_numeric(summary["required_bess_duration_h"], errors="coerce")
+    summary["bess_energy_mwh"] = pd.to_numeric(summary["required_bess_energy_mwh"], errors="coerce")
 
     if dispatch_mode == "PRICE_ARBITRAGE_SIMPLE" and float(summary["revenue_bess_price_taker"].iloc[0]) < 0:
         warnings.append("Revenu d'arbitrage annuel negatif: spread insuffisant ou regle de dispatch trop simple.")
     if float(summary["required_bess_duration_h"].iloc[0]) > 8.0:
         warnings.append("Besoin de stockage long (>8h): batterie courte potentiellement insuffisante.")
+    if bool(summary["objective_not_reached"].iloc[0]) and (
+        float(summary["required_bess_power_mw"].iloc[0]) <= 0.0
+        or float(summary["required_bess_energy_mwh"].iloc[0]) <= 0.0
+    ):
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q4_OBJECTIVE_NOT_REACHED_ZERO_REC",
+                "message": "Objectif non atteint mais recommandation BESS nulle.",
+            }
+        )
+    for col in ["far_before", "far_after"]:
+        val = _safe_float(summary[col].iloc[0], np.nan)
+        if not np.isfinite(val) or val < 0.0 or val > 1.0:
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q4_SUMMARY_FAR_INVALID",
+                    "message": f"{col} invalide dans Q4_sizing_summary.",
+                }
+            )
+    key_cols = ["scenario_id", "country", "year"]
+    for col in key_cols:
+        if col not in frontier.columns:
+            frontier[col] = scenario_id_effective if col == "scenario_id" else (country if col == "country" else year)
+    frontier["scenario_id"] = frontier["scenario_id"].astype(str).replace({"nan": "", "None": ""})
+    frontier.loc[frontier["scenario_id"].str.strip().eq(""), "scenario_id"] = scenario_id_effective
+    frontier["country"] = frontier["country"].astype(str).replace({"nan": "", "None": ""})
+    frontier.loc[frontier["country"].str.strip().eq(""), "country"] = country
+    frontier["year"] = pd.to_numeric(frontier["year"], errors="coerce").fillna(year).astype(int)
+    if frontier[key_cols].isna().any().any():
+        checks.append({"status": "FAIL", "code": "Q4_FRONTIER_KEY_MISSING", "message": "Cles manquantes dans Q4_bess_frontier."})
 
     if cache_hit:
         checks.append({"status": "INFO", "code": "Q4_CACHE_HIT", "message": "Resultat charge depuis cache persistant Q4."})

@@ -114,3 +114,34 @@ def test_q5_already_above_target_sets_required_zero(make_raw_panel, countries_cf
     ).tables["Q5_summary"].iloc[0]
     assert out["anchor_status"] == "already_above_target"
     assert float(out["required_co2_eur_t"]) == 0.0
+
+
+def test_q5_ttl_year_specific_consistent_with_annual_ttl(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    commodity = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=20, freq="D"),
+            "gas_price_eur_mwh_th": 35.0,
+            "co2_price_eur_t": 80.0,
+        }
+    )
+    out = run_q5(
+        hourly,
+        assumptions,
+        {
+            "country": "FR",
+            "year": 2024,
+            "horizon_year": 2024,
+            "marginal_tech": "CCGT",
+            "ttl_reference_mode": "year_specific",
+        },
+        "test",
+        commodity_daily=commodity,
+        ttl_target_eur_mwh=140.0,
+    ).tables["Q5_summary"].iloc[0]
+    ttl_obs = float(out["ttl_obs"])
+    ttl_annual = float(out["ttl_annual_metrics_same_year"])
+    if abs(ttl_annual) > 1e-12:
+        assert abs(ttl_obs - ttl_annual) / abs(ttl_annual) < 0.05

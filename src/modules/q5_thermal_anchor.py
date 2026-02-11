@@ -124,6 +124,24 @@ def _distributional_error(price_cd: pd.Series, anchor_cd: pd.Series) -> tuple[fl
     return err, p90 - a90, p95 - a95
 
 
+def _daily_spread_stats(price: pd.Series) -> tuple[int, float]:
+    p = pd.to_numeric(price, errors="coerce").dropna()
+    if p.empty:
+        return 0, np.nan
+    idx = p.index
+    if not isinstance(idx, pd.DatetimeIndex):
+        try:
+            idx = pd.to_datetime(idx, errors="coerce")
+        except Exception:
+            return 0, np.nan
+    if not isinstance(idx, pd.DatetimeIndex):
+        return 0, np.nan
+    by_day = p.groupby(idx.floor("D")).agg(lambda x: float(np.nanmax(x) - np.nanmin(x)))
+    days_gt50 = int((by_day > 50.0).sum())
+    avg_spread = float(by_day.mean()) if len(by_day) else np.nan
+    return days_gt50, avg_spread
+
+
 def _pick_anchor_tech(
     assumptions_df: pd.DataFrame,
     h_cd: pd.DataFrame,
@@ -223,7 +241,9 @@ def run_q5(
         h.index = h.index.tz_localize("UTC")
 
     h["date"] = h.index.tz_convert("UTC").tz_localize(None).floor("D")
+    h["__ts_idx"] = h.index
     h = h.merge(c[["date", "gas_price_eur_mwh_th", "co2_price_eur_t"]], on="date", how="left")
+    h = h.set_index("__ts_idx").sort_index()
     if gas_override_eur_mwh_th is not None:
         h["gas_price_eur_mwh_th"] = float(gas_override_eur_mwh_th)
     if co2_override_eur_t is not None:
@@ -232,6 +252,11 @@ def run_q5(
     h["gas_price_eur_mwh_th"] = pd.to_numeric(h["gas_price_eur_mwh_th"], errors="coerce")
     h["co2_price_eur_t"] = pd.to_numeric(h["co2_price_eur_t"], errors="coerce")
     h["price_da_eur_mwh"] = pd.to_numeric(h["price_da_eur_mwh"], errors="coerce")
+
+    if "year" not in h.columns:
+        h["year"] = h.index.tz_convert("UTC").year.astype(int)
+    else:
+        h["year"] = pd.to_numeric(h["year"], errors="coerce").astype("Int64")
 
     cd_mask, d_mask = _build_cd_masks(h)
     h_cd = h[cd_mask & h["price_da_eur_mwh"].notna() & h["gas_price_eur_mwh_th"].notna() & h["co2_price_eur_t"].notna()].copy()
@@ -242,19 +267,86 @@ def run_q5(
     vom = float(tech_meta["vom"])
     fuel_mult = float(tech_meta["multiplier"])
 
-    h_cd["ttl_anchor_eur_mwh"] = anchor_cd
-    ttl_obs = float(pd.to_numeric(h_cd["price_da_eur_mwh"], errors="coerce").quantile(0.95)) if not h_cd.empty else np.nan
-    ttl_anchor = float(pd.to_numeric(h_cd["ttl_anchor_eur_mwh"], errors="coerce").quantile(0.95)) if not h_cd.empty else np.nan
+    # Build hourly anchor on full panel for annual aggregation.
+    h["ttl_anchor_eur_mwh"] = (
+        pd.to_numeric(h["gas_price_eur_mwh_th"], errors="coerce") * fuel_mult / eff
+        + pd.to_numeric(h["co2_price_eur_t"], errors="coerce") * (ef / eff)
+        + vom
+    )
+    # Rebuild C/D scoped panel after anchor creation so downstream stats have all required columns.
+    h_cd = h[cd_mask & h["price_da_eur_mwh"].notna() & h["gas_price_eur_mwh_th"].notna() & h["co2_price_eur_t"].notna()].copy()
+
+    # Annual TTL table aligned with annual_metrics: P95 in regimes C/D (or fallback cd_mask).
+    annual_rows: list[dict[str, Any]] = []
+    for year, gy in h.groupby("year", dropna=True):
+        gy = gy.copy()
+        regime_col = "regime" if "regime" in gy.columns else ("regime_phys" if "regime_phys" in gy.columns else None)
+        if regime_col is not None:
+            mask_cd_y = gy[regime_col].astype(str).isin(["C", "D"]) & gy["price_da_eur_mwh"].notna()
+        else:
+            # fallback if regime missing
+            mask_cd_y = cd_mask.loc[gy.index] & gy["price_da_eur_mwh"].notna()
+        ttl_year = float(pd.to_numeric(gy.loc[mask_cd_y, "price_da_eur_mwh"], errors="coerce").quantile(0.95)) if mask_cd_y.any() else np.nan
+        ttl_anchor_year = float(pd.to_numeric(gy.loc[mask_cd_y, "ttl_anchor_eur_mwh"], errors="coerce").quantile(0.95)) if mask_cd_y.any() else np.nan
+        days_gt50, avg_spread = _daily_spread_stats(pd.to_numeric(gy["price_da_eur_mwh"], errors="coerce"))
+        crisis_year = bool(np.isfinite(avg_spread) and avg_spread > 50.0 and days_gt50 > 150)
+        annual_rows.append(
+            {
+                "year": int(year),
+                "ttl_eur_mwh": ttl_year,
+                "ttl_anchor_eur_mwh": ttl_anchor_year,
+                "days_spread_gt50": days_gt50,
+                "avg_daily_spread_obs": avg_spread,
+                "crisis_year": crisis_year,
+            }
+        )
+    annual_ttl = pd.DataFrame(annual_rows).sort_values("year").reset_index(drop=True) if annual_rows else pd.DataFrame(columns=["year", "ttl_eur_mwh", "ttl_anchor_eur_mwh", "days_spread_gt50", "avg_daily_spread_obs", "crisis_year"])
+
+    ttl_reference_mode = str(selection.get("ttl_reference_mode", ttl_method or "year_specific")).strip().lower()
+    if ttl_reference_mode not in {"year_specific", "median_over_years_excluding_crisis"}:
+        ttl_reference_mode = "year_specific"
+
+    candidate_non_crisis = annual_ttl[(~annual_ttl["crisis_year"]) & pd.to_numeric(annual_ttl["ttl_eur_mwh"], errors="coerce").notna()] if not annual_ttl.empty else pd.DataFrame()
+    requested_ref_year = selection.get("ttl_reference_year", selection.get("horizon_year"))
+    ref_year = int(_safe_float(requested_ref_year, np.nan)) if np.isfinite(_safe_float(requested_ref_year, np.nan)) else None
+    if ref_year is None:
+        if not candidate_non_crisis.empty:
+            ref_year = int(candidate_non_crisis["year"].max())
+        elif not annual_ttl.empty:
+            ref_year = int(annual_ttl["year"].max())
+
+    if ttl_reference_mode == "year_specific":
+        ref_row = annual_ttl[annual_ttl["year"] == int(ref_year)] if ref_year is not None and not annual_ttl.empty else pd.DataFrame()
+        if ref_row.empty and not annual_ttl.empty:
+            ref_row = annual_ttl.tail(1)
+        ttl_obs = _safe_float(ref_row["ttl_eur_mwh"].iloc[0], np.nan) if not ref_row.empty else np.nan
+        ttl_anchor = _safe_float(ref_row["ttl_anchor_eur_mwh"].iloc[0], np.nan) if not ref_row.empty else np.nan
+        ref_year_used = int(ref_row["year"].iloc[0]) if not ref_row.empty else np.nan
+        ref_hourly = h_cd[pd.to_numeric(h_cd["year"], errors="coerce") == int(ref_year_used)] if np.isfinite(_safe_float(ref_year_used, np.nan)) else h_cd.copy()
+    else:
+        med_base = candidate_non_crisis if not candidate_non_crisis.empty else annual_ttl
+        ttl_obs = _safe_float(pd.to_numeric(med_base["ttl_eur_mwh"], errors="coerce").median(), np.nan) if not med_base.empty else np.nan
+        ttl_anchor = _safe_float(pd.to_numeric(med_base["ttl_anchor_eur_mwh"], errors="coerce").median(), np.nan) if not med_base.empty else np.nan
+        ref_year_used = np.nan
+        non_crisis_years = set(pd.to_numeric(candidate_non_crisis["year"], errors="coerce").dropna().astype(int).tolist()) if not candidate_non_crisis.empty else set()
+        if non_crisis_years:
+            ref_hourly = h_cd[pd.to_numeric(h_cd["year"], errors="coerce").astype("Int64").isin(non_crisis_years)].copy()
+        else:
+            ref_hourly = h_cd.copy()
+
+    if ref_hourly.empty:
+        ref_hourly = h_cd.copy()
+
     ttl_target = _safe_float(ttl_target_eur_mwh, ttl_obs if np.isfinite(ttl_obs) else np.nan)
     alpha = ttl_obs - ttl_anchor if np.isfinite(ttl_obs) and np.isfinite(ttl_anchor) else np.nan
-    corr_cd = float(pd.to_numeric(h_cd["price_da_eur_mwh"], errors="coerce").corr(pd.to_numeric(h_cd["ttl_anchor_eur_mwh"], errors="coerce"))) if len(h_cd) >= 24 else np.nan
-    dist_error, p90_err, p95_err = _distributional_error(h_cd["price_da_eur_mwh"], h_cd["ttl_anchor_eur_mwh"])
+    corr_cd = float(pd.to_numeric(ref_hourly["price_da_eur_mwh"], errors="coerce").corr(pd.to_numeric(ref_hourly["ttl_anchor_eur_mwh"], errors="coerce"))) if len(ref_hourly) >= 24 else np.nan
+    dist_error, p90_err, p95_err = _distributional_error(ref_hourly["price_da_eur_mwh"], ref_hourly["ttl_anchor_eur_mwh"])
 
     dco2 = ef / eff if eff > 0 else np.nan
     dgas = fuel_mult / eff if eff > 0 else np.nan
 
-    fuel_term_p95 = float((pd.to_numeric(h_cd["gas_price_eur_mwh_th"], errors="coerce") * fuel_mult / eff).quantile(0.95)) if not h_cd.empty else np.nan
-    co2_term_p95 = float((pd.to_numeric(h_cd["co2_price_eur_t"], errors="coerce") * (ef / eff)).quantile(0.95)) if not h_cd.empty else np.nan
+    fuel_term_p95 = float((pd.to_numeric(ref_hourly["gas_price_eur_mwh_th"], errors="coerce") * fuel_mult / eff).quantile(0.95)) if not ref_hourly.empty else np.nan
+    co2_term_p95 = float((pd.to_numeric(ref_hourly["co2_price_eur_t"], errors="coerce") * (ef / eff)).quantile(0.95)) if not ref_hourly.empty else np.nan
     anchor_status = "ok"
     if np.isfinite(ttl_obs) and np.isfinite(ttl_target) and ttl_obs >= ttl_target:
         required_co2 = 0.0
@@ -294,6 +386,20 @@ def run_q5(
         )
     if np.isfinite(corr_cd) and corr_cd < 0.2:
         checks.append({"status": "INFO", "code": "Q5_LOW_CORR_CD", "message": "Corr horaire faible mais non bloquante (fit distributionnel prioritaire)."})
+    if ttl_reference_mode == "year_specific" and np.isfinite(_safe_float(ref_year_used, np.nan)) and not annual_ttl.empty:
+        annual_same = annual_ttl[annual_ttl["year"] == int(ref_year_used)]
+        ttl_annual_same_year = _safe_float(annual_same["ttl_eur_mwh"].iloc[0], np.nan) if not annual_same.empty else np.nan
+        tol = _safe_float(selection.get("ttl_consistency_tolerance", 0.05), 0.05)
+        if np.isfinite(ttl_obs) and np.isfinite(ttl_annual_same_year) and abs(ttl_annual_same_year) > 1e-12:
+            rel_err = abs(ttl_obs - ttl_annual_same_year) / abs(ttl_annual_same_year)
+            if rel_err > tol:
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q5_TTL_INCONSISTENT_WITH_ANNUAL",
+                        "message": f"TTL inconsistant vs annual metrics pour {int(ref_year_used)} (rel_err={rel_err:.2%}).",
+                    }
+                )
     if not checks:
         checks.append({"status": "PASS", "code": "Q5_PASS", "message": "Q5 checks passes."})
 
@@ -302,10 +408,18 @@ def run_q5(
             {
                 "country": country,
                 "year_range_used": f"{int(h['year'].min())}-{int(h['year'].max())}" if "year" in h.columns and h["year"].notna().any() else "",
+                "ttl_reference_mode": ttl_reference_mode,
+                "ttl_reference_year": ref_year_used,
                 "marginal_tech": chosen_tech,
                 "chosen_anchor_tech": chosen_tech,
                 "ttl_obs": ttl_obs,
                 "ttl_obs_price_cd": ttl_obs,
+                "ttl_annual_metrics_same_year": _safe_float(
+                    annual_ttl.loc[annual_ttl["year"] == int(ref_year_used), "ttl_eur_mwh"].iloc[0],
+                    np.nan,
+                )
+                if np.isfinite(_safe_float(ref_year_used, np.nan))
+                else np.nan,
                 "ttl_anchor": ttl_anchor,
                 "ttl_physical": ttl_anchor,
                 "ttl_regression": np.nan,
@@ -361,4 +475,3 @@ def run_q5(
         scenario_id=selection.get("scenario_id"),
         horizon_year=selection.get("horizon_year"),
     )
-

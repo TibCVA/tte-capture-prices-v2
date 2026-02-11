@@ -315,18 +315,60 @@ def _ensure_scenario_outputs(
 
     annual = _load_scenario_annual_safe(scenario_id)
     missing_pairs: list[tuple[str, int]] = []
+    invalid_pairs: list[tuple[str, int]] = []
 
     if annual.empty:
         missing_pairs = [(c, y) for c in countries for y in scenario_years]
     else:
+        annual = annual.copy()
+        if "country" in annual.columns:
+            annual["country"] = annual["country"].astype(str)
+        if "year" in annual.columns:
+            annual["year"] = pd.to_numeric(annual["year"], errors="coerce")
+        if "scenario_id" not in annual.columns:
+            annual["scenario_id"] = scenario_id
         for c in countries:
             for y in scenario_years:
-                row = annual[(annual["country"].astype(str) == str(c)) & (pd.to_numeric(annual["year"], errors="coerce") == int(y))]
+                row = annual[(annual["country"] == str(c)) & (annual["year"] == int(y))]
                 if row.empty:
                     missing_pairs.append((c, y))
-                elif not scenario_hourly_output_path(scenario_id, c, int(y)).exists():
+                    continue
+                if not scenario_hourly_output_path(scenario_id, c, int(y)).exists():
                     missing_pairs.append((c, y))
+                    continue
+                # Quality guard for stale scenario files from older engines.
+                far = _safe_float(row.iloc[0].get("far_observed"), np.nan)
+                sid = str(row.iloc[0].get("scenario_id", ""))
+                if sid.strip() == "":
+                    invalid_pairs.append((c, y))
+                    continue
+                if not np.isfinite(far):
+                    invalid_pairs.append((c, y))
+                    continue
+                if ("sr_hours" in row.columns) and ("h_negative" in row.columns):
+                    sr_h = _safe_float(row.iloc[0].get("sr_hours"), np.nan)
+                    h_neg = _safe_float(row.iloc[0].get("h_negative"), np.nan)
+                    h_low = _safe_float(row.iloc[0].get("h_below_5"), np.nan)
+                    # If all stress proxies are exactly zero, row is likely stale/non-usable.
+                    if np.isfinite(sr_h) and np.isfinite(h_neg) and np.isfinite(h_low):
+                        if abs(sr_h) < 1e-12 and abs(h_neg) < 1e-12 and abs(h_low) < 1e-12:
+                            invalid_pairs.append((c, y))
 
+        # Scenario reality guard: if VRE rises materially but stress proxies stay zero across all requested years.
+        for c in countries:
+            c_rows = annual[(annual["country"] == str(c)) & (annual["year"].isin([int(y) for y in scenario_years]))].sort_values("year")
+            if c_rows.empty:
+                continue
+            vre = pd.to_numeric(c_rows.get("vre_penetration_share_gen"), errors="coerce")
+            if vre.notna().sum() >= 2 and float(vre.max() - vre.min()) >= 0.03:
+                h_neg = pd.to_numeric(c_rows.get("h_negative"), errors="coerce").fillna(0.0)
+                h_low = pd.to_numeric(c_rows.get("h_below_5"), errors="coerce").fillna(0.0)
+                sr_h = pd.to_numeric(c_rows.get("sr_hours"), errors="coerce").fillna(0.0)
+                if bool(((h_neg.abs() < 1e-12) & (h_low.abs() < 1e-12) & (sr_h.abs() < 1e-12)).all()):
+                    for y in c_rows["year"].dropna().astype(int).tolist():
+                        invalid_pairs.append((str(c), int(y)))
+
+    missing_pairs = sorted(set(missing_pairs + invalid_pairs))
     if not missing_pairs:
         return True, "already_available"
 
@@ -352,6 +394,7 @@ def _run_hist_module(
     assumptions_phase1: pd.DataFrame,
     selection: dict[str, Any],
     run_id: str,
+    validation_findings_hist: pd.DataFrame | None = None,
 ) -> tuple[ModuleResult, dict[str, ModuleResult]]:
     qid = question_id.upper()
     extra: dict[str, ModuleResult] = {}
@@ -363,6 +406,7 @@ def _run_hist_module(
             {**selection, "mode": "HIST"},
             run_id,
             hourly_by_country_year=hourly_hist_map,
+            validation_findings_df=validation_findings_hist,
         )
         return res, extra
     if qid == "Q2":
@@ -466,12 +510,15 @@ def _run_hist_module(
                         "country": country,
                         "marginal_tech": marginal_tech,
                         "mode": "HIST",
+                        "horizon_year": max(years) if years else None,
+                        "ttl_reference_mode": str(selection.get("ttl_reference_mode", "year_specific")),
                     },
                     run_id=f"{run_id}_{country}",
                     commodity_daily=selection.get("commodity_daily"),
                     ttl_target_eur_mwh=_safe_float(selection.get("ttl_target_eur_mwh"), 120.0),
                     gas_override_eur_mwh_th=selection.get("gas_override_eur_mwh_th"),
                     co2_override_eur_t=selection.get("co2_override_eur_t"),
+                    ttl_method=str(selection.get("ttl_reference_mode", "year_specific")),
                 )
             )
         if not runs:
@@ -602,6 +649,7 @@ def _run_scen_module(
                     run_id=f"{run_id}_{country}",
                     commodity_daily=commodity,
                     ttl_target_eur_mwh=_safe_float(selection.get("ttl_target_eur_mwh"), 120.0),
+                    ttl_method=str(selection.get("ttl_reference_mode", "year_specific")),
                 )
             )
         if not runs:
@@ -864,9 +912,9 @@ def _annotate_comparison_interpretability(question_id: str, comparison: pd.DataF
         d = _safe_float(row.get("delta"), np.nan)
         scen_status = str(row.get("scen_status", "")).lower().strip()
 
-        if qid == "Q3" and scen_status == "hors_scope_stage2":
+        if qid == "Q3" and scen_status in {"hors_scope_stage2", "hors_scope_phase2"}:
             statuses.append("NON_TESTABLE")
-            reasons.append("scenario_hors_scope_stage2")
+            reasons.append("scenario_hors_scope_phase2")
             continue
         if not (np.isfinite(h) and np.isfinite(s) and np.isfinite(d)):
             statuses.append("NON_TESTABLE")
@@ -963,8 +1011,8 @@ def _evaluate_test_ledger(
                     status = "PASS" if not out.empty else "FAIL"
                     _append_test_row(rows, spec, status, int(len(out)), ">0 lignes", "Les tendances historiques sont calculees.")
                 else:
-                    allowed = {"degradation", "stabilisation", "amelioration", "transition_partielle", "hors_scope_stage2"}
-                    ok = (not out.empty) and out["status"].astype(str).isin(allowed).all()
+                    allowed = {"HORS_SCOPE_PHASE2", "STOP_POSSIBLE", "PHASE2_IMPROVING", "PHASE2_ACTIVE"}
+                    ok = (not out.empty) and out["status"].astype(str).str.upper().isin(allowed).all()
                     _append_test_row(rows, spec, "PASS" if ok else "WARN", int(out["status"].nunique()) if not out.empty else 0, "status valides", "Les statuts business sont renseignes.")
             elif qid == "Q4":
                 if spec.test_id == "Q4-H-01":
@@ -973,8 +1021,17 @@ def _evaluate_test_ledger(
                     _append_test_row(rows, spec, "PASS" if ok else "FAIL", ",".join(sorted(extra_hist.keys())), "3 modes executes", "Les trois modes Q4 sont disponibles.")
                 else:
                     all_checks = hist_result.checks + [c for r in extra_hist.values() for c in r.checks]
-                    has_fail = any(str(c.get("status", "")).upper() == "FAIL" for c in all_checks)
-                    _append_test_row(rows, spec, "PASS" if not has_fail else "FAIL", _status_from_checks(all_checks), "pas de FAIL", "Les invariants physiques batterie sont respectes.")
+                    merged_status = _status_from_checks(all_checks)
+                    if merged_status == "FAIL":
+                        status = "FAIL"
+                        interp = "Au moins un invariant physique batterie est viole."
+                    elif merged_status == "WARN":
+                        status = "WARN"
+                        interp = "Invariants principaux ok mais avertissements Q4 actifs (ex: objectif non atteint)."
+                    else:
+                        status = "PASS"
+                        interp = "Les invariants physiques batterie sont respectes."
+                    _append_test_row(rows, spec, status, merged_status, "pas de FAIL; WARN si avertissements", interp)
             elif qid == "Q5":
                 out = hist_result.tables.get("Q5_summary", pd.DataFrame())
                 if spec.test_id == "Q5-H-01":
@@ -1178,7 +1235,8 @@ def _evaluate_test_ledger(
                         if not ok:
                             _append_test_row(rows, spec, "FAIL", int(len(out)), "colonnes inversion presentes", "Les ordres de grandeur d'inversion sont incomplets.", sid)
                         else:
-                            share_hs = float((out["status"].astype(str) == "hors_scope_stage2").mean()) if "status" in out.columns else np.nan
+                            status_up = out["status"].astype(str).str.upper()
+                            share_hs = float((status_up.isin(["HORS_SCOPE_STAGE2", "HORS_SCOPE_PHASE2"])).mean()) if "status" in out.columns else np.nan
                             if np.isfinite(share_hs) and share_hs >= 0.80:
                                 k_vals = pd.to_numeric(out.get("inversion_k_demand"), errors="coerce")
                                 r_vals = pd.to_numeric(out.get("inversion_r_mustrun"), errors="coerce")
@@ -1228,7 +1286,8 @@ def _evaluate_test_ledger(
                         if out.empty or "status" not in out.columns:
                             _append_test_row(rows, spec, "NON_TESTABLE", "", "status scenario disponibles", "Impossible d'evaluer la transition phase 3 (sortie scenario manquante).", sid)
                         else:
-                            share_hs = float((out["status"].astype(str) == "hors_scope_stage2").mean())
+                            status_up = out["status"].astype(str).str.upper()
+                            share_hs = float((status_up.isin(["HORS_SCOPE_STAGE2", "HORS_SCOPE_PHASE2"])).mean())
                             if share_hs >= 0.80:
                                 k_vals = pd.to_numeric(out.get("inversion_k_demand"), errors="coerce")
                                 r_vals = pd.to_numeric(out.get("inversion_r_mustrun"), errors="coerce")
@@ -1340,6 +1399,7 @@ def run_question_bundle(
     assumptions_phase2: pd.DataFrame,
     selection: dict[str, Any],
     run_id: str,
+    validation_findings_hist: pd.DataFrame | None = None,
 ) -> QuestionBundleResult:
     qid = str(question_id).upper()
     countries = _selection_countries(selection, annual_hist)
@@ -1357,6 +1417,7 @@ def run_question_bundle(
         assumptions_phase1=assumptions_phase1,
         selection=hist_sel,
         run_id=f"{run_id}_HIST",
+        validation_findings_hist=validation_findings_hist,
     )
 
     scen_results: dict[str, ModuleResult] = {}

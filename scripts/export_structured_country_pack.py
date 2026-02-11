@@ -305,6 +305,32 @@ def export_package(run_id: str | None, countries: list[str], output_dir: Path) -
             a["scenario_id"] = scen_dir.name
             scen_rows.append(a)
     scen_all = pd.concat(scen_rows, ignore_index=True) if scen_rows else pd.DataFrame()
+    if not scen_all.empty:
+        for col in ["scenario_id", "country", "year"]:
+            if col not in scen_all.columns:
+                scen_all[col] = "" if col != "year" else pd.NA
+        scen_all["scenario_id"] = scen_all["scenario_id"].astype(str).replace({"nan": ""})
+        scen_all["country"] = scen_all["country"].astype(str)
+        scen_all["year"] = pd.to_numeric(scen_all["year"], errors="coerce")
+        scen_all = scen_all.dropna(subset=["year"])
+        scen_all = scen_all[scen_all["scenario_id"].str.len() > 0]
+        if "sr_energy" in scen_all.columns:
+            scen_all["sr_energy"] = pd.to_numeric(scen_all["sr_energy"], errors="coerce")
+        if "far_observed" in scen_all.columns:
+            scen_all["far_observed"] = pd.to_numeric(scen_all["far_observed"], errors="coerce")
+        else:
+            scen_all["far_observed"] = pd.NA
+        if "far_energy" in scen_all.columns:
+            scen_all["far_energy"] = pd.to_numeric(scen_all["far_energy"], errors="coerce")
+        else:
+            scen_all["far_energy"] = pd.NA
+        scen_all["far_observed"] = scen_all["far_observed"].fillna(scen_all["far_energy"])
+        no_surplus_mask = scen_all["far_observed"].isna() & (scen_all.get("sr_energy", pd.Series(index=scen_all.index, dtype=float)).fillna(0.0) <= 0.0)
+        scen_all.loc[no_surplus_mask, "far_observed"] = 1.0
+        scen_all["far_energy"] = scen_all["far_energy"].fillna(scen_all["far_observed"])
+        scen_all = scen_all.sort_values(["scenario_id", "country", "year"]).drop_duplicates(
+            subset=["scenario_id", "country", "year"], keep="last"
+        )
     _write_csv(scen_all, inputs_dir / "annual_metrics_scenarios.csv")
     file_index_rows.append(
         {"category": "inputs", "file": str(inputs_dir / "annual_metrics_scenarios.csv"), "rows": int(len(scen_all))}

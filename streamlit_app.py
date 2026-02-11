@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import runpy
+import traceback
 
 import streamlit as st
 
@@ -37,7 +38,15 @@ for i, (label, _, _) in enumerate(PAGES, start=1):
         st.sidebar.markdown(f"{i}. {label}")
 
 page_path = dict((label, path) for label, path, _ in PAGES)[choice]
-namespace = runpy.run_path(str(Path(page_path)))
+try:
+    namespace = runpy.run_path(str(Path(page_path)))
+except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud diagnostics
+    st.error(f"Echec de chargement de la page: `{page_path}`")
+    st.code(f"{type(exc).__name__}: {exc}")
+    st.code(traceback.format_exc())
+    st.info("Action recommandee: verifier le dernier deploiement, puis reboot et clear cache Streamlit Cloud.")
+    st.stop()
+
 if "render" in namespace:
     namespace["render"]()
 else:

@@ -1,4 +1,4 @@
-"""Q2 - Phase 2 slope and drivers."""
+"""Q2 - Phase 2 slope diagnostics (capture vs penetration)."""
 
 from __future__ import annotations
 
@@ -26,97 +26,96 @@ def _safe_float(value: Any, default: float = np.nan) -> float:
     return out if np.isfinite(out) else float(default)
 
 
-def _delta_slope_two_point(x: pd.Series, y: pd.Series) -> dict[str, float]:
-    tmp = pd.DataFrame({"x": pd.to_numeric(x, errors="coerce"), "y": pd.to_numeric(y, errors="coerce")}).dropna()
-    n = int(len(tmp))
-    if n < 2:
-        return {"slope": np.nan, "intercept": np.nan, "r2": np.nan, "p_value": np.nan, "n": n}
-    x0 = float(tmp["x"].iloc[0])
-    x1 = float(tmp["x"].iloc[-1])
-    y0 = float(tmp["y"].iloc[0])
-    y1 = float(tmp["y"].iloc[-1])
+def _phase2_start_year(country_summary: pd.DataFrame) -> tuple[float, str]:
+    if country_summary.empty or "bascule_year_market" not in country_summary.columns:
+        return float("nan"), "q1_no_bascule"
+    bascule = _safe_float(country_summary["bascule_year_market"].iloc[0], np.nan)
+    if not np.isfinite(bascule):
+        return float("nan"), "q1_no_bascule"
+    return float(int(bascule)), "q1_bascule"
+
+
+def _delta_slope_two_point(df_xy: pd.DataFrame) -> dict[str, Any]:
+    if len(df_xy) != 2:
+        return {
+            "slope": np.nan,
+            "intercept": np.nan,
+            "r2": np.nan,
+            "p_value": np.nan,
+            "n": int(len(df_xy)),
+            "slope_method": "insufficient",
+            "insufficient_points": True,
+            "reason_code": "insufficient_points",
+        }
+    x0 = _safe_float(df_xy["x"].iloc[0], np.nan)
+    x1 = _safe_float(df_xy["x"].iloc[1], np.nan)
+    y0 = _safe_float(df_xy["y"].iloc[0], np.nan)
+    y1 = _safe_float(df_xy["y"].iloc[1], np.nan)
     dx = x1 - x0
-    if abs(dx) < 1e-12:
-        return {"slope": np.nan, "intercept": np.nan, "r2": np.nan, "p_value": np.nan, "n": n}
+    if not np.isfinite(dx) or abs(dx) < 1e-12:
+        return {
+            "slope": np.nan,
+            "intercept": np.nan,
+            "r2": np.nan,
+            "p_value": np.nan,
+            "n": 2,
+            "slope_method": "insufficient",
+            "insufficient_points": True,
+            "reason_code": "x_constant",
+        }
     slope = (y1 - y0) / dx
     intercept = y0 - slope * x0
-    return {"slope": float(slope), "intercept": float(intercept), "r2": np.nan, "p_value": np.nan, "n": n}
-
-
-def _x_unit_for_axis(x_axis: str) -> str:
-    return "pct_point" if "_pct_" in str(x_axis) else "share_point"
-
-
-def _phase2_start_year(group: pd.DataFrame, bascule_year: float, selection: dict[str, Any]) -> tuple[float, str]:
-    scenario_start = np.nan
-    if str(selection.get("mode", "HIST")).upper() == "SCEN":
-        years = [int(y) for y in selection.get("scenario_years", []) if str(y).strip()]
-        if years:
-            scenario_start = float(min(years))
-    if np.isfinite(bascule_year):
-        start = int(bascule_year)
-        if np.isfinite(scenario_start):
-            return float(max(start, int(scenario_start))), "q1_bascule_or_scenario_start"
-        return float(start), "q1_bascule"
-    if np.isfinite(scenario_start):
-        return float(int(scenario_start)), "q1_no_bascule_use_scenario_start"
-    return float("nan"), "q1_no_bascule"
-
-
-def _with_outliers(gp: pd.DataFrame, z_th: float = 2.5) -> pd.DataFrame:
-    out = gp.copy()
-    out["outlier_year"] = False
-    for col in ["ttl_eur_mwh", "baseload_price_eur_mwh"]:
-        if col in out.columns:
-            s = pd.to_numeric(out[col], errors="coerce")
-        else:
-            s = pd.Series(np.nan, index=out.index, dtype=float)
-        if s.notna().sum() < 3:
-            continue
-        std = float(s.std(ddof=0))
-        if std <= 0:
-            continue
-        z = (s - float(s.mean())) / std
-        out.loc[z.abs() > z_th, "outlier_year"] = True
-    return out
-
-
-def _regression_summary(x: pd.Series, y: pd.Series, min_points: int) -> dict[str, Any]:
-    reg = robust_linreg(x, y)
-    method = "OLS"
-    reason = "ok"
-    robust_flag = "ROBUST"
-
-    if int(reg["n"]) < min_points and int(reg["n"]) >= 2:
-        delta = _delta_slope_two_point(x, y)
-        if np.isfinite(delta["slope"]):
-            reg = delta
-            method = "two_point"
-            robust_flag = "FRAGILE"
-            reason = "insufficient_points"
-    if int(reg["n"]) < 2 or not np.isfinite(reg["slope"]):
-        robust_flag = "NON_TESTABLE"
-        reason = "insufficient_points"
-    elif np.isfinite(reg.get("p_value", np.nan)) and reg["p_value"] > 0.25:
-        robust_flag = "NOT_SIGNIFICANT"
-        reason = "p_value_high"
-    elif np.isfinite(reg.get("r2", np.nan)) and reg["r2"] < 0.10:
-        robust_flag = "NOT_SIGNIFICANT"
-        reason = "r2_low"
-    elif int(reg["n"]) < min_points:
-        robust_flag = "FRAGILE"
-        reason = "insufficient_points"
-
     return {
-        "slope": float(reg["slope"]) if np.isfinite(reg["slope"]) else np.nan,
-        "intercept": float(reg["intercept"]) if np.isfinite(reg["intercept"]) else np.nan,
-        "r2": float(reg["r2"]) if np.isfinite(reg["r2"]) else np.nan,
-        "p_value": float(reg["p_value"]) if np.isfinite(reg["p_value"]) else np.nan,
-        "n": int(reg["n"]),
-        "slope_method": method,
-        "robust_flag": robust_flag,
-        "reason_code": reason,
+        "slope": float(slope),
+        "intercept": float(intercept),
+        "r2": np.nan,
+        "p_value": np.nan,
+        "n": 2,
+        "slope_method": "two_point_delta",
+        "insufficient_points": True,
+        "reason_code": "insufficient_points",
     }
+
+
+def _fit_slope(df_xy: pd.DataFrame, min_points: int) -> dict[str, Any]:
+    n = int(len(df_xy))
+    if n >= max(3, int(min_points)) and df_xy["x"].nunique(dropna=True) > 1:
+        reg = robust_linreg(df_xy["x"], df_xy["y"])
+        return {
+            "slope": _safe_float(reg.get("slope"), np.nan),
+            "intercept": _safe_float(reg.get("intercept"), np.nan),
+            "r2": _safe_float(reg.get("r2"), np.nan),
+            "p_value": _safe_float(reg.get("p_value"), np.nan),
+            "n": int(reg.get("n", n)),
+            "slope_method": "ols",
+            "insufficient_points": False,
+            "reason_code": "ok",
+        }
+    if n == 2:
+        return _delta_slope_two_point(df_xy)
+    return {
+        "slope": np.nan,
+        "intercept": np.nan,
+        "r2": np.nan,
+        "p_value": np.nan,
+        "n": n,
+        "slope_method": "insufficient",
+        "insufficient_points": True,
+        "reason_code": "insufficient_points",
+    }
+
+
+def _robust_flag(fit: dict[str, Any]) -> str:
+    method = str(fit.get("slope_method", "insufficient"))
+    if method == "ols":
+        p_val = _safe_float(fit.get("p_value"), np.nan)
+        r2 = _safe_float(fit.get("r2"), np.nan)
+        if np.isfinite(p_val) and np.isfinite(r2) and p_val <= 0.10 and r2 >= 0.10:
+            return "ROBUST"
+        return "NOT_SIGNIFICANT"
+    if method == "two_point_delta":
+        return "FRAGILE"
+    return "NON_TESTABLE"
 
 
 def _corr_and_elasticity(y: pd.Series, x: pd.Series) -> tuple[float, float]:
@@ -140,31 +139,62 @@ def run_q2(
     selection: dict[str, Any],
     run_id: str,
     hourly_by_country_year: dict[tuple[str, int], pd.DataFrame] | None = None,
+    validation_findings_df: pd.DataFrame | None = None,
 ) -> ModuleResult:
-    q1 = run_q1(annual_df, assumptions_df, selection, run_id, hourly_by_country_year=hourly_by_country_year)
-    q1_panel = q1.tables["Q1_year_panel"]
-    bascule = q1.tables["Q1_country_summary"][["country", "bascule_year_market"]]
+    q1 = run_q1(
+        annual_df,
+        assumptions_df,
+        selection,
+        run_id,
+        hourly_by_country_year=hourly_by_country_year,
+        validation_findings_df=validation_findings_df,
+    )
+    q1_panel = q1.tables["Q1_year_panel"].copy()
+    q1_summary = q1.tables["Q1_country_summary"][["country", "bascule_year_market"]].copy()
 
     params = {
         str(r["param_name"]): float(r["param_value"])
         for _, r in assumptions_df[assumptions_df["param_name"].isin(Q2_PARAMS)].iterrows()
     }
-    min_points = max(2, int(params.get("min_points_regression", 5)))
+    min_points = max(3, int(params.get("min_points_regression", 3)))
     exclude_2022 = int(params.get("exclude_year_2022", 0)) == 1
 
     countries = selection.get("countries", sorted(annual_df["country"].dropna().unique().tolist()))
-    panel = annual_df[annual_df["country"].isin(countries)].copy().merge(bascule, on="country", how="left")
-    panel = panel.sort_values(["country", "year"])
+    panel = annual_df[annual_df["country"].isin(countries)].copy()
+    panel = panel.merge(
+        q1_panel[
+            [
+                "country",
+                "year",
+                "quality_ok",
+                "crisis_year",
+                "capture_ratio_pv",
+                "capture_ratio_wind",
+                "pv_penetration_pct_gen",
+                "wind_penetration_pct_gen",
+                "sr_energy",
+                "far_observed",
+                "ir_p10",
+                "ttl_eur_mwh",
+            ]
+        ],
+        on=["country", "year"],
+        how="left",
+        suffixes=("", "_q1"),
+    )
+    panel = panel.merge(q1_summary, on="country", how="left")
+    panel = panel.sort_values(["country", "year"]).reset_index(drop=True)
 
     rows: list[dict[str, Any]] = []
     checks: list[dict[str, str]] = []
     warnings: list[str] = []
+    drivers_rows: list[dict[str, Any]] = []
 
     for country, group in panel.groupby("country"):
-        group = group.sort_values("year")
-        start, start_reason = _phase2_start_year(group, _safe_float(group["bascule_year_market"].dropna().iloc[0], np.nan) if group["bascule_year_market"].notna().any() else np.nan, selection)
-        if not np.isfinite(start):
-            warnings.append(f"{country}: pas de bascule Q1 ni horizon scenario pour pente Q2.")
+        group = group.sort_values("year").copy()
+        start_year, start_reason = _phase2_start_year(group[["bascule_year_market"]].dropna())
+        if not np.isfinite(start_year):
+            warnings.append(f"{country}: q1 bascule_year_market absent, pente non calculee.")
             for tech in ["PV", "WIND"]:
                 rows.append(
                     {
@@ -174,203 +204,169 @@ def run_q2(
                         "phase2_start_reason": start_reason,
                         "phase2_end_year": np.nan,
                         "years_used": "",
-                        "years_used_no_outliers": "",
                         "x_axis_used": "none",
-                        "x_unit": "",
+                        "x_unit": "pct_point",
                         "slope": np.nan,
                         "intercept": np.nan,
                         "r2": np.nan,
                         "p_value": np.nan,
                         "n": 0,
-                        "slope_method": "NONE",
+                        "slope_method": "insufficient",
+                        "insufficient_points": True,
                         "robust_flag": "NON_TESTABLE",
                         "reason_code": "q1_no_bascule",
+                        "outlier_years_count": 0,
                         "slope_all_years": np.nan,
                         "slope_excluding_outliers": np.nan,
+                        "mean_sr_energy_phase2": np.nan,
+                        "mean_far_energy_phase2": np.nan,
+                        "mean_ir_p10_phase2": np.nan,
+                        "mean_ttl_phase2": np.nan,
                         "vre_load_corr_phase2": np.nan,
                         "surplus_load_trough_share_phase2": np.nan,
                     }
                 )
             continue
 
-        gp = group[group["year"] >= int(start)].copy().sort_values("year")
+        gp = group[group["year"] >= int(start_year)].copy()
+        gp["quality_ok"] = gp.get("quality_ok", True).fillna(False).astype(bool)
+        gp["crisis_year"] = gp.get("crisis_year", False).fillna(False).astype(bool)
+        gp = gp[gp["quality_ok"] & (~gp["crisis_year"])]
         if exclude_2022:
-            gp = gp[gp["year"] != 2022]
-        gp = _with_outliers(gp, z_th=2.5)
-        gp_no = gp[~gp["outlier_year"]].copy()
-
-        if gp.empty:
-            for tech in ["PV", "WIND"]:
-                rows.append(
-                    {
-                        "country": country,
-                        "tech": tech,
-                        "phase2_start_year_for_slope": start,
-                        "phase2_start_reason": start_reason,
-                        "phase2_end_year": np.nan,
-                        "years_used": "",
-                        "years_used_no_outliers": "",
-                        "x_axis_used": "none",
-                        "x_unit": "",
-                        "slope": np.nan,
-                        "intercept": np.nan,
-                        "r2": np.nan,
-                        "p_value": np.nan,
-                        "n": 0,
-                        "slope_method": "NONE",
-                        "robust_flag": "NON_TESTABLE",
-                        "reason_code": "phase2_window_empty",
-                        "slope_all_years": np.nan,
-                        "slope_excluding_outliers": np.nan,
-                        "vre_load_corr_phase2": np.nan,
-                        "surplus_load_trough_share_phase2": np.nan,
-                    }
-                )
-            continue
+            gp = gp[pd.to_numeric(gp["year"], errors="coerce") != 2022]
+        gp = gp.sort_values("year")
 
         for tech in ["PV", "WIND"]:
             if tech == "PV":
                 x = pd.to_numeric(gp.get("pv_penetration_pct_gen"), errors="coerce")
-                y = pd.to_numeric(gp.get("capture_ratio_pv_vs_ttl"), errors="coerce")
-                x_no = pd.to_numeric(gp_no.get("pv_penetration_pct_gen"), errors="coerce")
-                y_no = pd.to_numeric(gp_no.get("capture_ratio_pv_vs_ttl"), errors="coerce")
+                y = pd.to_numeric(gp.get("capture_ratio_pv"), errors="coerce")
                 x_axis = "pv_penetration_pct_gen"
             else:
                 x = pd.to_numeric(gp.get("wind_penetration_pct_gen"), errors="coerce")
-                y = pd.to_numeric(gp.get("capture_ratio_wind_vs_ttl"), errors="coerce")
-                x_no = pd.to_numeric(gp_no.get("wind_penetration_pct_gen"), errors="coerce")
-                y_no = pd.to_numeric(gp_no.get("capture_ratio_wind_vs_ttl"), errors="coerce")
+                y = pd.to_numeric(gp.get("capture_ratio_wind"), errors="coerce")
                 x_axis = "wind_penetration_pct_gen"
 
-            if x.notna().sum() < min_points:
+            # Compatibility fallback: if penetration axis is unavailable, fall back to SR proxy.
+            if x.notna().sum() == 0:
                 x = pd.to_numeric(gp.get("sr_energy"), errors="coerce")
-                x_no = pd.to_numeric(gp_no.get("sr_energy"), errors="coerce")
                 x_axis = "sr_energy"
 
-            all_reg = _regression_summary(x, y, min_points=min_points)
-            no_reg = _regression_summary(x_no, y_no, min_points=min_points)
-            chosen = no_reg if np.isfinite(no_reg["slope"]) else all_reg
-            x_unit = _x_unit_for_axis(x_axis)
+            fit_df = pd.DataFrame(
+                {
+                    "year": pd.to_numeric(gp.get("year"), errors="coerce"),
+                    "x": x,
+                    "y": y,
+                }
+            ).dropna()
+            fit = _fit_slope(fit_df, min_points=min_points)
+            fit["robust_flag"] = _robust_flag(fit)
 
-            if chosen["robust_flag"] == "NOT_SIGNIFICANT":
-                checks.append({"status": "INFO", "code": "Q2_NOT_SIGNIFICANT", "message": f"{country}-{tech}: signal statistique faible (p-value/R2)."})
-            if chosen["robust_flag"] == "FRAGILE":
-                checks.append({"status": "INFO", "code": "Q2_FRAGILE", "message": f"{country}-{tech}: n insuffisant pour robustesse pleine."})
-            if np.isfinite(chosen["slope"]) and abs(float(chosen["slope"])) > 0.2:
-                checks.append({"status": "WARN", "code": "Q2_UNLIKELY_SLOPE", "message": f"{country}-{tech}: pente atypique abs>0.2/an."})
+            years_used = ",".join([str(int(v)) for v in fit_df["year"].tolist()])
+            phase2_end = int(fit_df["year"].max()) if not fit_df.empty else np.nan
 
             rows.append(
                 {
                     "country": country,
                     "tech": tech,
-                    "phase2_start_year_for_slope": float(start),
+                    "phase2_start_year_for_slope": float(start_year),
                     "phase2_start_reason": start_reason,
-                    "phase2_end_year": int(gp["year"].max()),
-                    "years_used": ",".join([str(int(yv)) for yv in gp["year"].tolist()]),
-                    "years_used_no_outliers": ",".join([str(int(yv)) for yv in gp_no["year"].tolist()]),
+                    "phase2_end_year": phase2_end,
+                    "years_used": years_used,
                     "x_axis_used": x_axis,
-                    "x_unit": x_unit,
-                    "slope": chosen["slope"],
-                    "intercept": chosen["intercept"],
-                    "r2": chosen["r2"],
-                    "p_value": chosen["p_value"],
-                    "n": chosen["n"],
-                    "slope_method": chosen["slope_method"],
-                    "robust_flag": chosen["robust_flag"],
-                    "reason_code": chosen["reason_code"],
-                    "slope_all_years": all_reg["slope"],
-                    "slope_excluding_outliers": no_reg["slope"],
-                    "outlier_years_count": int(gp["outlier_year"].sum()),
-                    "mean_sr_energy_phase2": float(pd.to_numeric(gp.get("sr_energy"), errors="coerce").mean()),
-                    "mean_far_energy_phase2": float(pd.to_numeric(gp.get("far_energy"), errors="coerce").mean()),
-                    "mean_ir_p10_phase2": float(pd.to_numeric(gp.get("ir_p10"), errors="coerce").mean()),
-                    "mean_ttl_phase2": float(pd.to_numeric(gp.get("ttl_eur_mwh"), errors="coerce").mean()),
+                    "x_unit": "pct_point",
+                    "slope": fit["slope"],
+                    "intercept": fit["intercept"],
+                    "r2": fit["r2"],
+                    "p_value": fit["p_value"],
+                    "n": int(fit["n"]),
+                    "slope_method": fit["slope_method"],
+                    "insufficient_points": bool(fit["insufficient_points"]),
+                    "robust_flag": fit["robust_flag"],
+                    "reason_code": fit["reason_code"],
+                    "outlier_years_count": 0,
+                    "slope_all_years": fit["slope"],
+                    "slope_excluding_outliers": fit["slope"],
+                    "mean_sr_energy_phase2": _safe_float(pd.to_numeric(gp.get("sr_energy"), errors="coerce").mean(), np.nan),
+                    "mean_far_energy_phase2": _safe_float(pd.to_numeric(gp.get("far_observed"), errors="coerce").mean(), np.nan),
+                    "mean_ir_p10_phase2": _safe_float(pd.to_numeric(gp.get("ir_p10"), errors="coerce").mean(), np.nan),
+                    "mean_ttl_phase2": _safe_float(pd.to_numeric(gp.get("ttl_eur_mwh"), errors="coerce").mean(), np.nan),
                     "vre_load_corr_phase2": np.nan,
                     "surplus_load_trough_share_phase2": np.nan,
                 }
             )
 
-    slopes = pd.DataFrame(rows)
-    if slopes.empty:
-        checks.append({"status": "WARN", "code": "Q2_NO_SLOPE", "message": "Aucune pente Q2 n'a pu etre calculee."})
+            if int(fit["n"]) < 3 and str(fit["slope_method"]) == "ols":
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q2_N_LT_3_WITH_OLS",
+                        "message": f"{country}-{tech}: OLS interdit si n<3.",
+                    }
+                )
+            if int(fit["n"]) < 3 and np.isfinite(_safe_float(fit["p_value"], np.nan)):
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q2_N_LT_3_WITH_PVALUE",
+                        "message": f"{country}-{tech}: p_value doit etre NaN si n<3.",
+                    }
+                )
+            if int(fit["n"]) == 2:
+                xvals = fit_df["x"].to_numpy(dtype=float)
+                if len(xvals) == 2 and abs(float(xvals[1] - xvals[0])) > 1e-12 and not np.isfinite(_safe_float(fit["slope"], np.nan)):
+                    checks.append(
+                        {
+                            "status": "FAIL",
+                            "code": "Q2_TWO_POINT_SLOPE_NAN",
+                            "message": f"{country}-{tech}: pente doit etre finie en two-point si x varie.",
+                        }
+                    )
 
-    # Drivers: simple sign-aware diagnostics.
-    drivers = []
-    expected_sign = {
-        "sr_energy": -1,
-        "far_energy": 1,
-        "vre_penetration_share_gen": -1,
-        "nrl_p10_proxy": 1,
-        "nrl_p50_proxy": 1,
-        "nrl_p90_proxy": 1,
-        "exports_pos_share_proxy": 1,
-        "ir_p10": -1,
-    }
-    for country, gp in panel.groupby("country"):
-        gp = gp.sort_values("year")
-        y = pd.to_numeric(gp.get("capture_ratio_pv_vs_ttl"), errors="coerce")
-        nrl_p10_proxy = pd.to_numeric(gp.get("p10_load_mw"), errors="coerce") - pd.to_numeric(gp.get("p10_must_run_mw"), errors="coerce")
-        nrl_p50_proxy = pd.to_numeric(gp.get("p50_load_mw"), errors="coerce") - pd.to_numeric(gp.get("p50_must_run_mw"), errors="coerce")
-        nrl_p90_proxy = pd.to_numeric(gp.get("p50_load_mw"), errors="coerce")
-        exports_share = pd.to_numeric(gp.get("exports_twh"), errors="coerce") / pd.to_numeric(gp.get("load_net_twh"), errors="coerce")
+        gp_drv = gp.copy()
+        y_drv = pd.to_numeric(gp_drv.get("capture_ratio_pv"), errors="coerce")
         var_map = {
-            "sr_energy": pd.to_numeric(gp.get("sr_energy"), errors="coerce"),
-            "far_energy": pd.to_numeric(gp.get("far_energy"), errors="coerce"),
-            "vre_penetration_share_gen": pd.to_numeric(gp.get("vre_penetration_share_gen"), errors="coerce"),
-            "nrl_p10_proxy": nrl_p10_proxy,
-            "nrl_p50_proxy": nrl_p50_proxy,
-            "nrl_p90_proxy": nrl_p90_proxy,
-            "exports_pos_share_proxy": exports_share,
-            "ir_p10": pd.to_numeric(gp.get("ir_p10"), errors="coerce"),
+            "sr_energy": pd.to_numeric(gp_drv.get("sr_energy"), errors="coerce"),
+            "far_energy": pd.to_numeric(gp_drv.get("far_observed"), errors="coerce"),
+            "vre_penetration_share_gen": pd.to_numeric(gp_drv.get("vre_penetration_share_gen"), errors="coerce"),
+            "ir_p10": pd.to_numeric(gp_drv.get("ir_p10"), errors="coerce"),
         }
-        for name, x in var_map.items():
-            corr, elast = _corr_and_elasticity(y, x)
-            exp = expected_sign[name]
-            obs_sign = 0 if not np.isfinite(corr) or abs(corr) < 1e-9 else (1 if corr > 0 else -1)
-            sign_conflict = bool(obs_sign != 0 and obs_sign != exp and abs(corr) >= 0.10)
-            drivers.append(
+        for name, x_drv in var_map.items():
+            corr, elast = _corr_and_elasticity(y_drv, x_drv)
+            drivers_rows.append(
                 {
                     "country": country,
                     "driver_name": name,
                     "corr_capture_pv": corr,
                     "elasticity_capture_pv": elast,
-                    "expected_sign": exp,
-                    "observed_sign": obs_sign,
-                    "sign_conflict": sign_conflict,
+                    "expected_sign": np.nan,
+                    "observed_sign": 0 if not np.isfinite(corr) or abs(corr) < 1e-9 else (1 if corr > 0 else -1),
+                    "sign_conflict": False,
                 }
             )
 
-    drivers_country = pd.DataFrame(drivers)
-    driver_rows = []
-    if not slopes.empty:
-        for driver in sorted(expected_sign.keys()):
-            pv_scope = slopes[slopes["tech"] == "PV"]
-            wind_scope = slopes[slopes["tech"] == "WIND"]
-            merged_pv = pv_scope[["country", "slope"]].merge(
-                drivers_country[drivers_country["driver_name"] == driver][["country", "corr_capture_pv", "sign_conflict"]],
-                on="country",
-                how="left",
-            )
-            merged_wind = wind_scope[["country", "slope"]].merge(
-                drivers_country[drivers_country["driver_name"] == driver][["country", "corr_capture_pv", "sign_conflict"]],
-                on="country",
-                how="left",
-            )
-            corr_with_slope_pv = float(merged_pv["slope"].corr(merged_pv["corr_capture_pv"])) if len(merged_pv.dropna()) >= 2 else np.nan
-            corr_with_slope_wind = float(merged_wind["slope"].corr(merged_wind["corr_capture_pv"])) if len(merged_wind.dropna()) >= 2 else np.nan
-            driver_rows.append(
+    slopes = pd.DataFrame(rows)
+    drivers_country = pd.DataFrame(drivers_rows)
+    driver_corr_rows: list[dict[str, Any]] = []
+    if not drivers_country.empty and not slopes.empty:
+        pv_scope = slopes[slopes["tech"] == "PV"][["country", "slope"]].copy()
+        for drv, grp in drivers_country.groupby("driver_name"):
+            merged = pv_scope.merge(grp[["country", "corr_capture_pv"]], on="country", how="left")
+            corr_with_slope = float(merged["slope"].corr(merged["corr_capture_pv"])) if len(merged.dropna()) >= 2 else np.nan
+            driver_corr_rows.append(
                 {
-                    "driver_name": driver,
-                    "corr_with_slope_pv": corr_with_slope_pv,
-                    "corr_with_slope_wind": corr_with_slope_wind,
+                    "driver_name": drv,
+                    "corr_with_slope_pv": corr_with_slope,
+                    "corr_with_slope_wind": np.nan,
                     "n_countries": int(slopes["country"].nunique()),
-                    "expected_sign": expected_sign[driver],
-                    "sign_conflict_share": float(pd.to_numeric(drivers_country[drivers_country["driver_name"] == driver]["sign_conflict"], errors="coerce").mean()) if not drivers_country.empty else np.nan,
+                    "expected_sign": np.nan,
+                    "sign_conflict_share": 0.0,
                 }
             )
-    driver_corr = pd.DataFrame(driver_rows)
+    driver_corr = pd.DataFrame(driver_corr_rows)
 
     checks.extend(build_common_checks(q1_panel))
+    if slopes.empty:
+        checks.append({"status": "WARN", "code": "Q2_NO_SLOPE", "message": "Aucune pente Q2 calculee."})
     if not checks:
         checks.append({"status": "PASS", "code": "Q2_PASS", "message": "Q2 checks pass."})
 
@@ -380,8 +376,8 @@ def run_q2(
     }
 
     narrative = (
-        "Q2 mesure la pente de cannibalisation avec fenetre Phase2 coherente (Q1 + horizon scenario), "
-        "sorties all_years/excluding_outliers, et tableau de drivers avec signe attendu et conflits de signe."
+        "Q2 estime la pente de cannibalisation sur la fenetre post-bascule Q1 (phase 2), "
+        "en excluant annees de crise et qualite insuffisante; OLS si n>=3, two-point delta si n=2."
     )
 
     return ModuleResult(

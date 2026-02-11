@@ -110,6 +110,45 @@ def test_q4_cache_hit_and_diagnostics(make_raw_panel, countries_cfg, thresholds_
         assert col in frontier.columns
 
 
+def test_q4_summary_has_finite_far_and_nonzero_rec_when_objective_not_reached(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    assumptions.loc[assumptions["param_name"] == "target_far", "param_value"] = 1.01
+    res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
+    s = res.tables["Q4_sizing_summary"].iloc[0]
+    assert pd.notna(s["far_before"]) and pd.notna(s["far_after"])
+    assert 0.0 <= float(s["far_before"]) <= 1.0
+    assert 0.0 <= float(s["far_after"]) <= 1.0
+    if bool(s["objective_not_reached"]):
+        assert float(s["required_bess_power_mw"]) > 0.0
+        assert float(s["required_bess_energy_mwh"]) > 0.0
+
+
+def test_q4_frontier_has_join_keys(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(
+        hourly,
+        assumptions,
+        {
+            "country": "FR",
+            "year": 2024,
+            "scenario_id": "BASE",
+            "objective": "FAR_TARGET",
+            "force_recompute": True,
+        },
+        "test",
+    )
+    f = res.tables["Q4_bess_frontier"]
+    for col in ["scenario_id", "country", "year"]:
+        assert col in f.columns
+        assert f[col].notna().all()
+
+
 @pytest.mark.performance
 def test_q4_performance_smoke(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")

@@ -123,3 +123,34 @@ def test_q1_confidence_penalizes_low_quality(annual_panel_fixture):
 
     assert bad_conf < good_conf
     assert bad_conf < 0.8
+
+
+def test_q1_capture_low_never_true_when_capture_ratio_pv_ge_one(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    df = annual_panel_fixture.copy()
+    mask = (df["country"] == "FR") & (df["year"] == 2024)
+    df.loc[mask, "capture_ratio_pv"] = 1.05
+    df.loc[mask, "capture_ratio_pv_vs_ttl"] = 0.60  # reporting only, must not drive the flag.
+    res = run_q1(df, assumptions, {"countries": ["FR"], "years": [2024]}, "test")
+    row = res.tables["Q1_year_panel"].iloc[0]
+    assert bool(row["flag_capture_pv_low"]) is False
+
+
+def test_q1_stage1_healthy_year_is_tagged(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    df = annual_panel_fixture.copy()
+    mask = (df["country"] == "FR") & (df["year"] == 2024)
+    df.loc[mask, "capture_ratio_pv"] = 0.95
+    df.loc[mask, "capture_ratio_wind"] = 0.95
+    df.loc[mask, "h_negative_obs"] = 20.0
+    df.loc[mask, "h_below_5_obs"] = 50.0
+    df.loc[mask, "sr_hours"] = 0.02
+    df.loc[mask, "sr_hours_share"] = 0.02
+    df.loc[mask, "far_observed"] = 0.98
+    df.loc[mask, "far_energy"] = 0.98
+    df.loc[mask, "ir_p10"] = 1.0
+    df.loc[mask, "avg_daily_spread_obs"] = 20.0
+    df.loc[mask, "days_spread_gt50"] = 20.0
+    res = run_q1(df, assumptions, {"countries": ["FR"], "years": [2024]}, "test")
+    row = res.tables["Q1_year_panel"].iloc[0]
+    assert bool(row["is_stage1_criteria"]) is True

@@ -33,28 +33,59 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
     load_annual_metrics = _page_utils_unavailable  # type: ignore[assignment]
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
-from app.ui_components import (
-    guided_header,
-    inject_theme,
-    render_hist_scen_comparison,
-    render_interpretation,
-    render_kpi_cards_styled,
-    render_livrables_panel,
-    render_narrative_styled,
-    render_plotly_styled,
-    render_question_box,
-    render_robustness_panel,
-    render_data_quality_panel,
-    render_spec_table_collapsible,
-    render_status_banner,
-    render_status_interpretation,
-    render_test_ledger,
-    render_test_ledger_styled,
-    show_checks_summary,
-    show_definitions_cards,
-    show_limitations,
-    show_metric_explainers_tabbed,
-)
+_UI_COMPONENTS_IMPORT_ERROR: Exception | None = None
+try:
+    from app.ui_components import (
+        guided_header,
+        inject_theme,
+        render_hist_scen_comparison,
+        render_interpretation,
+        render_kpi_cards_styled,
+        render_livrables_panel,
+        render_narrative_styled,
+        render_plotly_styled,
+        render_question_box,
+        render_robustness_panel,
+        render_data_quality_panel,
+        render_spec_table_collapsible,
+        render_status_banner,
+        render_status_interpretation,
+        render_test_ledger,
+        render_test_ledger_styled,
+        show_checks_summary,
+        show_definitions_cards,
+        show_limitations,
+        show_metric_explainers_tabbed,
+    )
+except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud stale caches
+    _UI_COMPONENTS_IMPORT_ERROR = exc
+
+    def _ui_components_unavailable(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError(
+            "app.ui_components indisponible sur cette instance (cache/deploiement partiel). "
+            "Rebooter l'app puis vider le cache Streamlit Cloud."
+        )
+
+    guided_header = _ui_components_unavailable  # type: ignore[assignment]
+    inject_theme = _ui_components_unavailable  # type: ignore[assignment]
+    render_hist_scen_comparison = _ui_components_unavailable  # type: ignore[assignment]
+    render_interpretation = _ui_components_unavailable  # type: ignore[assignment]
+    render_kpi_cards_styled = _ui_components_unavailable  # type: ignore[assignment]
+    render_livrables_panel = _ui_components_unavailable  # type: ignore[assignment]
+    render_narrative_styled = _ui_components_unavailable  # type: ignore[assignment]
+    render_plotly_styled = _ui_components_unavailable  # type: ignore[assignment]
+    render_question_box = _ui_components_unavailable  # type: ignore[assignment]
+    render_robustness_panel = _ui_components_unavailable  # type: ignore[assignment]
+    render_data_quality_panel = _ui_components_unavailable  # type: ignore[assignment]
+    render_spec_table_collapsible = _ui_components_unavailable  # type: ignore[assignment]
+    render_status_banner = _ui_components_unavailable  # type: ignore[assignment]
+    render_status_interpretation = _ui_components_unavailable  # type: ignore[assignment]
+    render_test_ledger = _ui_components_unavailable  # type: ignore[assignment]
+    render_test_ledger_styled = _ui_components_unavailable  # type: ignore[assignment]
+    show_checks_summary = _ui_components_unavailable  # type: ignore[assignment]
+    show_definitions_cards = _ui_components_unavailable  # type: ignore[assignment]
+    show_limitations = _ui_components_unavailable  # type: ignore[assignment]
+    show_metric_explainers_tabbed = _ui_components_unavailable  # type: ignore[assignment]
 from app.llm_analysis import render_llm_analysis_section
 from src.modules.bundle_result import export_question_bundle
 from src.modules.q1_transition import Q1_PARAMS
@@ -73,6 +104,11 @@ def render() -> None:
     if _PAGE_UTILS_IMPORT_ERROR is not None:
         st.error("Impossible de charger les utilitaires de page (page_utils).")
         st.code(str(_PAGE_UTILS_IMPORT_ERROR))
+        st.info("Action recommandee: Streamlit Cloud > Manage app > Reboot app, puis Clear cache.")
+        return
+    if _UI_COMPONENTS_IMPORT_ERROR is not None:
+        st.error("Impossible de charger les composants UI partages (ui_components).")
+        st.code(str(_UI_COMPONENTS_IMPORT_ERROR))
         st.info("Action recommandee: Streamlit Cloud > Manage app > Reboot app, puis Clear cache.")
         return
 
