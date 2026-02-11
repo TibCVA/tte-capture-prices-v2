@@ -1,0 +1,96 @@
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q1_CAPTURE_ONLY_SIGNAL,BE 2032: capture-only sans low-price ni stress physique.,Q1,BE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,BE 2033: capture-only sans low-price ni stress physique.,Q1,BE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,BE 2034: capture-only sans low-price ni stress physique.,Q1,BE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,BE 2035: capture-only sans low-price ni stress physique.,Q1,BE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2026: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2027: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2028: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2029: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2030: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2031: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2032: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2033: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2034: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,CZ 2035: capture-only sans low-price ni stress physique.,Q1,CZ,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2025: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2026: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2027: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2028: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2029: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2030: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2031: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2032: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2033: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2034: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,DE 2035: capture-only sans low-price ni stress physique.,Q1,DE,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2025: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2026: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2027: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2028: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2029: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2030: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2031: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2032: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2033: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2034: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,ES 2035: capture-only sans low-price ni stress physique.,Q1,ES,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2025: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2026: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2027: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2028: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2029: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2030: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2031: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2032: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2033: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2034: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,FR 2035: capture-only sans low-price ni stress physique.,Q1,FR,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2025: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2026: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2027: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2028: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2029: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2030: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2031: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2032: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2033: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2034: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,IT_NORD 2035: capture-only sans low-price ni stress physique.,Q1,IT_NORD,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2025: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2026: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2027: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2028: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2029: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2030: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2031: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2032: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2033: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2034: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_CAPTURE_ONLY_SIGNAL,NL 2035: capture-only sans low-price ni stress physique.,Q1,NL,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2025: coverage=80.22% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2026: coverage=80.11% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2027: coverage=80.00% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2028: coverage=79.87% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2029: coverage=79.79% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2030: coverage=79.31% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2031: coverage=79.58% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2032: coverage=79.45% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2033: coverage=79.37% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2034: coverage=79.26% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"BE 2035: coverage=79.16% (>60%), possible surestimation must-run.",Q1,BE,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2025: coverage=89.16% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2026: coverage=89.11% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2027: coverage=89.07% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2028: coverage=89.02% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2029: coverage=88.97% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2030: coverage=88.86% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2031: coverage=88.87% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2032: coverage=88.81% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2033: coverage=88.75% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2034: coverage=88.69% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"CZ 2035: coverage=88.64% (>60%), possible surestimation must-run.",Q1,CZ,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"IT_NORD 2025: coverage=60.60% (>60%), possible surestimation must-run.",Q1,IT_NORD,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"IT_NORD 2026: coverage=60.40% (>60%), possible surestimation must-run.",Q1,IT_NORD,False
+WARN,Q1_MUSTRUN_SCOPE_HIGH_COVERAGE,"IT_NORD 2027: coverage=60.19% (>60%), possible surestimation must-run.",Q1,IT_NORD,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q1,,True

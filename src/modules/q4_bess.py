@@ -22,7 +22,7 @@ Q4_PARAMS = [
     "target_surplus_unabs_energy_twh",
 ]
 
-Q4_ENGINE_VERSION = "v2.1.0"
+Q4_ENGINE_VERSION = "v2.1.1"
 Q4_CACHE_BASE = Path("data/cache/q4")
 
 
@@ -227,17 +227,18 @@ def _pv_capture(price: np.ndarray, pv: np.ndarray) -> float:
     return float(np.sum(p * g)) / den
 
 
-def _selection_grids(selection: dict[str, Any]) -> tuple[list[float], list[float]]:
-    default_power_grid = [0.0, 200.0, 500.0, 1000.0, 2000.0, 4000.0, 6000.0, 8000.0]
-    default_duration_grid = [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
+def _selection_grids(selection: dict[str, Any], pv_capacity_proxy_mw: float) -> tuple[list[float], list[float]]:
+    proxy = float(max(1.0, pv_capacity_proxy_mw))
+    default_power_grid = [round(proxy * x, 3) for x in [0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]]
+    default_duration_grid = [0.0, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0]
     power_grid = [float(x) for x in selection.get("power_grid", default_power_grid)]
     duration_grid = [float(x) for x in selection.get("duration_grid", default_duration_grid)]
     power_grid = sorted(set([x for x in power_grid if x >= 0.0]))
-    duration_grid = sorted(set([x for x in duration_grid if x > 0.0]))
+    duration_grid = sorted(set([x for x in duration_grid if x >= 0.0]))
     if not power_grid:
         power_grid = [0.0]
     if not duration_grid:
-        duration_grid = [1.0]
+        duration_grid = [0.0]
     return power_grid, duration_grid
 
 
@@ -328,10 +329,20 @@ def run_q4(
     if objective not in {"FAR_TARGET", "SURPLUS_UNABS_TARGET"}:
         objective = "FAR_TARGET"
 
-    power_grid, duration_grid = _selection_grids(selection)
+    base = _ensure_ts_index(hourly_df)
+    pv_series_proxy = pd.to_numeric(base.get("gen_solar_mw"), errors="coerce")
+    pv_capacity_proxy = (
+        float(np.nanquantile(pv_series_proxy.to_numpy(dtype=float), 0.99))
+        if pv_series_proxy.notna().any()
+        else float(np.nanmax(pd.to_numeric(base.get("gen_vre_mw"), errors="coerce").to_numpy(dtype=float)))
+        if "gen_vre_mw" in base.columns
+        else 1000.0
+    )
+    if not np.isfinite(pv_capacity_proxy) or pv_capacity_proxy <= 0:
+        pv_capacity_proxy = 1000.0
+    power_grid, duration_grid = _selection_grids(selection, pv_capacity_proxy_mw=pv_capacity_proxy)
     force_recompute = bool(selection.get("force_recompute", False))
 
-    base = _ensure_ts_index(hourly_df)
     data_signature = _hourly_signature(base)
 
     country = str(selection.get("country", ""))
@@ -371,10 +382,10 @@ def run_q4(
 
         price = _to_float_array(base, "price_da_eur_mwh")
         surplus = np.where(np.isfinite(_to_float_array(base, "surplus_mw")), _to_float_array(base, "surplus_mw"), 0.0)
-        surplus_unabs = np.where(np.isfinite(_to_float_array(base, "surplus_unabsorbed_mw")), _to_float_array(base, "surplus_unabsorbed_mw"), 0.0)
         pv = np.where(np.isfinite(_to_float_array(base, "gen_solar_mw")), _to_float_array(base, "gen_solar_mw"), 0.0)
         flex_sink_observed = np.where(np.isfinite(_to_float_array(base, "flex_sink_observed_mw")), _to_float_array(base, "flex_sink_observed_mw"), 0.0)
-        absorbed_base = np.where(np.isfinite(_to_float_array(base, "surplus_absorbed_mw")), _to_float_array(base, "surplus_absorbed_mw"), 0.0)
+        absorbed_base_model = np.minimum(surplus, flex_sink_observed)
+        surplus_unabs_model = np.maximum(0.0, surplus - absorbed_base_model)
         if "nrl_mw" in base.columns:
             nrl = np.where(np.isfinite(_to_float_array(base, "nrl_mw")), _to_float_array(base, "nrl_mw"), 0.0)
         elif {"load_mw", "gen_vre_mw", "gen_must_run_mw"}.issubset(set(base.columns)):
@@ -386,8 +397,8 @@ def run_q4(
             # Fallback when NRL inputs are missing.
             nrl = np.where(surplus > 0.0, -surplus, 0.0)
 
-        base_far = _compute_far_array(surplus, absorbed_base)
-        unabs_before_twh = float(np.sum(surplus_unabs) / 1e6)
+        base_far = _compute_far_array(surplus, absorbed_base_model)
+        unabs_before_twh = float(np.sum(surplus_unabs_model) / 1e6)
         pv_before = _pv_capture(price, pv)
         day_ranges = _day_slices(base.index)
 
@@ -420,7 +431,7 @@ def run_q4(
                     price=price,
                     nrl=nrl,
                     surplus=surplus,
-                    surplus_unabs=surplus_unabs,
+                    surplus_unabs=surplus_unabs_model,
                     pv=pv,
                     flex_sink_observed=flex_sink_observed,
                     day_ranges=day_ranges,
@@ -575,7 +586,7 @@ def run_q4(
                     }
                 )
 
-    # Objective satisfaction
+    # Objective satisfaction and selection rule.
     if objective == "FAR_TARGET":
         feasible = frontier[frontier["far_after"] >= target_far].sort_values(
             ["required_bess_power_mw", "required_bess_energy_mwh"]
@@ -585,12 +596,36 @@ def run_q4(
             ["required_bess_power_mw", "required_bess_energy_mwh"]
         )
 
+    objective_not_reached = False
+    objective_recommendation = ""
     if feasible.empty:
+        objective_not_reached = True
         if objective == "FAR_TARGET":
-            best = frontier.sort_values(["far_after", "required_bess_power_mw"], ascending=[False, True]).iloc[0]
+            best = frontier.sort_values(["far_after", "required_bess_power_mw", "required_bess_energy_mwh"], ascending=[False, True, True]).iloc[0]
         else:
-            best = frontier.sort_values(["surplus_unabs_energy_after", "required_bess_power_mw"]).iloc[0]
-        warnings.append("Objectif non atteint sur la grille de sizing; meilleur compromis retourne.")
+            best = frontier.sort_values(["surplus_unabs_energy_after", "required_bess_power_mw", "required_bess_energy_mwh"]).iloc[0]
+
+        # Never recommend 0 MW if non-zero meaningfully improves objective.
+        non_zero = frontier[pd.to_numeric(frontier["required_bess_power_mw"], errors="coerce") > 0.0]
+        if not non_zero.empty:
+            if objective == "FAR_TARGET":
+                nz_best = non_zero.sort_values(["far_after", "required_bess_power_mw", "required_bess_energy_mwh"], ascending=[False, True, True]).iloc[0]
+                if float(best["required_bess_power_mw"]) <= 0.0 and float(nz_best["far_after"]) > float(best["far_after"]) + 0.01:
+                    best = nz_best
+            else:
+                nz_best = non_zero.sort_values(["surplus_unabs_energy_after", "required_bess_power_mw", "required_bess_energy_mwh"], ascending=[True, True, True]).iloc[0]
+                if float(best["required_bess_power_mw"]) <= 0.0 and float(nz_best["surplus_unabs_energy_after"]) + 1e-6 < float(best["surplus_unabs_energy_after"]):
+                    best = nz_best
+
+        objective_recommendation = "increase_grid_upper_bound"
+        warnings.append("Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.")
+        checks.append(
+            {
+                "status": "WARN",
+                "code": "Q4_OBJECTIVE_NOT_REACHED",
+                "message": "Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",
+            }
+        )
     else:
         best = feasible.iloc[0]
 
@@ -600,6 +635,11 @@ def run_q4(
                 "country": country,
                 "year": year,
                 **best.to_dict(),
+                "objective_not_reached": objective_not_reached,
+                "objective_recommendation": objective_recommendation,
+                "pv_capacity_proxy_mw": float(pv_capacity_proxy),
+                "power_grid_max_mw": float(max(power_grid)) if power_grid else np.nan,
+                "duration_grid_max_h": float(max(duration_grid)) if duration_grid else np.nan,
                 "notes_quality": "ok",
             }
         ]
@@ -632,6 +672,7 @@ def run_q4(
         kpis={
             "best_far_after": float(summary["far_after"].iloc[0]),
             "objective": objective,
+            "objective_not_reached": bool(summary["objective_not_reached"].iloc[0]),
             "compute_time_sec": total_time,
             "cache_hit": cache_hit,
             "engine_version": Q4_ENGINE_VERSION,

@@ -19,7 +19,6 @@ Q3_PARAMS = [
     "stage2_recent_sr_energy_min_scen",
     "trend_h_negative_max",
     "trend_capture_ratio_min",
-    "slope_capture_target",
     "h_negative_target",
     "h_below_5_target",
     "sr_energy_target",
@@ -28,59 +27,171 @@ Q3_PARAMS = [
 ]
 
 
-def _binary_search_lowest(fn, lo: float, hi: float, tol: float = 1e-4, max_iter: int = 40) -> float:
-    if fn(lo):
-        return lo
+def _safe_float(value: Any, default: float = np.nan) -> float:
+    try:
+        out = float(value)
+    except Exception:
+        return float(default)
+    return out if np.isfinite(out) else float(default)
+
+
+def _theil_sen_slope(x: pd.Series, y: pd.Series) -> float:
+    xx = pd.to_numeric(x, errors="coerce")
+    yy = pd.to_numeric(y, errors="coerce")
+    tmp = pd.DataFrame({"x": xx, "y": yy}).dropna()
+    if len(tmp) < 2:
+        return np.nan
+    vals = tmp.to_numpy(dtype=float)
+    slopes: list[float] = []
+    for i in range(len(vals)):
+        for j in range(i + 1, len(vals)):
+            dx = vals[j, 0] - vals[i, 0]
+            if abs(dx) <= 1e-12:
+                continue
+            slopes.append((vals[j, 1] - vals[i, 1]) / dx)
+    if not slopes:
+        return np.nan
+    return float(np.median(np.array(slopes, dtype=float)))
+
+
+def _trend_with_outliers(df: pd.DataFrame, col: str) -> dict[str, Any]:
+    x = pd.to_numeric(df.get("year"), errors="coerce")
+    y = pd.to_numeric(df.get(col), errors="coerce")
+    tmp = pd.DataFrame({"year": x, "y": y}).dropna()
+    if len(tmp) < 2:
+        return {"slope_ols": np.nan, "slope_theil_sen": np.nan, "slope_ols_no_outliers": np.nan, "n": int(len(tmp)), "reason": "insufficient_points"}
+    std = float(tmp["y"].std(ddof=0))
+    if std > 0:
+        z = (tmp["y"] - float(tmp["y"].mean())) / std
+        tmp["outlier"] = z.abs() > 2.5
+    else:
+        tmp["outlier"] = False
+    ols = robust_linreg(tmp["year"], tmp["y"])
+    ts = _theil_sen_slope(tmp["year"], tmp["y"])
+    no = tmp[~tmp["outlier"]]
+    if len(no) >= 2:
+        ols_no = robust_linreg(no["year"], no["y"])
+    else:
+        ols_no = {"slope": np.nan}
+    return {
+        "slope_ols": _safe_float(ols.get("slope"), np.nan),
+        "slope_theil_sen": _safe_float(ts, np.nan),
+        "slope_ols_no_outliers": _safe_float(ols_no.get("slope"), np.nan),
+        "n": int(len(tmp)),
+        "outlier_years": ",".join([str(int(v)) for v in no[no["outlier"]]["year"].tolist()]) if "outlier" in no.columns else "",
+        "reason": "ok",
+    }
+
+
+def _apply_lever_proxy(tail: pd.DataFrame, k_demand: float = 0.0, r_mustrun: float = 0.0, f_flex: float = 0.0) -> pd.DataFrame:
+    t = tail.copy()
+    k = float(max(0.0, k_demand))
+    r = float(np.clip(r_mustrun, 0.0, 1.0))
+    f = float(max(0.0, f_flex))
+    h_factor = 1.0 + 1.6 * k + 1.4 * r + 1.2 * f
+    t["h_negative_obs"] = pd.to_numeric(t.get("h_negative_obs"), errors="coerce") / h_factor
+    t["h_below_5_obs"] = pd.to_numeric(t.get("h_below_5_obs"), errors="coerce") / h_factor
+    t["capture_ratio_pv_vs_ttl"] = (pd.to_numeric(t.get("capture_ratio_pv_vs_ttl"), errors="coerce") + 0.08 * k + 0.10 * r + 0.08 * f).clip(lower=0.0, upper=2.0)
+    t["sr_energy"] = pd.to_numeric(t.get("sr_energy"), errors="coerce") / (1.0 + k)
+    far = pd.to_numeric(t.get("far_energy"), errors="coerce")
+    t["far_energy"] = 1.0 - (1.0 - far) / (1.0 + 0.5 * k + 0.7 * r + 1.0 * f)
+    return t
+
+
+def _stage3_ready_from_tail(tail: pd.DataFrame, far_target: float, trend_capture_min: float) -> dict[str, Any]:
+    th = _trend_with_outliers(tail, "h_negative_obs")
+    tc = _trend_with_outliers(tail, "capture_ratio_pv_vs_ttl")
+    trend_hneg = _safe_float(th["slope_theil_sen"], np.nan)
+    if not np.isfinite(trend_hneg):
+        trend_hneg = _safe_float(th["slope_ols"], np.nan)
+    trend_capture = _safe_float(tc["slope_theil_sen"], np.nan)
+    if not np.isfinite(trend_capture):
+        trend_capture = _safe_float(tc["slope_ols"], np.nan)
+    far_last = _safe_float(pd.to_numeric(tail.get("far_energy"), errors="coerce").iloc[-1], np.nan) if not tail.empty else np.nan
+    ready = bool(
+        np.isfinite(far_last)
+        and far_last >= float(far_target)
+        and np.isfinite(trend_hneg)
+        and trend_hneg <= 0.0
+        and np.isfinite(trend_capture)
+        and trend_capture >= float(trend_capture_min)
+    )
+    return {
+        "stage3_ready": ready,
+        "trend_h_negative": trend_hneg,
+        "trend_capture_ratio_pv_vs_ttl": trend_capture,
+        "trend_h_negative_ols": _safe_float(th["slope_ols"], np.nan),
+        "trend_h_negative_ols_no_outliers": _safe_float(th["slope_ols_no_outliers"], np.nan),
+        "trend_capture_ols": _safe_float(tc["slope_ols"], np.nan),
+        "trend_capture_ols_no_outliers": _safe_float(tc["slope_ols_no_outliers"], np.nan),
+        "trend_points_n": int(min(th["n"], tc["n"])),
+    }
+
+
+def _solve_required_lever(
+    fn,
+    max_bound: float,
+    *,
+    tol: float = 1e-4,
+    max_iter: int = 40,
+) -> tuple[float | None, str]:
+    if fn(0.0):
+        return 0.0, "already_ready"
+    hi = float(max(0.0, max_bound))
+    if hi <= 0:
+        return None, "invalid_bounds"
     if not fn(hi):
-        return hi
-    best = hi
+        return None, "beyond_bounds"
+    lo = 0.0
     for _ in range(max_iter):
-        mid = (lo + hi) / 2
+        mid = 0.5 * (lo + hi)
         if fn(mid):
-            best = mid
             hi = mid
         else:
             lo = mid
         if abs(hi - lo) <= tol:
             break
-    return best
+    return float(hi), "ok"
 
 
-def _safe_array(df: pd.DataFrame, col: str) -> np.ndarray:
-    return pd.to_numeric(df.get(col), errors="coerce").to_numpy(dtype=float)
+def _hourly_after_lever(ref: pd.DataFrame, k_demand: float, r_mustrun: float, f_flex: float) -> dict[str, Any]:
+    load = pd.to_numeric(ref.get("load_mw"), errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    vre = pd.to_numeric(ref.get("gen_vre_mw"), errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    mr = pd.to_numeric(ref.get("gen_must_run_mw"), errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    flex = pd.to_numeric(ref.get("flex_sink_observed_mw"), errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    if not np.isfinite(flex).any():
+        flex = (
+            pd.to_numeric(ref.get("exports_mw"), errors="coerce").fillna(0.0).clip(lower=0.0).to_numpy(dtype=float)
+            + pd.to_numeric(ref.get("psh_pump_mw"), errors="coerce").fillna(0.0).clip(lower=0.0).to_numpy(dtype=float)
+        )
 
+    k = float(max(0.0, k_demand))
+    r = float(np.clip(r_mustrun, 0.0, 1.0))
+    f = float(max(0.0, f_flex))
+    load_adj = load * (1.0 + k)
+    mr_adj = mr * (1.0 - r)
+    nrl = load_adj - vre - mr_adj
+    surplus = np.maximum(0.0, -nrl)
+    absorbed = np.minimum(surplus, flex * (1.0 + f))
+    unabs = np.maximum(0.0, surplus - absorbed)
 
-def _infer_nrl_thresholds(ref: pd.DataFrame) -> tuple[float, float]:
-    nrl = pd.to_numeric(ref.get("nrl_mw"), errors="coerce")
-    price = pd.to_numeric(ref.get("price_da_eur_mwh"), errors="coerce")
-    valid = nrl.notna() & price.notna()
-    if not valid.any():
-        return np.nan, np.nan
-    nrl_v = nrl[valid]
-    price_v = price[valid]
-
-    nrl_neg = nrl_v[price_v < 0.0]
-    nrl_low5 = nrl_v[price_v <= 5.0]
-    if nrl_neg.empty:
-        neg_thr = float(nrl_v.quantile(0.10))
+    base_unabs = pd.to_numeric(ref.get("surplus_unabsorbed_mw"), errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    delta_unabs = float(np.sum(base_unabs) - np.sum(unabs))
+    additional_sink_hourly = np.maximum(0.0, absorbed - np.minimum(surplus, flex))
+    if np.isfinite(additional_sink_hourly).any() and np.sum(additional_sink_hourly) > 0:
+        sink_p95 = float(np.nanquantile(additional_sink_hourly, 0.95))
     else:
-        # Largest NRL still associated with negative prices.
-        neg_thr = float(nrl_neg.max())
-    if nrl_low5.empty:
-        low5_thr = float(nrl_v.quantile(0.20))
-    else:
-        # Largest NRL still associated with <=5 EUR/MWh prices.
-        low5_thr = float(nrl_low5.max())
-    return neg_thr, low5_thr
+        hrs = int(np.sum(surplus > 0))
+        sink_p95 = delta_unabs / max(1, hrs)
 
-
-def _proxy_hours_from_nrl(nrl_tmp: np.ndarray, threshold: float) -> float:
-    if not np.isfinite(threshold):
-        return np.nan
-    finite = np.isfinite(nrl_tmp)
-    if not finite.any():
-        return np.nan
-    return float(np.sum(nrl_tmp[finite] <= threshold))
+    return {
+        "nrl": nrl,
+        "surplus": surplus,
+        "absorbed": absorbed,
+        "unabs": unabs,
+        "delta_unabs_mwh": delta_unabs,
+        "sink_power_p95_mw": sink_p95,
+    }
 
 
 def run_q3(
@@ -90,10 +201,7 @@ def run_q3(
     selection: dict[str, Any],
     run_id: str,
 ) -> ModuleResult:
-    all_params = {
-        str(r["param_name"]): float(r["param_value"])
-        for _, r in assumptions_df.iterrows()
-    }
+    all_params = {str(r["param_name"]): float(r["param_value"]) for _, r in assumptions_df.iterrows()}
     params = {
         str(r["param_name"]): float(r["param_value"])
         for _, r in assumptions_df[assumptions_df["param_name"].isin(Q3_PARAMS)].iterrows()
@@ -105,18 +213,12 @@ def run_q3(
     recent_sr_min_scen = float(params.get("stage2_recent_sr_energy_min_scen", 0.02))
     is_scen = str(selection.get("mode", "HIST")).upper() == "SCEN"
     recent_hneg_min = recent_hneg_min_scen if is_scen else recent_hneg_min_hist
-    trend_hneg_max = float(params.get("trend_h_negative_max", -10.0))
     trend_cap_min = float(params.get("trend_capture_ratio_min", 0.0))
-    slope_capture_target = float(params.get("slope_capture_target", 0.0))
-    h_negative_target = float(params.get("h_negative_target", all_params.get("stage1_h_negative_max", 100.0)))
-    h_below_5_target = float(params.get("h_below_5_target", all_params.get("stage1_h_below_5_max", 300.0)))
-    sr_target = float(params.get("sr_energy_target", 0.01))
     far_target = float(params.get("far_target", 0.95))
-    k_max = float(params.get("demand_k_max", 0.30))
+    k_max = float(params.get("demand_k_max", 1.0))
 
     countries = selection.get("countries", sorted(annual_df["country"].dropna().unique().tolist()))
     years = selection.get("years", sorted(annual_df["year"].dropna().unique().tolist()))
-
     panel = annual_df[annual_df["country"].isin(countries) & annual_df["year"].isin(years)].copy().sort_values(["country", "year"])
 
     rows: list[dict[str, Any]] = []
@@ -129,105 +231,92 @@ def run_q3(
         if len(group) < window:
             warnings.append(f"{country}: historique insuffisant pour tendance (window={window}).")
             continue
-        tail = group.tail(window)
+        tail = group.tail(window).copy()
         checked_rows.append(tail.iloc[-1])
-
-        trend_hneg = robust_linreg(tail["year"], tail["h_negative_obs"])["slope"]
-        trend_cap = robust_linreg(tail["year"], tail["capture_ratio_pv_vs_ttl"])["slope"]
-        trend_sr = robust_linreg(tail["year"], tail["sr_energy"])["slope"]
-        trend_far = robust_linreg(tail["year"], tail["far_energy"])["slope"]
 
         recent_hneg = float(pd.to_numeric(tail["h_negative_obs"], errors="coerce").max())
         recent_sr = float(pd.to_numeric(tail["sr_energy"], errors="coerce").max())
-        if is_scen:
-            has_recent_stage2 = (recent_hneg >= recent_hneg_min) or (recent_sr >= recent_sr_min_scen)
-        else:
-            has_recent_stage2 = recent_hneg >= recent_hneg_min
+        has_recent_stage2 = (recent_hneg >= recent_hneg_min) or (is_scen and recent_sr >= recent_sr_min_scen)
         if require_recent_stage2 and not has_recent_stage2:
             status = "hors_scope_stage2"
-        elif trend_hneg > 0 and trend_cap < slope_capture_target:
-            status = "degradation"
-        elif abs(trend_hneg) <= abs(trend_hneg_max) and abs(trend_cap - slope_capture_target) <= 0.01:
-            status = "stabilisation"
-        elif trend_hneg <= trend_hneg_max and trend_cap >= max(trend_cap_min, slope_capture_target):
-            status = "amelioration"
         else:
             status = "transition_partielle"
 
+        base_stage3 = _stage3_ready_from_tail(tail, far_target=far_target, trend_capture_min=trend_cap_min)
+        if status != "hors_scope_stage2" and bool(base_stage3["stage3_ready"]):
+            status = "stage3_ready"
+        elif status != "hors_scope_stage2":
+            if np.isfinite(base_stage3["trend_h_negative"]) and base_stage3["trend_h_negative"] > 0 and np.isfinite(base_stage3["trend_capture_ratio_pv_vs_ttl"]) and base_stage3["trend_capture_ratio_pv_vs_ttl"] < 0:
+                status = "degradation"
+            elif np.isfinite(base_stage3["trend_h_negative"]) and abs(base_stage3["trend_h_negative"]) <= 1e-6:
+                status = "stabilisation"
+            elif np.isfinite(base_stage3["trend_h_negative"]) and base_stage3["trend_h_negative"] < 0:
+                status = "amelioration"
+
         ref_year = int(group["year"].max())
         ref = hourly_by_country_year.get((country, ref_year))
-        if ref is None:
-            warnings.append(f"{country}: horaire manquant pour {ref_year}, contre-factuels non calcules.")
-            continue
+        if ref is None or ref.empty:
+            warnings.append(f"{country}: horaire manquant pour {ref_year}, leviers horaires limites.")
+            ref = pd.DataFrame()
 
-        if status == "hors_scope_stage2":
-            inversion_k = np.nan
-            inversion_r = np.nan
-            additional_abs_needed = np.nan
-            additional_sink_p95 = np.nan
+        def _ready_with(k: float = 0.0, r: float = 0.0, f: float = 0.0) -> bool:
+            adj = _apply_lever_proxy(tail, k_demand=k, r_mustrun=r, f_flex=f)
+            stage = _stage3_ready_from_tail(adj, far_target=far_target, trend_capture_min=trend_cap_min)
+            return bool(stage["stage3_ready"])
+
+        req_k, req_k_status = _solve_required_lever(lambda x: _ready_with(k=x, r=0.0, f=0.0), max_bound=k_max)
+        req_r, req_r_status = _solve_required_lever(lambda x: _ready_with(k=0.0, r=x, f=0.0), max_bound=1.0)
+        req_f, req_f_status = _solve_required_lever(lambda x: _ready_with(k=0.0, r=0.0, f=x), max_bound=1.0)
+
+        lever_for_absorption = req_f if req_f is not None else 0.0
+        if not ref.empty:
+            base_hourly = _hourly_after_lever(ref, k_demand=0.0, r_mustrun=0.0, f_flex=0.0)
+            after_hourly = _hourly_after_lever(ref, k_demand=0.0, r_mustrun=0.0, f_flex=float(lever_for_absorption))
+            delta_unabs = float(max(0.0, after_hourly["delta_unabs_mwh"]))
+            sink_p95 = float(after_hourly["sink_power_p95_mw"])
         else:
-            load_arr = _safe_array(ref, "load_mw")
-            vre_arr = _safe_array(ref, "gen_vre_mw")
-            mr_arr = _safe_array(ref, "gen_must_run_mw")
-            gen_primary_arr = _safe_array(ref, "gen_primary_mw")
-            neg_thr, low5_thr = _infer_nrl_thresholds(ref)
-            gen_primary_sum = float(np.nansum(np.where(np.isfinite(gen_primary_arr), gen_primary_arr, 0.0)))
+            base_unabs_twh = _safe_float(group.tail(1).get("surplus_unabsorbed_twh", pd.Series([np.nan])).iloc[0], np.nan)
+            if np.isfinite(base_unabs_twh):
+                delta_unabs = base_unabs_twh * 1e6 * float(max(0.0, lever_for_absorption))
+                sink_p95 = delta_unabs / 8760.0
+            else:
+                delta_unabs = np.nan
+                sink_p95 = np.nan
 
-            def _targets_reached(nrl_tmp: np.ndarray) -> bool:
-                if gen_primary_sum <= 0:
-                    return False
-                surplus_tmp = np.maximum(0.0, -nrl_tmp)
-                sr = float(np.nansum(surplus_tmp)) / gen_primary_sum
-                hneg_proxy = _proxy_hours_from_nrl(nrl_tmp, neg_thr)
-                hlow5_proxy = _proxy_hours_from_nrl(nrl_tmp, low5_thr)
-                return bool(
-                    sr <= sr_target
-                    and np.isfinite(hneg_proxy)
-                    and np.isfinite(hlow5_proxy)
-                    and hneg_proxy <= h_negative_target
-                    and hlow5_proxy <= h_below_5_target
-                )
-
-            def demand_condition(k: float) -> bool:
-                nrl_tmp = load_arr * (1.0 + k) - vre_arr - mr_arr
-                return _targets_reached(nrl_tmp)
-
-            def must_run_condition(r: float) -> bool:
-                mr_tmp = mr_arr * (1.0 - r)
-                nrl_tmp = load_arr - vre_arr - mr_tmp
-                return _targets_reached(nrl_tmp)
-
-            inversion_k = _binary_search_lowest(demand_condition, 0.0, k_max)
-            inversion_r = _binary_search_lowest(must_run_condition, 0.0, 1.0)
-
-            surplus_energy = float(pd.to_numeric(ref["surplus_mw"], errors="coerce").fillna(0).sum())
-            absorbed_current = float(pd.to_numeric(ref["surplus_absorbed_mw"], errors="coerce").fillna(0).sum())
-            absorbed_target = far_target * surplus_energy
-            additional_abs_needed = max(0.0, absorbed_target - absorbed_current)
-            additional_sink_p95 = float(pd.to_numeric(ref["surplus_unabsorbed_mw"], errors="coerce").fillna(0).quantile(0.95))
-
-            if inversion_k > 0.25:
-                checks.append({"status": "WARN", "code": "Q3_DEMAND_HIGH", "message": f"{country}: inversion_k_demand={inversion_k:.1%} (>25%)."})
-            if inversion_r > 0.50:
-                checks.append({"status": "WARN", "code": "Q3_MUSTRUN_HIGH", "message": f"{country}: inversion_r_mustrun={inversion_r:.1%} (>50%)."})
-            if additional_abs_needed == 0.0:
-                checks.append({"status": "INFO", "code": "Q3_FAR_ALREADY_REACHED", "message": f"{country}: FAR cible deja atteinte."})
+        if req_k is not None and req_k > 0.25:
+            checks.append({"status": "WARN", "code": "Q3_INVERSION_K_DEMAND_LARGE", "message": f"{country}: required_k_demand={req_k:.1%} (>25%)."})
+        if req_r is not None and req_r > 0.50:
+            checks.append({"status": "WARN", "code": "Q3_INVERSION_R_MUSTRUN_LARGE", "message": f"{country}: required_r_mustrun={req_r:.1%} (>50%)."})
+        if req_k is None and req_k_status == "beyond_bounds":
+            checks.append({"status": "WARN", "code": "Q3_INVERSION_K_BEYOND_BOUNDS", "message": f"{country}: demande requise au-dela de la borne."})
+        if req_r is None and req_r_status == "beyond_bounds":
+            checks.append({"status": "WARN", "code": "Q3_INVERSION_R_BEYOND_BOUNDS", "message": f"{country}: flexibilisation must-run au-dela de la borne."})
+        if req_f is None and req_f_status == "beyond_bounds":
+            checks.append({"status": "WARN", "code": "Q3_INVERSION_F_BEYOND_BOUNDS", "message": f"{country}: flexibilite additionnelle au-dela de la borne."})
 
         rows.append(
             {
                 "country": country,
                 "reference_year": ref_year,
                 "trend_window_years": window,
-                "trend_h_negative": trend_hneg,
-                "trend_capture_ratio_pv_vs_ttl": trend_cap,
-                "trend_sr_energy": trend_sr,
-                "trend_far_energy": trend_far,
                 "status": status,
-                "inversion_k_demand": inversion_k,
-                "inversion_r_mustrun": inversion_r,
-                "additional_absorbed_needed_TWh_year": additional_abs_needed / 1e6,
-                "additional_sink_power_p95_mw": additional_sink_p95,
-                "warnings_quality": "" if group["quality_flag"].iloc[-1] != "FAIL" else "quality_fail",
+                "stage3_ready_year": bool(base_stage3["stage3_ready"]),
+                "trend_h_negative": base_stage3["trend_h_negative"],
+                "trend_capture_ratio_pv_vs_ttl": base_stage3["trend_capture_ratio_pv_vs_ttl"],
+                "trend_h_negative_ols": base_stage3["trend_h_negative_ols"],
+                "trend_h_negative_ols_no_outliers": base_stage3["trend_h_negative_ols_no_outliers"],
+                "trend_capture_ols": base_stage3["trend_capture_ols"],
+                "trend_capture_ols_no_outliers": base_stage3["trend_capture_ols_no_outliers"],
+                "trend_points_n": base_stage3["trend_points_n"],
+                "inversion_k_demand": req_k,
+                "inversion_k_demand_status": req_k_status,
+                "inversion_r_mustrun": req_r,
+                "inversion_r_mustrun_status": req_r_status,
+                "inversion_f_flex": req_f,
+                "inversion_f_flex_status": req_f_status,
+                "additional_absorbed_needed_TWh_year": delta_unabs / 1e6 if np.isfinite(delta_unabs) else np.nan,
+                "additional_sink_power_p95_mw": sink_p95,
+                "warnings_quality": "" if str(group["quality_flag"].iloc[-1]).upper() != "FAIL" else "quality_fail",
             }
         )
 
@@ -239,13 +328,13 @@ def run_q3(
 
     kpis = {
         "n_countries": int(out["country"].nunique()) if not out.empty else 0,
-        "n_amelioration": int((out.get("status") == "amelioration").sum()) if not out.empty else 0,
+        "n_stage3_ready": int((out.get("stage3_ready_year") == True).sum()) if not out.empty else 0,
         "n_degradation": int((out.get("status") == "degradation").sum()) if not out.empty else 0,
     }
 
     narrative = (
-        "Q3 evalue la sortie de Phase 2 via tendances historiques glissantes "
-        "et calcule des ordres de grandeur d'inversion (demande, must-run, flex)."
+        "Q3 teste explicitement la readiness Phase 3 (FAR cible + tendance h_negative + tendance capture), "
+        "et quantifie les leviers requis (demande, must-run, flex) sans saturation silencieuse."
     )
 
     return ModuleResult(
@@ -263,3 +352,4 @@ def run_q3(
         scenario_id=selection.get("scenario_id"),
         horizon_year=selection.get("horizon_year"),
     )
+

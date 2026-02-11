@@ -1,0 +1,105 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,BE: demande requise au-dela de la borne.,HIST,,Q3,BE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,BE: flexibilisation must-run au-dela de la borne.,HIST,,Q3,BE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,BE: flexibilite additionnelle au-dela de la borne.,HIST,,Q3,BE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,CZ: demande requise au-dela de la borne.,HIST,,Q3,CZ,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,CZ: flexibilisation must-run au-dela de la borne.,HIST,,Q3,CZ,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,CZ: flexibilite additionnelle au-dela de la borne.,HIST,,Q3,CZ,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,HIST,,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,HIST,,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,HIST,,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,HIST,,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,HIST,,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,HIST,,Q3,ES,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,FR: demande requise au-dela de la borne.,HIST,,Q3,FR,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,FR: flexibilisation must-run au-dela de la borne.,HIST,,Q3,FR,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,FR: flexibilite additionnelle au-dela de la borne.,HIST,,Q3,FR,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,IT_NORD: demande requise au-dela de la borne.,HIST,,Q3,IT_NORD,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,IT_NORD: flexibilisation must-run au-dela de la borne.,HIST,,Q3,IT_NORD,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,IT_NORD: flexibilite additionnelle au-dela de la borne.,HIST,,Q3,IT_NORD,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,NL: demande requise au-dela de la borne.,HIST,,Q3,NL,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,NL: flexibilisation must-run au-dela de la borne.,HIST,,Q3,NL,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,NL: flexibilite additionnelle au-dela de la borne.,HIST,,Q3,NL,False
+WARN,RC_IR_GT_1,"FR-2024: IR > 1 (must-run tres eleve en creux). p10_must_run_mw=39406.20, p10_load_mw=37062.60.",HIST,,Q3,FR,False
+WARN,RC_LOW_REGIME_COHERENCE,FR-2024: regime_coherence < 0.55.,HIST,,Q3,FR,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,BE: demande requise au-dela de la borne.,SCEN,BASE,Q3,BE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,BE: flexibilisation must-run au-dela de la borne.,SCEN,BASE,Q3,BE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,BE: flexibilite additionnelle au-dela de la borne.,SCEN,BASE,Q3,BE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,CZ: demande requise au-dela de la borne.,SCEN,BASE,Q3,CZ,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,CZ: flexibilisation must-run au-dela de la borne.,SCEN,BASE,Q3,CZ,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,CZ: flexibilite additionnelle au-dela de la borne.,SCEN,BASE,Q3,CZ,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,SCEN,BASE,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,SCEN,BASE,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,SCEN,BASE,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,SCEN,BASE,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,SCEN,BASE,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,SCEN,BASE,Q3,ES,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,FR: demande requise au-dela de la borne.,SCEN,BASE,Q3,FR,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,FR: flexibilisation must-run au-dela de la borne.,SCEN,BASE,Q3,FR,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,FR: flexibilite additionnelle au-dela de la borne.,SCEN,BASE,Q3,FR,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,IT_NORD: demande requise au-dela de la borne.,SCEN,BASE,Q3,IT_NORD,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,IT_NORD: flexibilisation must-run au-dela de la borne.,SCEN,BASE,Q3,IT_NORD,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,IT_NORD: flexibilite additionnelle au-dela de la borne.,SCEN,BASE,Q3,IT_NORD,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,NL: demande requise au-dela de la borne.,SCEN,BASE,Q3,NL,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,NL: flexibilisation must-run au-dela de la borne.,SCEN,BASE,Q3,NL,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,NL: flexibilite additionnelle au-dela de la borne.,SCEN,BASE,Q3,NL,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q3,,True
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,CZ: demande requise au-dela de la borne.,SCEN,DEMAND_UP,Q3,CZ,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,CZ: flexibilisation must-run au-dela de la borne.,SCEN,DEMAND_UP,Q3,CZ,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,CZ: flexibilite additionnelle au-dela de la borne.,SCEN,DEMAND_UP,Q3,CZ,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,SCEN,DEMAND_UP,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,SCEN,DEMAND_UP,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,SCEN,DEMAND_UP,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,SCEN,DEMAND_UP,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,SCEN,DEMAND_UP,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,SCEN,DEMAND_UP,Q3,ES,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,FR: demande requise au-dela de la borne.,SCEN,DEMAND_UP,Q3,FR,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,FR: flexibilisation must-run au-dela de la borne.,SCEN,DEMAND_UP,Q3,FR,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,FR: flexibilite additionnelle au-dela de la borne.,SCEN,DEMAND_UP,Q3,FR,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,IT_NORD: demande requise au-dela de la borne.,SCEN,DEMAND_UP,Q3,IT_NORD,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,IT_NORD: flexibilisation must-run au-dela de la borne.,SCEN,DEMAND_UP,Q3,IT_NORD,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,IT_NORD: flexibilite additionnelle au-dela de la borne.,SCEN,DEMAND_UP,Q3,IT_NORD,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,NL: demande requise au-dela de la borne.,SCEN,DEMAND_UP,Q3,NL,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,NL: flexibilisation must-run au-dela de la borne.,SCEN,DEMAND_UP,Q3,NL,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,NL: flexibilite additionnelle au-dela de la borne.,SCEN,DEMAND_UP,Q3,NL,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,DEMAND_UP,Q3,,True
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,CZ: demande requise au-dela de la borne.,SCEN,FLEX_UP,Q3,CZ,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,CZ: flexibilisation must-run au-dela de la borne.,SCEN,FLEX_UP,Q3,CZ,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,CZ: flexibilite additionnelle au-dela de la borne.,SCEN,FLEX_UP,Q3,CZ,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,SCEN,FLEX_UP,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,SCEN,FLEX_UP,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,SCEN,FLEX_UP,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,SCEN,FLEX_UP,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,SCEN,FLEX_UP,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,SCEN,FLEX_UP,Q3,ES,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,FR: demande requise au-dela de la borne.,SCEN,FLEX_UP,Q3,FR,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,FR: flexibilisation must-run au-dela de la borne.,SCEN,FLEX_UP,Q3,FR,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,FR: flexibilite additionnelle au-dela de la borne.,SCEN,FLEX_UP,Q3,FR,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,IT_NORD: demande requise au-dela de la borne.,SCEN,FLEX_UP,Q3,IT_NORD,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,IT_NORD: flexibilisation must-run au-dela de la borne.,SCEN,FLEX_UP,Q3,IT_NORD,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,IT_NORD: flexibilite additionnelle au-dela de la borne.,SCEN,FLEX_UP,Q3,IT_NORD,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,NL: demande requise au-dela de la borne.,SCEN,FLEX_UP,Q3,NL,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,NL: flexibilisation must-run au-dela de la borne.,SCEN,FLEX_UP,Q3,NL,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,NL: flexibilite additionnelle au-dela de la borne.,SCEN,FLEX_UP,Q3,NL,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,FLEX_UP,Q3,,True
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,CZ: demande requise au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,CZ,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,CZ: flexibilisation must-run au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,CZ,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,CZ: flexibilite additionnelle au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,CZ,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,ES,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,FR: demande requise au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,FR,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,FR: flexibilisation must-run au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,FR,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,FR: flexibilite additionnelle au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,FR,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,IT_NORD: demande requise au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,IT_NORD,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,IT_NORD: flexibilisation must-run au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,IT_NORD,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,IT_NORD: flexibilite additionnelle au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,IT_NORD,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,NL: demande requise au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,NL,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,NL: flexibilisation must-run au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,NL,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,NL: flexibilite additionnelle au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,NL,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,LOW_RIGIDITY,Q3,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q3,,True
+WARN,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=0.00%,BUNDLE,,Q3,,True

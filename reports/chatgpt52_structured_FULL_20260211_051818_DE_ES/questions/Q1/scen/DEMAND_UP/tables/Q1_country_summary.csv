@@ -1,0 +1,3 @@
+country,bascule_year_market,bascule_year_physical,bascule_confidence,drivers_at_bascule,sr_energy_at_bascule,far_energy_at_bascule,ir_p10_at_bascule,ttl_at_bascule,capture_ratio_pv_vs_ttl_at_bascule,h_negative_at_bascule,notes_quality
+DE,,,0.0,capture_ratio,0.0,,0.0422065769478611,217.16247335587352,0.5985579624956839,0,ok
+ES,,,0.0,capture_ratio,0.0,,0.0783285981342278,170.36119422403377,0.5706116038386401,0,ok

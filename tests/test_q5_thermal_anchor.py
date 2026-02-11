@@ -67,3 +67,50 @@ def test_q5_override_outputs(make_raw_panel, countries_cfg, thresholds_cfg):
         gas_override_eur_mwh_th=45.0,
     ).tables["Q5_summary"].iloc[0]
     assert pd.notna(out["co2_required_gas_override"])
+
+
+def test_q5_required_values_non_negative(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    commodity = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=20, freq="D"),
+            "gas_price_eur_mwh_th": 35.0,
+            "co2_price_eur_t": 80.0,
+        }
+    )
+    out = run_q5(
+        hourly,
+        assumptions,
+        {"country": "FR", "year": 2024, "marginal_tech": "CCGT"},
+        "test",
+        commodity_daily=commodity,
+        ttl_target_eur_mwh=160.0,
+    ).tables["Q5_summary"].iloc[0]
+    assert float(out["required_co2_eur_t"]) >= 0.0
+    assert float(out["required_gas_eur_mwh_th"]) >= 0.0
+
+
+def test_q5_already_above_target_sets_required_zero(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=240)
+    raw["price_da_eur_mwh"] = 250.0
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    commodity = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=20, freq="D"),
+            "gas_price_eur_mwh_th": 35.0,
+            "co2_price_eur_t": 80.0,
+        }
+    )
+    out = run_q5(
+        hourly,
+        assumptions,
+        {"country": "FR", "year": 2024, "marginal_tech": "CCGT"},
+        "test",
+        commodity_daily=commodity,
+        ttl_target_eur_mwh=150.0,
+    ).tables["Q5_summary"].iloc[0]
+    assert out["anchor_status"] == "already_above_target"
+    assert float(out["required_co2_eur_t"]) == 0.0

@@ -1,0 +1,3 @@
+country,reference_year,trend_window_years,trend_h_negative,trend_capture_ratio_pv_vs_ttl,trend_sr_energy,trend_far_energy,status,inversion_k_demand,inversion_r_mustrun,additional_absorbed_needed_TWh_year,additional_sink_power_p95_mw,warnings_quality
+DE,2035,3,0.0,0.000217137586957,0.0,,hors_scope_stage2,,,,,
+ES,2035,3,0.0,-4.46726178557344e-05,0.0,,hors_scope_stage2,,,,,

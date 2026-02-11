@@ -1,0 +1,60 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q2_FRAGILE,BE-PV: n insuffisant pour robustesse pleine.,HIST,,Q2,BE,False
+WARN,Q2_UNLIKELY_SLOPE,BE-PV: pente atypique abs>0.2/an.,HIST,,Q2,BE,False
+INFO,Q2_FRAGILE,BE-WIND: n insuffisant pour robustesse pleine.,HIST,,Q2,BE,False
+WARN,Q2_UNLIKELY_SLOPE,BE-WIND: pente atypique abs>0.2/an.,HIST,,Q2,BE,False
+INFO,Q2_NOT_SIGNIFICANT,CZ-WIND: signal statistique faible (p-value/R2).,HIST,,Q2,CZ,False
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+INFO,Q2_FRAGILE,ES-PV: n insuffisant pour robustesse pleine.,HIST,,Q2,ES,False
+WARN,Q2_UNLIKELY_SLOPE,ES-PV: pente atypique abs>0.2/an.,HIST,,Q2,ES,False
+INFO,Q2_FRAGILE,ES-WIND: n insuffisant pour robustesse pleine.,HIST,,Q2,ES,False
+WARN,Q2_UNLIKELY_SLOPE,ES-WIND: pente atypique abs>0.2/an.,HIST,,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,FR-PV: signal statistique faible (p-value/R2).,HIST,,Q2,FR,False
+INFO,Q2_NOT_SIGNIFICANT,FR-WIND: signal statistique faible (p-value/R2).,HIST,,Q2,FR,False
+WARN,RC_IR_GT_1,"CZ-2018: IR > 1 (must-run tres eleve en creux). p10_must_run_mw=6181.66, p10_load_mw=5946.48.",HIST,,Q2,CZ,False
+WARN,RC_LOW_REGIME_COHERENCE,CZ-2018: regime_coherence < 0.55.,HIST,,Q2,CZ,False
+WARN,RC_IR_GT_1,"CZ-2022: IR > 1 (must-run tres eleve en creux). p10_must_run_mw=5874.35, p10_load_mw=5645.40.",HIST,,Q2,CZ,False
+WARN,RC_LOW_REGIME_COHERENCE,CZ-2022: regime_coherence < 0.55.,HIST,,Q2,CZ,False
+WARN,RC_IR_GT_1,"FR-2018: IR > 1 (must-run tres eleve en creux). p10_must_run_mw=41354.50, p10_load_mw=39303.40.",HIST,,Q2,FR,False
+WARN,RC_LOW_REGIME_COHERENCE,FR-2018: regime_coherence < 0.55.,HIST,,Q2,FR,False
+WARN,RC_IR_GT_1,"FR-2019: IR > 1 (must-run tres eleve en creux). p10_must_run_mw=40635.00, p10_load_mw=39530.00.",HIST,,Q2,FR,False
+WARN,RC_IR_GT_1,"FR-2021: IR > 1 (must-run tres eleve en creux). p10_must_run_mw=41252.00, p10_load_mw=39284.00.",HIST,,Q2,FR,False
+WARN,RC_LOW_REGIME_COHERENCE,FR-2021: regime_coherence < 0.55.,HIST,,Q2,FR,False
+WARN,RC_LOW_REGIME_COHERENCE,FR-2023: regime_coherence < 0.55.,HIST,,Q2,FR,False
+WARN,RC_IR_GT_1,"FR-2024: IR > 1 (must-run tres eleve en creux). p10_must_run_mw=39406.20, p10_load_mw=37062.60.",HIST,,Q2,FR,False
+WARN,RC_LOW_REGIME_COHERENCE,FR-2024: regime_coherence < 0.55.,HIST,,Q2,FR,False
+INFO,Q2_NOT_SIGNIFICANT,BE-PV: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,BE,False
+INFO,Q2_NOT_SIGNIFICANT,BE-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,BE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,IT_NORD-PV: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,IT_NORD,False
+INFO,Q2_NOT_SIGNIFICANT,IT_NORD-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,IT_NORD,False
+INFO,Q2_NOT_SIGNIFICANT,NL-PV: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,NL,False
+INFO,Q2_NOT_SIGNIFICANT,NL-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,NL,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,BE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,BE,False
+INFO,Q2_NOT_SIGNIFICANT,BE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,BE,False
+INFO,Q2_NOT_SIGNIFICANT,CZ-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,CZ,False
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,IT_NORD-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,IT_NORD,False
+INFO,Q2_NOT_SIGNIFICANT,IT_NORD-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,IT_NORD,False
+INFO,Q2_NOT_SIGNIFICANT,NL-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,NL,False
+INFO,Q2_NOT_SIGNIFICANT,NL-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,NL,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_CO2,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,BE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,BE,False
+INFO,Q2_NOT_SIGNIFICANT,BE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,BE,False
+INFO,Q2_NOT_SIGNIFICANT,CZ-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,CZ,False
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,IT_NORD-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,IT_NORD,False
+INFO,Q2_NOT_SIGNIFICANT,IT_NORD-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,IT_NORD,False
+INFO,Q2_NOT_SIGNIFICANT,NL-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,NL,False
+INFO,Q2_NOT_SIGNIFICANT,NL-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,NL,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_GAS,Q2,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q2,,True
+PASS,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=71.43%,BUNDLE,,Q2,,True

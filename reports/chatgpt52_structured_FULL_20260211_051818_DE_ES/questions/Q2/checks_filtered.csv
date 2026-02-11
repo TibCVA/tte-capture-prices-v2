@@ -1,0 +1,12 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+WARN,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+WARN,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+INFO,Q2_LOW_R2,DE-WIND: R2 faible (0.08).,HIST,,Q2,DE,False
+WARN,Q2_FRAGILE,ES-PV: n=2 < 3.,HIST,,Q2,ES,False
+WARN,Q2_FRAGILE,ES-WIND: n=2 < 3.,HIST,,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,HIST,,Q2,,True
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q2,,True
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_CO2,Q2,,True
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_GAS,Q2,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q2,,True
+WARN,BUNDLE_INFORMATIVENESS,share_tests_informatifs=66.67% ; share_compare_informatifs=0.00%,BUNDLE,,Q2,,True

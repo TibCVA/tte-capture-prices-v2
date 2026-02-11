@@ -11,6 +11,8 @@ def test_q2_slope_basic(annual_panel_fixture):
     out = res.tables["Q2_country_slopes"]
     assert not out.empty
     assert "slope" in out.columns
+    assert "phase2_start_year_for_slope" in out.columns
+    assert "years_used" in out.columns
     assert "surplus_load_trough_share_phase2" in out.columns
 
 
@@ -32,3 +34,11 @@ def test_q2_fallback_axis_sr_energy(annual_panel_fixture):
     out = res.tables["Q2_country_slopes"]
     assert not out.empty
     assert (out["x_axis_used"] == "sr_energy").all()
+
+
+def test_q2_outlier_columns_present(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q2(annual_panel_fixture, assumptions, {"countries": ["FR"]}, "test")
+    out = res.tables["Q2_country_slopes"]
+    assert not out.empty
+    assert {"slope_all_years", "slope_excluding_outliers", "outlier_years_count"}.issubset(out.columns)

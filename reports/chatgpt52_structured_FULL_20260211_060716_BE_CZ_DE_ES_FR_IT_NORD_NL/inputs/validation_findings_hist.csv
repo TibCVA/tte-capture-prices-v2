@@ -1,0 +1,61 @@
+severity,code,message,evidence,suggestion,country,year
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,FR,2018
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2018
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,BE,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,CZ,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,CZ,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,CZ,2024
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.273, neg_total=11","Review must-run perimeter, PSH handling, and price-zone mapping.",FR,2018
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,FR,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,FR,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,FR,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,FR,2022
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,FR,2023
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,FR,2024
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.338, neg_total=133","Review must-run perimeter, PSH handling, and price-zone mapping.",DE,2018
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.441, neg_total=211","Review must-run perimeter, PSH handling, and price-zone mapping.",DE,2019
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.369, neg_total=298","Review must-run perimeter, PSH handling, and price-zone mapping.",DE,2020
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.410, neg_total=139","Review must-run perimeter, PSH handling, and price-zone mapping.",DE,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2022
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2023
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2024
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2018
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2022
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2023
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2024
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,NL,2018
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.000, neg_total=3","Review must-run perimeter, PSH handling, and price-zone mapping.",NL,2019
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.000, neg_total=97","Review must-run perimeter, PSH handling, and price-zone mapping.",NL,2020
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.000, neg_total=70","Review must-run perimeter, PSH handling, and price-zone mapping.",NL,2021
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.000, neg_total=86","Review must-run perimeter, PSH handling, and price-zone mapping.",NL,2022
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.000, neg_total=315","Review must-run perimeter, PSH handling, and price-zone mapping.",NL,2023
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.000, neg_total=458","Review must-run perimeter, PSH handling, and price-zone mapping.",NL,2024
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.000, neg_total=9","Review must-run perimeter, PSH handling, and price-zone mapping.",BE,2018
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.268, neg_total=71","Review must-run perimeter, PSH handling, and price-zone mapping.",BE,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,BE,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,BE,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,BE,2022
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,BE,2023
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,BE,2024
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.000, neg_total=41","Review must-run perimeter, PSH handling, and price-zone mapping.",CZ,2018
+WARN,RC_D_NOT_HIGHER_THAN_C,Median price in D is not above C,"med_c=51.96, med_d=47.55",Check D-threshold and stress regime definition.,CZ,2018
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.362, neg_total=58","Review must-run perimeter, PSH handling, and price-zone mapping.",CZ,2019
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.286, neg_total=119","Review must-run perimeter, PSH handling, and price-zone mapping.",CZ,2020
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.000, neg_total=33","Review must-run perimeter, PSH handling, and price-zone mapping.",CZ,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,CZ,2022
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.463, neg_total=134","Review must-run perimeter, PSH handling, and price-zone mapping.",CZ,2023
+WARN,RC_D_NOT_HIGHER_THAN_C,Median price in D is not above C,"med_c=106.80, med_d=97.54",Check D-threshold and stress regime definition.,CZ,2023
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.206, neg_total=315","Review must-run perimeter, PSH handling, and price-zone mapping.",CZ,2024
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,IT_NORD,2018
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,IT_NORD,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,IT_NORD,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,IT_NORD,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,IT_NORD,2022
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,IT_NORD,2023
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,IT_NORD,2024

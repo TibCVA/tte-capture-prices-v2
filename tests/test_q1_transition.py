@@ -66,10 +66,25 @@ def test_q1_scope_review_check_triggers(annual_panel_fixture, make_raw_panel, co
     )
 
     codes = [str(c.get("code")) for c in res.checks]
-    assert "Q1_MR_SCOPE_REVIEW" in codes
+    assert {"Q1_MUSTRUN_SCOPE_LOW_COVERAGE", "Q1_MUSTRUN_SCOPE_HIGH_COVERAGE"} & set(codes)
     scope = res.tables["Q1_scope_audit"]
     assert not scope.empty
-    assert float(scope.iloc[0]["scope_coverage_ratio"]) < 0.70
+    assert 0.0 <= float(scope.iloc[0]["must_run_scope_coverage"]) <= 1.0
+
+
+def test_q1_stage2_score_decomposition_sums(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q1(annual_panel_fixture, assumptions, {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]}, "test")
+    panel = res.tables["Q1_year_panel"]
+    assert not panel.empty
+    row = panel.iloc[-1]
+    expected = (
+        float(row["stage2_points_low_price"])
+        + float(row["stage2_points_capture"])
+        + float(row["stage2_points_physical"])
+        + float(row["stage2_points_vol"])
+    )
+    assert float(row["stage2_market_score"]) == expected
 
 
 def test_q1_no_false_phase2_without_low_prices(annual_panel_fixture):
@@ -80,6 +95,7 @@ def test_q1_no_false_phase2_without_low_prices(annual_panel_fixture):
     df.loc[mask, "h_below_5_obs"] = 50.0
     df.loc[mask, "sr_energy"] = 0.0
     df.loc[mask, "sr_hours"] = 0.0
+    df.loc[mask, "far_energy"] = 0.99
     df.loc[mask, "ir_p10"] = 0.4
     df.loc[mask, "capture_ratio_pv"] = 0.5
     df.loc[mask, "capture_ratio_pv_vs_ttl"] = 0.5

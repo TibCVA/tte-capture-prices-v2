@@ -23,12 +23,12 @@ def test_capture_ratio_division_by_baseload(make_raw_panel, countries_cfg, thres
     assert abs(m["capture_ratio_pv"] - 1.0) < 1e-9
 
 
-def test_far_nan_when_no_surplus(make_raw_panel, countries_cfg, thresholds_cfg):
+def test_far_one_when_no_surplus(make_raw_panel, countries_cfg, thresholds_cfg):
     raw = make_raw_panel()
     raw["load_total_mw"] = 120000.0
     df = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
     m = compute_annual_metrics(df, countries_cfg["countries"]["FR"], data_version_hash="x")
-    assert np.isnan(m["far_energy"])
+    assert float(m["far_energy"]) == 1.0
 
 
 def test_units_and_bounds(make_raw_panel, countries_cfg, thresholds_cfg):

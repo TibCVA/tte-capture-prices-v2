@@ -1,0 +1,31 @@
+{
+  "question_id": "Q5",
+  "objective": "Mesurer l'impact CO2/gaz sur l'ancre thermique (TCA/TTL) et calculer le CO2 requis pour une cible TTL.",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "run_id": "FULL_20260211_061128",
+  "source_summary_file": "outputs\\combined\\FULL_20260211_061128\\Q5\\summary.json",
+  "source_refs_in_ledger": [
+    "SPEC2-Q5",
+    "SPEC2-Q5/Slides 28",
+    "SPEC2-Q5/Slides 29",
+    "SPEC2-Q5/Slides 31"
+  ],
+  "scenarios": [
+    "BASE",
+    "HIGH_BOTH",
+    "HIGH_CO2",
+    "HIGH_GAS"
+  ],
+  "country_filter_notes": {
+    "hist_unfilterable_tables": [],
+    "scen_unfilterable_tables_by_scenario": {
+      "BASE": [],
+      "HIGH_BOTH": [],
+      "HIGH_CO2": [],
+      "HIGH_GAS": []
+    }
+  }
+}

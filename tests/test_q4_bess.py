@@ -55,6 +55,43 @@ def test_q4_no_fail_check_on_fixture(make_raw_panel, countries_cfg, thresholds_c
     assert "FAIL" not in [c.get("status") for c in res.checks]
 
 
+def test_q4_required_bess_positive_if_target_reachable(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(
+        hourly,
+        assumptions,
+        {
+            "country": "FR",
+            "year": 2024,
+            "objective": "FAR_TARGET",
+            "power_grid": [0.0, 500.0, 1000.0, 2000.0],
+            "duration_grid": [0.0, 2.0, 4.0],
+            "force_recompute": True,
+        },
+        "test",
+        dispatch_mode="SURPLUS_FIRST",
+    )
+    summary = res.tables["Q4_sizing_summary"].iloc[0]
+    if float(summary["far_before"]) < 0.95 and not bool(summary["objective_not_reached"]):
+        assert float(summary["required_bess_power_mw"]) > 0.0
+
+
+def test_q4_objective_not_reached_flag(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    assumptions.loc[assumptions["param_name"] == "target_far", "param_value"] = 1.01
+    res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
+    summary = res.tables["Q4_sizing_summary"].iloc[0]
+    assert bool(summary["objective_not_reached"]) is True
+
+
 def test_q4_cache_hit_and_diagnostics(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
 

@@ -31,11 +31,14 @@ except Exception as exc:  # pragma: no cover
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
 from app.ui_components import (
+    derive_outlier_flags_from_q2,
     guided_header,
     inject_theme,
+    render_data_quality_panel,
     render_hist_scen_comparison,
     render_interpretation,
     render_kpi_cards_styled,
+    render_livrables_panel,
     render_narrative_styled,
     render_plotly_styled,
     render_question_box,
@@ -221,10 +224,21 @@ def render() -> None:
     with tab_tech:
         st.markdown("## Checks & exports")
         show_checks_summary(bundle.checks)
+        outlier_rows = derive_outlier_flags_from_q2(slopes_hist)
+        render_data_quality_panel(
+            annual_df=annual,
+            countries=[str(c) for c in bundle.selection.get("countries", [])],
+            years=[int(y) for y in bundle.selection.get("years", [])],
+            extra_country_year_df=outlier_rows if not outlier_rows.empty else None,
+        )
+        render_livrables_panel(
+            run_id=bundle.run_id,
+            out_dir=payload["out_dir"],
+            hist_tables=list(bundle.hist_result.tables.keys()),
+            scenario_ids=sorted(bundle.scen_results.keys()),
+        )
         if bundle.warnings:
             st.warning(" | ".join(bundle.warnings))
-        st.markdown("### Exports")
-        st.code(payload["out_dir"])
 
     show_limitations(
         [

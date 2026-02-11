@@ -1,0 +1,107 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2018: capture-only sans low-price ni stress physique.,HIST,,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2021: capture-only sans low-price ni stress physique.,HIST,,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2022: capture-only sans low-price ni stress physique.,HIST,,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2019: capture-only sans low-price ni stress physique.,HIST,,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2020: capture-only sans low-price ni stress physique.,HIST,,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2021: capture-only sans low-price ni stress physique.,HIST,,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2022: capture-only sans low-price ni stress physique.,HIST,,Q1,ES,False
+WARN,RC_NEG_NOT_IN_AB,DE-2018: seulement 33.8% des heures negatives en regime A/B.,HIST,,Q1,DE,False
+WARN,RC_NEG_NOT_IN_AB,DE-2019: seulement 44.1% des heures negatives en regime A/B.,HIST,,Q1,DE,False
+WARN,RC_NEG_NOT_IN_AB,DE-2020: seulement 36.9% des heures negatives en regime A/B.,HIST,,Q1,DE,False
+WARN,RC_NEG_NOT_IN_AB,DE-2021: seulement 41.0% des heures negatives en regime A/B.,HIST,,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2025: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2026: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2027: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2028: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2029: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2030: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2031: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2032: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2033: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2034: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2035: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2025: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2026: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2027: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2028: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2029: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2030: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2031: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2032: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2033: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2034: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2035: capture-only sans low-price ni stress physique.,SCEN,BASE,Q1,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q1,,True
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2025: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2026: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2027: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2028: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2029: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2030: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2031: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2032: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2033: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2034: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2035: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2025: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2026: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2027: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2028: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2029: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2030: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2031: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2032: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2033: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2034: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2035: capture-only sans low-price ni stress physique.,SCEN,DEMAND_UP,Q1,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,DEMAND_UP,Q1,,True
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2025: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2026: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2027: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2028: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2029: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2030: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2031: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2032: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2033: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2034: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2035: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2025: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2026: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2027: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2028: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2029: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2030: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2031: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2032: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2033: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2034: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2035: capture-only sans low-price ni stress physique.,SCEN,FLEX_UP,Q1,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,FLEX_UP,Q1,,True
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2025: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2026: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2027: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2028: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2029: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2030: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2031: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2032: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2033: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2034: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2035: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2025: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2026: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2027: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2028: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2029: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2030: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2031: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2032: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2033: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2034: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,ES 2035: capture-only sans low-price ni stress physique.,SCEN,LOW_RIGIDITY,Q1,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,LOW_RIGIDITY,Q1,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q1,,True
+WARN,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=0.00%,BUNDLE,,Q1,,True
+PASS,Q1_S02_NO_SENSITIVITY,Q1-S-02: au moins un scenario non-BASE montre une sensibilite observable.,BUNDLE,,Q1,,True

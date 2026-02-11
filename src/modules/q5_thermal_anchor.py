@@ -21,6 +21,27 @@ Q5_PARAMS = [
     "coal_vom_eur_mwh",
 ]
 
+ANCHOR_TECH_DEFAULTS = {
+    "CCGT": {
+        "efficiency": THERMAL_DEFAULTS["CCGT"]["efficiency"],
+        "emission_factor_t_per_mwh_th": THERMAL_DEFAULTS["CCGT"]["emission_factor_t_per_mwh_th"],
+        "vom_eur_mwh": THERMAL_DEFAULTS["CCGT"]["vom_eur_mwh"],
+        "fuel_multiplier_vs_gas": 1.0,
+    },
+    "COAL": {
+        "efficiency": THERMAL_DEFAULTS["COAL"]["efficiency"],
+        "emission_factor_t_per_mwh_th": THERMAL_DEFAULTS["COAL"]["emission_factor_t_per_mwh_th"],
+        "vom_eur_mwh": THERMAL_DEFAULTS["COAL"]["vom_eur_mwh"],
+        "fuel_multiplier_vs_gas": 0.55,
+    },
+    "LIGNITE": {
+        "efficiency": 0.35,
+        "emission_factor_t_per_mwh_th": 0.41,
+        "vom_eur_mwh": 5.0,
+        "fuel_multiplier_vs_gas": 0.35,
+    },
+}
+
 
 def load_commodity_daily(path: str = "data/external/commodity_prices_daily.csv") -> pd.DataFrame | None:
     p = Path(path)
@@ -35,40 +56,6 @@ def load_commodity_daily(path: str = "data/external/commodity_prices_daily.csv")
     return df
 
 
-def _tech_params(assumptions_df: pd.DataFrame, marginal_tech: str) -> tuple[float, float, float]:
-    params = {
-        str(r["param_name"]): float(r["param_value"])
-        for _, r in assumptions_df[assumptions_df["param_name"].isin(Q5_PARAMS)].iterrows()
-    }
-    tech = marginal_tech.upper()
-    if tech == "CCGT":
-        eff = float(params.get("ccgt_efficiency", THERMAL_DEFAULTS["CCGT"]["efficiency"]))
-        ef = float(params.get("ccgt_ef_t_per_mwh_th", THERMAL_DEFAULTS["CCGT"]["emission_factor_t_per_mwh_th"]))
-        vom = float(params.get("ccgt_vom_eur_mwh", THERMAL_DEFAULTS["CCGT"]["vom_eur_mwh"]))
-    else:
-        eff = float(params.get("coal_efficiency", THERMAL_DEFAULTS["COAL"]["efficiency"]))
-        ef = float(params.get("coal_ef_t_per_mwh_th", THERMAL_DEFAULTS["COAL"]["emission_factor_t_per_mwh_th"]))
-        vom = float(params.get("coal_vom_eur_mwh", THERMAL_DEFAULTS["COAL"]["vom_eur_mwh"]))
-    return eff, ef, vom
-
-
-def _co2_required(
-    ttl_target: float,
-    alpha: float,
-    base_q95_without_co2: float,
-    dco2: float,
-) -> float:
-    if not (np.isfinite(ttl_target) and np.isfinite(alpha) and np.isfinite(base_q95_without_co2) and dco2 > 0):
-        return np.nan
-    return (ttl_target - alpha - base_q95_without_co2) / dco2
-
-
-def _co2_required_non_negative(value: float) -> float:
-    if not np.isfinite(value):
-        return np.nan
-    return max(0.0, float(value))
-
-
 def _safe_float(value: Any, default: float = np.nan) -> float:
     try:
         out = float(value)
@@ -77,20 +64,99 @@ def _safe_float(value: Any, default: float = np.nan) -> float:
     return out if np.isfinite(out) else float(default)
 
 
-def _ttl_regression_estimate(cd: pd.DataFrame, tca_q95: float) -> float:
-    if cd is None or cd.empty or not np.isfinite(tca_q95):
-        return np.nan
-    x = pd.to_numeric(cd.get("tca_eur_mwh"), errors="coerce").to_numpy(dtype=float)
-    y = pd.to_numeric(cd.get("price_da_eur_mwh"), errors="coerce").to_numpy(dtype=float)
-    mask = np.isfinite(x) & np.isfinite(y)
-    if int(mask.sum()) < 5:
-        return np.nan
-    x = x[mask]
-    y = y[mask]
-    if float(np.nanstd(x)) <= 1e-9:
-        return np.nan
-    slope, intercept = np.polyfit(x, y, deg=1)
-    return float(intercept + slope * tca_q95)
+def _tech_params(assumptions_df: pd.DataFrame, tech: str) -> tuple[float, float, float, float]:
+    params = {
+        str(r["param_name"]): float(r["param_value"])
+        for _, r in assumptions_df[assumptions_df["param_name"].isin(Q5_PARAMS)].iterrows()
+    }
+    t = str(tech).upper()
+    base = ANCHOR_TECH_DEFAULTS.get(t, ANCHOR_TECH_DEFAULTS["CCGT"])
+    if t == "CCGT":
+        eff = float(params.get("ccgt_efficiency", base["efficiency"]))
+        ef = float(params.get("ccgt_ef_t_per_mwh_th", base["emission_factor_t_per_mwh_th"]))
+        vom = float(params.get("ccgt_vom_eur_mwh", base["vom_eur_mwh"]))
+        mult = float(base["fuel_multiplier_vs_gas"])
+    elif t == "COAL":
+        eff = float(params.get("coal_efficiency", base["efficiency"]))
+        ef = float(params.get("coal_ef_t_per_mwh_th", base["emission_factor_t_per_mwh_th"]))
+        vom = float(params.get("coal_vom_eur_mwh", base["vom_eur_mwh"]))
+        mult = float(base["fuel_multiplier_vs_gas"])
+    else:
+        eff = float(base["efficiency"])
+        ef = float(base["emission_factor_t_per_mwh_th"])
+        vom = float(base["vom_eur_mwh"])
+        mult = float(base["fuel_multiplier_vs_gas"])
+    return eff, ef, vom, mult
+
+
+def _build_cd_masks(h: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    if "nrl_mw" in h.columns and pd.to_numeric(h["nrl_mw"], errors="coerce").notna().sum() >= 20:
+        nrl = pd.to_numeric(h["nrl_mw"], errors="coerce")
+        pos = nrl[nrl >= 0]
+        if pos.empty:
+            cd = pd.Series(False, index=h.index)
+            d = pd.Series(False, index=h.index)
+        else:
+            thr_d = float(pos.quantile(0.90))
+            cd = nrl >= 0
+            d = nrl >= thr_d
+        return cd.fillna(False), d.fillna(False)
+    regime_col = "regime" if "regime" in h.columns else ("regime_phys" if "regime_phys" in h.columns else None)
+    if regime_col is None:
+        cd = pd.Series(True, index=h.index)
+        d = pd.Series(False, index=h.index)
+        return cd, d
+    reg = h[regime_col].astype(str)
+    return reg.isin(["C", "D"]), reg.eq("D")
+
+
+def _distributional_error(price_cd: pd.Series, anchor_cd: pd.Series) -> tuple[float, float, float]:
+    p = pd.to_numeric(price_cd, errors="coerce").dropna()
+    a = pd.to_numeric(anchor_cd, errors="coerce").dropna()
+    idx = p.index.intersection(a.index)
+    if len(idx) < 24:
+        return np.nan, np.nan, np.nan
+    p90 = float(p.loc[idx].quantile(0.90))
+    p95 = float(p.loc[idx].quantile(0.95))
+    a90 = float(a.loc[idx].quantile(0.90))
+    a95 = float(a.loc[idx].quantile(0.95))
+    err = 0.5 * abs(p90 - a90) + 0.5 * abs(p95 - a95)
+    return err, p90 - a90, p95 - a95
+
+
+def _pick_anchor_tech(
+    assumptions_df: pd.DataFrame,
+    h_cd: pd.DataFrame,
+    override: str | None,
+) -> tuple[str, pd.Series, dict[str, float]]:
+    if override:
+        tech = str(override).upper()
+        eff, ef, vom, mult = _tech_params(assumptions_df, tech)
+        fuel_proxy = pd.to_numeric(h_cd["gas_price_eur_mwh_th"], errors="coerce") * mult
+        anchor = fuel_proxy / eff + pd.to_numeric(h_cd["co2_price_eur_t"], errors="coerce") * (ef / eff) + vom
+        return tech, anchor, {"efficiency": eff, "ef": ef, "vom": vom, "multiplier": mult}
+
+    best_tech = "CCGT"
+    best_anchor = pd.Series(dtype=float)
+    best_score = np.inf
+    best_meta: dict[str, float] = {}
+    for tech in ["CCGT", "COAL", "LIGNITE"]:
+        eff, ef, vom, mult = _tech_params(assumptions_df, tech)
+        fuel_proxy = pd.to_numeric(h_cd["gas_price_eur_mwh_th"], errors="coerce") * mult
+        anchor = fuel_proxy / eff + pd.to_numeric(h_cd["co2_price_eur_t"], errors="coerce") * (ef / eff) + vom
+        err, _, _ = _distributional_error(pd.to_numeric(h_cd["price_da_eur_mwh"], errors="coerce"), anchor)
+        score = abs(err) if np.isfinite(err) else np.inf
+        if score < best_score:
+            best_score = score
+            best_tech = tech
+            best_anchor = anchor
+            best_meta = {"efficiency": eff, "ef": ef, "vom": vom, "multiplier": mult}
+    if best_anchor.empty:
+        eff, ef, vom, mult = _tech_params(assumptions_df, "CCGT")
+        fuel_proxy = pd.to_numeric(h_cd["gas_price_eur_mwh_th"], errors="coerce") * mult
+        best_anchor = fuel_proxy / eff + pd.to_numeric(h_cd["co2_price_eur_t"], errors="coerce") * (ef / eff) + vom
+        best_meta = {"efficiency": eff, "ef": ef, "vom": vom, "multiplier": mult}
+    return best_tech, best_anchor, best_meta
 
 
 def run_q5(
@@ -106,42 +172,22 @@ def run_q5(
     ttl_physical_margin_eur_mwh: float | None = None,
 ) -> ModuleResult:
     country = str(selection.get("country", ""))
-    marginal_tech = str(selection.get("marginal_tech", "CCGT")).upper()
-    eff, ef, vom = _tech_params(assumptions_df, marginal_tech)
-    method = str(ttl_method or selection.get("ttl_method", "physical")).strip().lower()
-    if method not in {"physical", "regression"}:
-        method = "physical"
-    margin = _safe_float(
-        ttl_physical_margin_eur_mwh if ttl_physical_margin_eur_mwh is not None else selection.get("ttl_physical_margin_eur_mwh", 0.0),
-        0.0,
-    )
+    override_tech = str(selection.get("marginal_tech", "")).upper().strip() or None
 
     if commodity_daily is None:
         commodity_daily = load_commodity_daily()
-
     if commodity_daily is None or commodity_daily.empty:
         checks = [{"status": "WARN", "code": "Q5_MISSING_COMMODITIES", "message": "Serie commodites absente: Q5 desactive."}]
         empty = pd.DataFrame(
             [
                 {
                     "country": country,
-                    "year_range_used": "",
-                    "marginal_tech": marginal_tech,
+                    "chosen_anchor_tech": "",
                     "ttl_obs": np.nan,
-                    "ttl_obs_price_cd": np.nan,
-                    "ttl_physical": np.nan,
-                    "ttl_regression": np.nan,
-                    "ttl_method": method,
-                    "tca_q95": np.nan,
-                    "alpha": np.nan,
-                    "alpha_effective": np.nan,
-                    "corr_cd": np.nan,
-                    "anchor_confidence": np.nan,
-                    "dTCA_dCO2": ef / eff if eff > 0 else np.nan,
-                    "dTCA_dGas": 1 / eff if eff > 0 else np.nan,
-                    "ttl_target": ttl_target_eur_mwh,
-                    "co2_required_base": np.nan,
-                    "co2_required_gas_override": np.nan,
+                    "ttl_anchor": np.nan,
+                    "anchor_distribution_error_p90_p95": np.nan,
+                    "required_co2_eur_t": np.nan,
+                    "required_gas_eur_mwh_th": np.nan,
                     "co2_required_base_non_negative": np.nan,
                     "co2_required_gas_override_non_negative": np.nan,
                     "warnings_quality": "missing_commodities",
@@ -165,7 +211,7 @@ def run_q5(
         )
 
     c = commodity_daily.copy()
-    c["date"] = pd.to_datetime(c["date"]).dt.tz_localize(None)
+    c["date"] = pd.to_datetime(c["date"], errors="coerce").dt.tz_localize(None)
     h = hourly_df.copy()
     if not isinstance(h.index, pd.DatetimeIndex):
         if "timestamp_utc" in h.columns:
@@ -178,7 +224,6 @@ def run_q5(
 
     h["date"] = h.index.tz_convert("UTC").tz_localize(None).floor("D")
     h = h.merge(c[["date", "gas_price_eur_mwh_th", "co2_price_eur_t"]], on="date", how="left")
-
     if gas_override_eur_mwh_th is not None:
         h["gas_price_eur_mwh_th"] = float(gas_override_eur_mwh_th)
     if co2_override_eur_t is not None:
@@ -187,39 +232,46 @@ def run_q5(
     h["gas_price_eur_mwh_th"] = pd.to_numeric(h["gas_price_eur_mwh_th"], errors="coerce")
     h["co2_price_eur_t"] = pd.to_numeric(h["co2_price_eur_t"], errors="coerce")
     h["price_da_eur_mwh"] = pd.to_numeric(h["price_da_eur_mwh"], errors="coerce")
-    h["tca_eur_mwh"] = h["gas_price_eur_mwh_th"] / eff + h["co2_price_eur_t"] * (ef / eff) + vom
 
-    regime_col = "regime" if "regime" in h.columns else ("regime_phys" if "regime_phys" in h.columns else None)
-    if regime_col is None:
-        h["_regime_tmp"] = "C"
-        regime_col = "_regime_tmp"
-    cd = h[h[regime_col].isin(["C", "D"]) & h["price_da_eur_mwh"].notna() & h["tca_eur_mwh"].notna()].copy()
-    ttl_obs_price_cd = float(cd["price_da_eur_mwh"].quantile(0.95)) if not cd.empty else np.nan
-    tca_q95 = float(cd["tca_eur_mwh"].quantile(0.95)) if not cd.empty else np.nan
-    ttl_physical = tca_q95 + margin if np.isfinite(tca_q95) else np.nan
-    ttl_regression = _ttl_regression_estimate(cd, tca_q95)
-    if method == "physical":
-        ttl_effective = ttl_physical
-        alpha_effective = margin if np.isfinite(margin) else np.nan
-    else:
-        ttl_effective = ttl_regression if np.isfinite(ttl_regression) else ttl_obs_price_cd
-        alpha_effective = ttl_effective - tca_q95 if np.isfinite(ttl_effective) and np.isfinite(tca_q95) else np.nan
-    alpha = ttl_obs_price_cd - tca_q95 if np.isfinite(ttl_obs_price_cd) and np.isfinite(tca_q95) else np.nan
-    corr_cd = float(cd["price_da_eur_mwh"].corr(cd["tca_eur_mwh"])) if len(cd) >= 3 else np.nan
+    cd_mask, d_mask = _build_cd_masks(h)
+    h_cd = h[cd_mask & h["price_da_eur_mwh"].notna() & h["gas_price_eur_mwh_th"].notna() & h["co2_price_eur_t"].notna()].copy()
 
-    dgas = 1.0 / eff if eff > 0 else np.nan
+    chosen_tech, anchor_cd, tech_meta = _pick_anchor_tech(assumptions_df, h_cd, override=override_tech)
+    eff = float(tech_meta["efficiency"])
+    ef = float(tech_meta["ef"])
+    vom = float(tech_meta["vom"])
+    fuel_mult = float(tech_meta["multiplier"])
+
+    h_cd["ttl_anchor_eur_mwh"] = anchor_cd
+    ttl_obs = float(pd.to_numeric(h_cd["price_da_eur_mwh"], errors="coerce").quantile(0.95)) if not h_cd.empty else np.nan
+    ttl_anchor = float(pd.to_numeric(h_cd["ttl_anchor_eur_mwh"], errors="coerce").quantile(0.95)) if not h_cd.empty else np.nan
+    ttl_target = _safe_float(ttl_target_eur_mwh, ttl_obs if np.isfinite(ttl_obs) else np.nan)
+    alpha = ttl_obs - ttl_anchor if np.isfinite(ttl_obs) and np.isfinite(ttl_anchor) else np.nan
+    corr_cd = float(pd.to_numeric(h_cd["price_da_eur_mwh"], errors="coerce").corr(pd.to_numeric(h_cd["ttl_anchor_eur_mwh"], errors="coerce"))) if len(h_cd) >= 24 else np.nan
+    dist_error, p90_err, p95_err = _distributional_error(h_cd["price_da_eur_mwh"], h_cd["ttl_anchor_eur_mwh"])
+
     dco2 = ef / eff if eff > 0 else np.nan
+    dgas = fuel_mult / eff if eff > 0 else np.nan
 
-    target = float(ttl_effective) if ttl_target_eur_mwh is None else float(ttl_target_eur_mwh)
-    base_q95_without_co2 = float((cd["gas_price_eur_mwh_th"] / eff + vom).quantile(0.95)) if not cd.empty else np.nan
-    co2_required_base = _co2_required(target, alpha_effective, base_q95_without_co2, dco2)
+    fuel_term_p95 = float((pd.to_numeric(h_cd["gas_price_eur_mwh_th"], errors="coerce") * fuel_mult / eff).quantile(0.95)) if not h_cd.empty else np.nan
+    co2_term_p95 = float((pd.to_numeric(h_cd["co2_price_eur_t"], errors="coerce") * (ef / eff)).quantile(0.95)) if not h_cd.empty else np.nan
+    anchor_status = "ok"
+    if np.isfinite(ttl_obs) and np.isfinite(ttl_target) and ttl_obs >= ttl_target:
+        required_co2 = 0.0
+        required_gas = 0.0
+        anchor_status = "already_above_target"
+    else:
+        required_co2 = (ttl_target - fuel_term_p95 - vom) / dco2 if np.isfinite(ttl_target) and np.isfinite(fuel_term_p95) and np.isfinite(dco2) and dco2 > 0 else np.nan
+        required_gas = (ttl_target - co2_term_p95 - vom) / dgas if np.isfinite(ttl_target) and np.isfinite(co2_term_p95) and np.isfinite(dgas) and dgas > 0 else np.nan
+        required_co2 = max(0.0, float(required_co2)) if np.isfinite(required_co2) else np.nan
+        required_gas = max(0.0, float(required_gas)) if np.isfinite(required_gas) else np.nan
 
-    co2_required_gas_override = np.nan
-    if gas_override_eur_mwh_th is not None and not cd.empty:
-        base_override = float((pd.Series(float(gas_override_eur_mwh_th), index=cd.index) / eff + vom).quantile(0.95))
-        co2_required_gas_override = _co2_required(target, alpha_effective, base_override, dco2)
-    co2_required_base_non_negative = _co2_required_non_negative(co2_required_base)
-    co2_required_gas_override_non_negative = _co2_required_non_negative(co2_required_gas_override)
+    thermal_share = np.nan
+    thermal_cols = [c for c in ["gen_gas_mw", "gen_coal_mw", "gen_lignite_mw", "gen_oil_mw", "gen_other_mw"] if c in h.columns]
+    if thermal_cols and "gen_total_mw" in h.columns:
+        thermal = pd.to_numeric(h[thermal_cols].sum(axis=1), errors="coerce")
+        gen_total = pd.to_numeric(h["gen_total_mw"], errors="coerce")
+        thermal_share = float((thermal / gen_total.replace(0, np.nan)).mean())
 
     checks: list[dict[str, str]] = []
     warnings: list[str] = []
@@ -227,31 +279,21 @@ def run_q5(
         checks.append({"status": "FAIL", "code": "Q5_DCO2_SIGN", "message": "dTCA/dCO2 doit etre strictement positif."})
     if not (np.isfinite(dgas) and dgas > 0):
         checks.append({"status": "FAIL", "code": "Q5_DGAS_SIGN", "message": "dTCA/dGas doit etre strictement positif."})
-    if np.isfinite(corr_cd) and corr_cd < 0.2:
-        checks.append({"status": "WARN", "code": "Q5_LOW_CORR_CD", "message": "Relation prix-ancre faible sur regimes C/D (corr<0.2)."})
-    if np.isfinite(alpha) and alpha < 0.0:
-        msg = "Alpha negatif: ancre thermique potentiellement fragile sans contexte."
-        checks.append({"status": "WARN", "code": "Q5_ALPHA_NEG", "message": msg})
-        warnings.append(msg)
-    if method == "regression" and not np.isfinite(ttl_regression):
-        checks.append({"status": "WARN", "code": "Q5_REGRESSION_UNSTABLE", "message": "Regression TTL instable; fallback TTL observe applique."})
-        warnings.append("Regression TTL instable; fallback observe applique.")
-    if np.isfinite(co2_required_base) and co2_required_base < 0:
+    if np.isfinite(alpha) and alpha < 0.0 and anchor_status == "already_above_target":
+        checks.append({"status": "INFO", "code": "Q5_ALPHA_NEGATIVE", "message": "Alpha negatif mais TTL deja au-dessus de la cible (lecture normale)."})
+    elif np.isfinite(alpha) and alpha < 0.0:
+        checks.append({"status": "WARN", "code": "Q5_ALPHA_NEGATIVE", "message": "Alpha negatif hors cas already_above_target."})
+    if np.isfinite(dist_error):
+        bad_fit = dist_error > 35.0 and np.isfinite(thermal_share) and thermal_share >= 0.20
         checks.append(
             {
-                "status": "INFO",
-                "code": "Q5_CO2_TARGET_ALREADY_BELOW_BASELINE",
-                "message": "CO2 requis brut negatif: cible TTL deja atteinte sans CO2 additionnel.",
+                "status": "WARN" if bad_fit else "INFO",
+                "code": "Q5_DISTRIBUTIONAL_FIT",
+                "message": f"Erreur distributionnelle p90/p95={dist_error:.1f} EUR/MWh ({'a revoir' if bad_fit else 'acceptable'}).",
             }
         )
-    anchor_confidence = 1.0
-    if np.isfinite(alpha) and alpha < 0.0:
-        anchor_confidence -= 0.2
     if np.isfinite(corr_cd) and corr_cd < 0.2:
-        anchor_confidence -= 0.2
-    if method == "regression" and not np.isfinite(ttl_regression):
-        anchor_confidence -= 0.2
-    anchor_confidence = float(np.clip(anchor_confidence, 0.0, 1.0))
+        checks.append({"status": "INFO", "code": "Q5_LOW_CORR_CD", "message": "Corr horaire faible mais non bloquante (fit distributionnel prioritaire)."})
     if not checks:
         checks.append({"status": "PASS", "code": "Q5_PASS", "message": "Q5 checks passes."})
 
@@ -260,32 +302,41 @@ def run_q5(
             {
                 "country": country,
                 "year_range_used": f"{int(h['year'].min())}-{int(h['year'].max())}" if "year" in h.columns and h["year"].notna().any() else "",
-                "marginal_tech": marginal_tech,
-                "ttl_obs": ttl_effective,
-                "ttl_obs_price_cd": ttl_obs_price_cd,
-                "ttl_physical": ttl_physical,
-                "ttl_regression": ttl_regression,
-                "ttl_method": method,
-                "tca_q95": tca_q95,
+                "marginal_tech": chosen_tech,
+                "chosen_anchor_tech": chosen_tech,
+                "ttl_obs": ttl_obs,
+                "ttl_obs_price_cd": ttl_obs,
+                "ttl_anchor": ttl_anchor,
+                "ttl_physical": ttl_anchor,
+                "ttl_regression": np.nan,
+                "ttl_method": "anchor_distributional",
+                "tca_q95": ttl_anchor,
                 "alpha": alpha,
-                "alpha_effective": alpha_effective,
+                "alpha_effective": alpha,
                 "corr_cd": corr_cd,
-                "anchor_confidence": anchor_confidence,
+                "anchor_confidence": float(np.clip(1.0 - (_safe_float(dist_error, 0.0) / 80.0), 0.0, 1.0)) if np.isfinite(dist_error) else np.nan,
+                "anchor_distribution_error_p90_p95": dist_error,
+                "anchor_error_p90": p90_err,
+                "anchor_error_p95": p95_err,
+                "anchor_status": anchor_status,
                 "dTCA_dCO2": dco2,
                 "dTCA_dGas": dgas,
-                "ttl_target": target,
-                "co2_required_base": co2_required_base,
-                "co2_required_gas_override": co2_required_gas_override,
-                "co2_required_base_non_negative": co2_required_base_non_negative,
-                "co2_required_gas_override_non_negative": co2_required_gas_override_non_negative,
+                "ttl_target": ttl_target,
+                "required_co2_eur_t": required_co2,
+                "required_gas_eur_mwh_th": required_gas,
+                "co2_required_base": required_co2,
+                "co2_required_gas_override": np.nan if gas_override_eur_mwh_th is None else required_co2,
+                "co2_required_base_non_negative": required_co2 if np.isfinite(required_co2) else np.nan,
+                "co2_required_gas_override_non_negative": required_co2 if gas_override_eur_mwh_th is not None and np.isfinite(required_co2) else np.nan,
                 "warnings_quality": "",
             }
         ]
     )
 
     narrative = (
-        "Q5 calcule une ancre thermique (TCA) sur heures hors surplus (C/D), "
-        "mesure son alignement au TTL observe, et derive un ordre de grandeur de CO2 requis pour une cible TTL."
+        "Q5 ancre TTL a partir d'un cout thermique explicite (fuel/eta + CO2*EF/eta + VOM), "
+        "selectionne la techno marginale la plus explicative via fit distributionnel (p90/p95), "
+        "et calcule required_co2/required_gas sans valeurs negatives."
     )
 
     return ModuleResult(
@@ -294,10 +345,10 @@ def run_q5(
         selection=selection,
         assumptions_used=assumptions_subset(assumptions_df, Q5_PARAMS),
         kpis={
-            "ttl_obs": ttl_effective,
-            "ttl_method": method,
+            "ttl_obs": ttl_obs,
+            "chosen_anchor_tech": chosen_tech,
             "corr_cd": corr_cd,
-            "anchor_confidence": anchor_confidence,
+            "anchor_distribution_error_p90_p95": dist_error,
             "dTCA_dCO2": dco2,
             "dTCA_dGas": dgas,
         },
@@ -310,3 +361,4 @@ def run_q5(
         scenario_id=selection.get("scenario_id"),
         horizon_year=selection.get("horizon_year"),
     )
+

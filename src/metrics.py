@@ -46,6 +46,7 @@ from src.constants import (
     COL_YEAR,
     PRICE_LOW_THRESHOLD_DEFAULT,
 )
+from src.core.definitions import compute_balance_metrics, compute_scope_coverage_lowload, sanity_check_core_definitions
 from src.time_utils import expected_hours, local_peak_mask
 
 
@@ -138,25 +139,40 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
     h_below_5 = int((price <= 5).sum())
     days_spread_gt50, avg_daily_spread, max_daily_spread = _days_spread(price, timezone)
 
-    surplus_energy = float(pd.to_numeric(df[COL_SURPLUS], errors="coerce").fillna(0).sum())
-    surplus_absorbed = float(pd.to_numeric(df[COL_SURPLUS_ABSORBED], errors="coerce").fillna(0).sum())
-    surplus_unabs = float(pd.to_numeric(df[COL_SURPLUS_UNABS], errors="coerce").fillna(0).sum())
+    surplus_energy = float(pd.to_numeric(df[COL_SURPLUS], errors="coerce").fillna(0).clip(lower=0.0).sum())
+    surplus_absorbed = float(pd.to_numeric(df[COL_SURPLUS_ABSORBED], errors="coerce").fillna(0).clip(lower=0.0).sum())
+    surplus_unabs = float(pd.to_numeric(df[COL_SURPLUS_UNABS], errors="coerce").fillna(0).clip(lower=0.0).sum())
 
     load_energy = float(pd.to_numeric(df[COL_LOAD_NET], errors="coerce").fillna(0).sum())
-    gen_primary = float(pd.to_numeric(df[COL_GEN_PRIMARY], errors="coerce").fillna(0).sum())
-    gen_total = float(pd.to_numeric(df[COL_GEN_TOTAL], errors="coerce").fillna(0).sum())
+    gen_primary_series = pd.to_numeric(df[COL_GEN_PRIMARY], errors="coerce") if COL_GEN_PRIMARY in df.columns else pd.Series(0.0, index=df.index, dtype=float)
+    if gen_primary_series.notna().sum() == 0:
+        gen_primary_series = pd.to_numeric(df[COL_GEN_TOTAL], errors="coerce")
+    gen_primary = float(gen_primary_series.fillna(0.0).clip(lower=0.0).sum())
+    gen_total = float(pd.to_numeric(df[COL_GEN_TOTAL], errors="coerce").fillna(0).clip(lower=0.0).sum())
 
     sr_load = _safe_div(surplus_energy, load_energy)
     sr_gen = _safe_div(surplus_energy, gen_primary)
+    if np.isfinite(sr_gen):
+        sr_gen = clip01(sr_gen)
 
-    far_raw = float("nan") if surplus_energy <= 0 else _safe_div(surplus_absorbed, surplus_energy)
-    far = clip01(far_raw)
+    if surplus_energy <= 0:
+        far = 1.0
+    else:
+        far = clip01(_safe_div(surplus_absorbed, surplus_energy))
 
-    p10_mr = _percentile(df[COL_GEN_MUST_RUN], 0.10)
-    p10_load = _percentile(df[COL_LOAD_NET], 0.10)
+    balance = compute_balance_metrics(
+        load_mw=df[COL_LOAD_NET],
+        must_run_mw=df[COL_GEN_MUST_RUN],
+        surplus_mw=df[COL_SURPLUS],
+        absorbed_mw=df[COL_SURPLUS_ABSORBED],
+        gen_primary_mw=gen_primary_series,
+    )
+
+    p10_mr = balance.p10_must_run_mw
+    p10_load = balance.p10_load_mw
     p50_mr = _percentile(df[COL_GEN_MUST_RUN], 0.50)
     p50_load = _percentile(df[COL_LOAD_NET], 0.50)
-    ir_p10 = _safe_div(p10_mr, p10_load)
+    ir_p10 = balance.ir
     ir_p10_excess = float(ir_p10 - 1.0) if np.isfinite(ir_p10) else float("nan")
     ir_mean = _safe_div(float(pd.to_numeric(df[COL_GEN_MUST_RUN], errors="coerce").mean()), float(load.mean()))
 
@@ -180,6 +196,12 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         nrl_price_corr = float("nan")
 
     completeness = float((~df[[COL_Q_MISSING_PRICE, COL_Q_MISSING_LOAD, COL_Q_MISSING_GENERATION]].any(axis=1)).mean())
+    must_run_scope_coverage = compute_scope_coverage_lowload(
+        load_mw=df[COL_LOAD_NET],
+        must_run_mw=df[COL_GEN_MUST_RUN],
+        total_generation_mw=df[COL_GEN_TOTAL],
+    )
+    core_sanity_issues = sanity_check_core_definitions(df, far_energy=far, sr_energy=sr_gen, ir=ir_p10)
 
     row = {
         COL_COUNTRY: str(df[COL_COUNTRY].iloc[0]),
@@ -250,6 +272,9 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "p50_must_run_mw": p50_mr,
         "ir_p10_excess": ir_p10_excess,
         "ir_mean": ir_mean,
+        "must_run_scope_coverage": must_run_scope_coverage,
+        "core_sanity_issue_count": int(len(core_sanity_issues)),
+        "core_sanity_issues": "; ".join(core_sanity_issues),
         "ttl_price_based_eur_mwh": ttl,
         "ttl_eur_mwh": ttl,
         "tca_ccgt_median_eur_mwh": float("nan"),

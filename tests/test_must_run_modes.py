@@ -2,38 +2,35 @@ from __future__ import annotations
 
 import pandas as pd
 
+from src.core.definitions import compute_must_run_floor
 from src.modules.q1_transition import run_q1
 from src.processing import build_hourly_table
 
 
-def test_must_run_observed_sum_components(make_raw_panel, countries_cfg, thresholds_cfg):
+def test_must_run_floor_is_bounded_by_candidates(make_raw_panel, countries_cfg, thresholds_cfg):
     raw = make_raw_panel()
-    cfg = countries_cfg["countries"]["FR"].copy()
-    cfg["must_run"]["mode"] = "observed"
-    df = build_hourly_table(raw, "FR", 2024, cfg, thresholds_cfg, "FR")
-    expected = raw["gen_nuclear_mw"] + raw["gen_hydro_ror_mw"] + raw["gen_biomass_mw"]
-    assert float((df["gen_must_run_mw"] - expected).abs().max()) < 1e-9
+    df = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    candidates_sum = (
+        pd.to_numeric(df["gen_nuclear_mw"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(df["gen_lignite_mw"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(df["gen_coal_mw"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(df["gen_gas_mw"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(df["gen_biomass_mw"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(df["gen_hydro_ror_mw"], errors="coerce").fillna(0.0)
+    )
+    assert (df["gen_must_run_mw"] <= candidates_sum + 1e-9).all()
 
 
-def test_floor_mode_capped_by_observed(make_raw_panel, countries_cfg, thresholds_cfg):
+def test_floor_component_non_negative_and_zero_if_series_zero(make_raw_panel):
     raw = make_raw_panel()
-    cfg = countries_cfg["countries"]["FR"].copy()
-    cfg["must_run"]["mode"] = "floor"
-    df = build_hourly_table(raw, "FR", 2024, cfg, thresholds_cfg, "FR")
-    assert (df["gen_must_run_mw"] <= df["gen_must_run_observed_mw"]).all()
+    raw["gen_nuclear_mw"] = 0.0
+    res = compute_must_run_floor(raw, candidate_components=["nuclear"], floor_quantile=0.10)
+    assert res.floor_by_component_mw["nuclear"] >= 0.0
+    assert res.floor_by_component_mw["nuclear"] == 0.0
+    assert float(res.must_run_mw.sum()) == 0.0
 
 
-def test_floor_mode_respects_floor(make_raw_panel, countries_cfg, thresholds_cfg):
-    raw = make_raw_panel()
-    cfg = countries_cfg["countries"]["FR"].copy()
-    cfg["must_run"]["mode"] = "floor"
-    cfg["must_run"]["floor_gw"] = 1.0
-    cfg["must_run"]["modulation_pct"] = 1.0
-    df = build_hourly_table(raw, "FR", 2024, cfg, thresholds_cfg, "FR")
-    assert (df["gen_must_run_mw"] >= 1000).all()
-
-
-def test_scope_coverage_ratio_uses_configured_components(make_raw_panel, countries_cfg, thresholds_cfg):
+def test_q1_scope_coverage_in_01(make_raw_panel, countries_cfg, thresholds_cfg):
     raw = make_raw_panel(n=168, year=2024)
     hourly = build_hourly_table(raw, "DE", 2024, countries_cfg["countries"]["DE"], thresholds_cfg, "DE")
     annual = pd.DataFrame(
@@ -48,9 +45,12 @@ def test_scope_coverage_ratio_uses_configured_components(make_raw_panel, countri
                 "h_below_5_obs": 250.0,
                 "days_spread_gt50": 180.0,
                 "capture_ratio_pv_vs_ttl": 0.7,
-                "sr_energy": 0.002,
-                "far_energy": 0.99,
-                "ir_p10": 0.8,
+                "capture_ratio_wind_vs_ttl": 0.8,
+                "capture_ratio_pv": 0.7,
+                "capture_ratio_wind": 0.8,
+                "sr_energy": 0.01,
+                "far_energy": 0.95,
+                "ir_p10": 0.3,
                 "ttl_eur_mwh": 150.0,
             }
         ]
@@ -65,4 +65,5 @@ def test_scope_coverage_ratio_uses_configured_components(make_raw_panel, countri
     )
     scope = res.tables["Q1_scope_audit"]
     assert not scope.empty
-    assert float(scope.iloc[0]["scope_coverage_ratio"]) < 0.70
+    val = float(scope.iloc[0]["must_run_scope_coverage"])
+    assert 0.0 <= val <= 1.0

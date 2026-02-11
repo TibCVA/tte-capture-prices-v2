@@ -311,6 +311,7 @@ def _project_raw_panel(
     target_total = max(target_raw_total, mr_floor)
     if mr_cap is not None and mr_cap > 0:
         target_total = min(target_total, mr_cap)
+    must_run_scale = float(max(0.0, _safe_float(row, "must_run_scale_scenario", 1.0)))
 
     means = np.array(
         [
@@ -321,12 +322,20 @@ def _project_raw_panel(
         dtype=float,
     )
     if np.sum(means) <= 0:
-        means = np.array([target_nuc, target_bio, target_ror], dtype=float)
+        if target_total > 0:
+            means = np.array([1.0, 1.0, 1.0], dtype=float)
+        else:
+            means = np.array([target_nuc, target_bio, target_ror], dtype=float)
     shares = means / max(np.sum(means), 1e-9)
 
     out[COL_GEN_NUCLEAR] = _scaled_component_profile(nuc_ref, n, target_total * shares[0], floor_mean_mw=0.0)
     out[COL_GEN_BIOMASS] = _scaled_component_profile(bio_ref, n, target_total * shares[1], floor_mean_mw=0.0)
     out[COL_GEN_HYDRO_ROR] = _scaled_component_profile(ror_ref, n, target_total * shares[2], floor_mean_mw=0.0)
+    out["must_run_profile_override_mw"] = np.nan
+    out["must_run_scale_scenario"] = must_run_scale
+    if target_total <= 1e-9:
+        ref_profile = pd.to_numeric(ref_hourly.get("gen_must_run_mw"), errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        out["must_run_profile_override_mw"] = _repeat_to_length(ref_profile, n)
 
     ref_hydro_res = pd.to_numeric(ref_hourly.get(COL_GEN_HYDRO_RES, 0.0), errors="coerce").fillna(0.0).to_numpy(dtype=float)
     out[COL_GEN_HYDRO_RES] = _repeat_to_length(ref_hydro_res, n) * 0.9

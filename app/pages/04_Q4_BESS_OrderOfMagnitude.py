@@ -14,6 +14,7 @@ try:
         build_bundle_hash,
         country_year_selector,
         default_analysis_scenario_years,
+        load_annual_metrics,
         load_phase2_assumptions_table,
         run_question_bundle_cached,
     )
@@ -28,14 +29,17 @@ except Exception as exc:  # pragma: no cover
     available_phase2_years = _page_utils_unavailable  # type: ignore[assignment]
     country_year_selector = _page_utils_unavailable  # type: ignore[assignment]
     default_analysis_scenario_years = _page_utils_unavailable  # type: ignore[assignment]
+    load_annual_metrics = _page_utils_unavailable  # type: ignore[assignment]
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
 from app.ui_components import (
     guided_header,
     inject_theme,
+    render_data_quality_panel,
     render_hist_scen_comparison,
     render_interpretation,
     render_kpi_cards_styled,
+    render_livrables_panel,
     render_narrative_styled,
     render_plotly_styled,
     render_question_box,
@@ -120,6 +124,7 @@ def render() -> None:
     render_spec_table_collapsible(_spec_table())
 
     country_options = sorted(load_countries().get("countries", {}).keys())
+    annual = load_annual_metrics()
     default_country = "FR" if "FR" in country_options else (country_options[0] if country_options else "FR")
     year_options = list(range(2018, 2025))
 
@@ -244,10 +249,19 @@ def render() -> None:
     with tab_tech:
         st.markdown("## Checks & exports")
         show_checks_summary(bundle.checks)
+        render_data_quality_panel(
+            annual_df=annual,
+            countries=[str(c) for c in bundle.selection.get("countries", [])],
+            years=[int(y) for y in bundle.selection.get("years", [])],
+        )
+        render_livrables_panel(
+            run_id=bundle.run_id,
+            out_dir=payload["out_dir"],
+            hist_tables=list(bundle.hist_result.tables.keys()),
+            scenario_ids=sorted(bundle.scen_results.keys()),
+        )
         if bundle.warnings:
             st.warning(" | ".join(bundle.warnings))
-        st.markdown("### Exports")
-        st.code(payload["out_dir"])
 
     show_limitations(
         [

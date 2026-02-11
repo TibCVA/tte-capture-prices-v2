@@ -1,0 +1,8 @@
+country,reference_year,trend_window_years,status,stage3_ready_year,trend_h_negative,trend_capture_ratio_pv_vs_ttl,trend_h_negative_ols,trend_h_negative_ols_no_outliers,trend_capture_ols,trend_capture_ols_no_outliers,trend_points_n,inversion_k_demand,inversion_k_demand_status,inversion_r_mustrun,inversion_r_mustrun_status,inversion_f_flex,inversion_f_flex_status,additional_absorbed_needed_TWh_year,additional_sink_power_p95_mw,warnings_quality
+BE,2035,3,hors_scope_stage2,True,-4.0,0.0004324215225783,-4.0,-4.0,0.0004324215225783,0.0004324215225783,3,0.0,already_ready,0.0,already_ready,0.0,already_ready,0.0,-24.733491112323676,
+CZ,2035,3,hors_scope_stage2,False,0.0,-0.0022419835074986,0.0,0.0,-0.0022419835074986,-0.0022419835074986,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+DE,2035,3,hors_scope_stage2,False,0.0,0.000198638705756,0.0,0.0,0.000198638705756,0.000198638705756,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+ES,2035,3,hors_scope_stage2,False,0.0,-2.576312191393537e-05,0.0,0.0,-2.576312191393537e-05,-2.576312191393537e-05,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+FR,2035,3,hors_scope_stage2,False,0.0,-0.0014502512595691,0.0,0.0,-0.0014502512595691,-0.0014502512595691,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+IT_NORD,2035,3,hors_scope_stage2,False,0.0,-0.0013020239064616,0.0,0.0,-0.0013020239064616,-0.0013020239064616,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+NL,2035,3,hors_scope_stage2,False,0.0,-0.0002368046991964,0.0,0.0,-0.0002368046991964,-0.0002368046991964,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,

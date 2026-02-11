@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.constants import (
     COL_GEN_SOLAR,
+    COL_GEN_TOTAL,
     COL_LOAD_NET,
     COL_NRL,
     COL_PRICE_DA,
@@ -69,10 +70,48 @@ def build_validation_report(df: pd.DataFrame, annual_metrics: dict[str, Any]) ->
     far = annual_metrics.get("far_energy")
     if np.isfinite(far) and not (0.0 <= float(far) <= 1.0):
         findings.append(_finding("ERROR", "INV_FAR_RANGE", "FAR outside [0,1]", f"far={far}", "Verify absorbed/surplus energy totals."))
+    surplus_total = float(pd.to_numeric(df.get(COL_SURPLUS), errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    unabs_total = float(pd.to_numeric(df.get(COL_SURPLUS_UNABS), errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    if surplus_total <= 1e-9:
+        if np.isfinite(far) and abs(float(far) - 1.0) > 1e-6:
+            findings.append(
+                _finding(
+                    "ERROR",
+                    "INV_FAR_WHEN_ZERO_SURPLUS",
+                    "FAR must equal 1 when annual surplus is zero",
+                    f"far={far}, surplus_total={surplus_total}",
+                    "Set FAR=1 if surplus energy is zero.",
+                )
+            )
+        if unabs_total > 1e-6:
+            findings.append(
+                _finding(
+                    "ERROR",
+                    "INV_UNABS_WHEN_ZERO_SURPLUS",
+                    "Unabsorbed surplus must be zero when surplus is zero",
+                    f"surplus_unabsorbed_total={unabs_total}",
+                    "Recompute absorbed/unabsorbed identities.",
+                )
+            )
 
     sr = annual_metrics.get("sr_energy")
     if np.isfinite(sr) and not (0.0 <= float(sr) <= 1.0):
         findings.append(_finding("ERROR", "INV_SR_RANGE", "SR outside [0,1]", f"sr={sr}", "Verify denominator and surplus energy."))
+
+    mr = pd.to_numeric(df.get("gen_must_run_mw"), errors="coerce")
+    total_gen = pd.to_numeric(df.get(COL_GEN_TOTAL), errors="coerce")
+    if mr.notna().any() and total_gen.notna().any():
+        n_mr_gt_gen = int((mr - total_gen > 1e-6).sum())
+        if n_mr_gt_gen > 0:
+            findings.append(
+                _finding(
+                    "ERROR",
+                    "INV_MR_GT_GEN",
+                    "Must-run exceeds total generation on some hours",
+                    f"n_bad={n_mr_gt_gen}",
+                    "Review must-run floor and generation mapping.",
+                )
+            )
 
     # Reality checks
     neg_total = int((df[COL_PRICE_DA] < 0).sum())

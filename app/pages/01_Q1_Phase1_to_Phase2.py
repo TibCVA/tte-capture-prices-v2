@@ -39,10 +39,12 @@ from app.ui_components import (
     render_hist_scen_comparison,
     render_interpretation,
     render_kpi_cards_styled,
+    render_livrables_panel,
     render_narrative_styled,
     render_plotly_styled,
     render_question_box,
     render_robustness_panel,
+    render_data_quality_panel,
     render_spec_table_collapsible,
     render_status_banner,
     render_status_interpretation,
@@ -253,10 +255,20 @@ def render() -> None:
         if not ir_diag.empty:
             st.markdown("### Diagnostics IR")
             st.dataframe(ir_diag, use_container_width=True)
+        render_data_quality_panel(
+            annual_df=annual,
+            countries=[str(c) for c in bundle.selection.get("countries", [])],
+            years=[int(y) for y in bundle.selection.get("years", [])],
+            extra_country_year_df=scope_audit if not scope_audit.empty else None,
+        )
+        render_livrables_panel(
+            run_id=bundle.run_id,
+            out_dir=payload["out_dir"],
+            hist_tables=list(bundle.hist_result.tables.keys()),
+            scenario_ids=sorted(bundle.scen_results.keys()),
+        )
         if bundle.warnings:
             st.warning(" | ".join(bundle.warnings))
-        st.markdown("### Exports")
-        st.code(payload["out_dir"])
 
     show_limitations(
         [

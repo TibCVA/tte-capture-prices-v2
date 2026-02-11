@@ -34,6 +34,7 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
     capture_pv = row.get("capture_price_pv_eur_mwh", row.get("capture_rate_pv_eur_mwh", np.nan))
     regime_coherence = row.get("regime_coherence", np.nan)
     surplus_twh = row.get("surplus_twh", np.nan)
+    scope_cov = row.get("must_run_scope_coverage", np.nan)
     h_regime_c = row.get("h_regime_c", np.nan)
     h_regime_d = row.get("h_regime_d", np.nan)
 
@@ -41,8 +42,8 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
         checks.append({"status": "FAIL", "code": "RC_SR_RANGE", "message": f"{label}: SR hors [0,1]."})
     if _finite(far) and not (0.0 <= float(far) <= 1.0):
         checks.append({"status": "FAIL", "code": "RC_FAR_RANGE", "message": f"{label}: FAR hors [0,1]."})
-    if _finite(surplus_twh) and float(surplus_twh) == 0.0 and _finite(far):
-        checks.append({"status": "FAIL", "code": "RC_FAR_NAN_WHEN_NO_SURPLUS", "message": f"{label}: FAR doit etre NaN quand surplus=0."})
+    if _finite(surplus_twh) and float(surplus_twh) == 0.0 and _finite(far) and abs(float(far) - 1.0) > 1e-6:
+        checks.append({"status": "FAIL", "code": "RC_FAR_ONE_WHEN_NO_SURPLUS", "message": f"{label}: FAR doit valoir 1 quand surplus=0."})
     if _finite(ir) and float(ir) < 0.0:
         checks.append({"status": "FAIL", "code": "RC_IR_NEGATIVE", "message": f"{label}: IR negatif."})
     if _finite(capture_pv) and not (-200.0 <= float(capture_pv) <= 500.0):
@@ -67,6 +68,8 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
         checks.append({"status": "WARN", "code": "RC_LOW_REGIME_COHERENCE", "message": f"{label}: regime_coherence < 0.55."})
     if _finite(h_regime_c) and _finite(h_regime_d) and (_finite(ttl)) and (float(h_regime_c) + float(h_regime_d) < 500):
         checks.append({"status": "WARN", "code": "RC_TTL_LOW_SAMPLE", "message": f"{label}: TTL calcule sur trop peu d'heures C+D (<500)."})
+    if _finite(scope_cov) and not (0.0 <= float(scope_cov) <= 1.0):
+        checks.append({"status": "FAIL", "code": "RC_SCOPE_COVERAGE_RANGE", "message": f"{label}: must_run_scope_coverage hors [0,1]."})
 
     return checks
 

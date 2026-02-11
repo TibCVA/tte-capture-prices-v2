@@ -13,7 +13,35 @@ from app.ui_components import (
     render_interpretation,
     render_kpi_cards_styled,
 )
-from src.reporting.evidence_loader import REQUIRED_QUESTIONS, discover_complete_runs
+from src.reporting.evidence_loader import (
+    REQUIRED_QUESTIONS,
+    assemble_complete_run_from_fragments,
+    discover_complete_runs,
+)
+
+
+def _run_has_all_questions(run_dir: Path) -> bool:
+    return all((run_dir / q).exists() for q in REQUIRED_QUESTIONS)
+
+
+def _report_paths(run_id: str) -> dict[str, Path]:
+    rid = str(run_id)
+    base = Path("reports")
+    return {
+        "detailed": base / f"conclusions_v2_detailed_{rid}.md",
+        "executive": base / f"conclusions_v2_executive_{rid}.md",
+        "evidence_catalog": base / f"evidence_catalog_{rid}.csv",
+        "test_traceability": base / f"test_traceability_{rid}.csv",
+        "slides_traceability": base / f"slides_traceability_{rid}.csv",
+        "report_qc": base / f"report_qc_{rid}.json",
+    }
+
+
+def _safe_read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
 
 
 def _scenario_ids(question_dir: Path) -> list[str]:

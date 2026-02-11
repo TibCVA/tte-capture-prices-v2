@@ -1,0 +1,14 @@
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=3.4 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=8.2 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=28.4 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=9.8 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=21.9 EUR/MWh (acceptable).,Q5,,True
+WARN,Q5_ALPHA_NEGATIVE,Alpha negatif hors cas already_above_target.,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=5.4 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=2.8 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True

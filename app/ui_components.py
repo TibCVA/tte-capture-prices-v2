@@ -6,6 +6,7 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+import numpy as np
 
 
 # ---------------------------------------------------------------------------
@@ -571,3 +572,135 @@ def render_regime_cards() -> None:
             '<span style="font-size:0.82rem;">NRL > P90</span></div>',
             unsafe_allow_html=True,
         )
+
+
+def _parse_years_csv(value: Any) -> set[int]:
+    if value is None:
+        return set()
+    text = str(value).strip()
+    if not text:
+        return set()
+    out: set[int] = set()
+    for tok in text.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            out.add(int(float(tok)))
+        except Exception:
+            continue
+    return out
+
+
+def derive_outlier_flags_from_q2(slopes_df: pd.DataFrame) -> pd.DataFrame:
+    """Build country-year outlier flags from Q2 slope table (years_used vs years_used_no_outliers)."""
+    if slopes_df is None or slopes_df.empty:
+        return pd.DataFrame(columns=["country", "year", "outlier_year"])
+    rows: list[dict[str, Any]] = []
+    for _, row in slopes_df.iterrows():
+        country = str(row.get("country", "")).strip()
+        used = _parse_years_csv(row.get("years_used", ""))
+        kept = _parse_years_csv(row.get("years_used_no_outliers", ""))
+        for y in sorted(used.difference(kept)):
+            rows.append({"country": country, "year": int(y), "outlier_year": True})
+    if not rows:
+        return pd.DataFrame(columns=["country", "year", "outlier_year"])
+    out = pd.DataFrame(rows)
+    out = out.groupby(["country", "year"], as_index=False)["outlier_year"].max()
+    return out
+
+
+def render_data_quality_panel(
+    annual_df: pd.DataFrame,
+    *,
+    countries: list[str] | None = None,
+    years: list[int] | None = None,
+    extra_country_year_df: pd.DataFrame | None = None,
+    title: str = "Data quality",
+) -> pd.DataFrame:
+    """Render a country-year quality panel with canonical fields used by Q1..Q5 pages."""
+    st.markdown(f"### {title}")
+    if annual_df is None or annual_df.empty:
+        st.info("Aucune table annuelle disponible pour le panneau de qualite.")
+        return pd.DataFrame()
+
+    panel = annual_df.copy()
+    if "country" not in panel.columns or "year" not in panel.columns:
+        st.info("Colonnes country/year absentes, impossible d'afficher le panneau de qualite.")
+        return pd.DataFrame()
+
+    if countries:
+        scoped_c = {str(c) for c in countries}
+        panel = panel[panel["country"].astype(str).isin(scoped_c)]
+    if years:
+        scoped_y = {int(y) for y in years}
+        panel = panel[pd.to_numeric(panel["year"], errors="coerce").astype("Int64").isin(list(scoped_y))]
+
+    if panel.empty:
+        st.info("Aucune ligne sur le perimetre selectionne.")
+        return pd.DataFrame()
+
+    if "completeness" in panel.columns:
+        comp = pd.to_numeric(panel["completeness"], errors="coerce")
+        panel["missing_hours_pct"] = (1.0 - comp).clip(lower=0.0, upper=1.0) * 100.0
+    elif "missing_hours_pct" in panel.columns:
+        panel["missing_hours_pct"] = pd.to_numeric(panel["missing_hours_pct"], errors="coerce")
+    else:
+        panel["missing_hours_pct"] = np.nan
+
+    for src in ["missing_share_price", "missing_share_load", "missing_share_generation", "missing_share_net_position"]:
+        if src in panel.columns:
+            panel[f"{src}_pct"] = pd.to_numeric(panel[src], errors="coerce") * 100.0
+
+    if extra_country_year_df is not None and not extra_country_year_df.empty:
+        extra = extra_country_year_df.copy()
+        keep = [c for c in ["country", "year", "load_net_mode", "must_run_mode", "must_run_mode_hourly", "must_run_scope_coverage", "outlier_year"] if c in extra.columns]
+        if {"country", "year"}.issubset(set(keep)):
+            extra = extra[keep].copy()
+            if "must_run_mode_hourly" in extra.columns and "must_run_mode" not in extra.columns:
+                extra["must_run_mode"] = extra["must_run_mode_hourly"]
+            panel = panel.merge(extra, on=["country", "year"], how="left", suffixes=("", "_extra"))
+            for c in ["load_net_mode", "must_run_mode", "must_run_scope_coverage", "outlier_year"]:
+                c_extra = f"{c}_extra"
+                if c_extra in panel.columns:
+                    if c in panel.columns:
+                        panel[c] = panel[c].where(panel[c].notna(), panel[c_extra])
+                    else:
+                        panel[c] = panel[c_extra]
+                    panel = panel.drop(columns=[c_extra])
+
+    cols = [
+        "country",
+        "year",
+        "quality_flag",
+        "missing_hours_pct",
+        "missing_share_price_pct",
+        "missing_share_load_pct",
+        "missing_share_generation_pct",
+        "missing_share_net_position_pct",
+        "load_net_mode",
+        "must_run_mode",
+        "must_run_scope_coverage",
+        "outlier_year",
+        "core_sanity_issue_count",
+        "core_sanity_issues",
+    ]
+    keep_cols = [c for c in cols if c in panel.columns]
+    out = panel[keep_cols].copy()
+    out = out.sort_values(["country", "year"]).reset_index(drop=True)
+    st.dataframe(out, use_container_width=True, hide_index=True)
+    return out
+
+
+def render_livrables_panel(
+    *,
+    run_id: str,
+    out_dir: str,
+    hist_tables: list[str],
+    scenario_ids: list[str],
+) -> None:
+    st.markdown("## Livrables")
+    st.markdown(f"- Run ID: `{run_id}`")
+    st.markdown(f"- Repertoire export: `{out_dir}`")
+    st.markdown(f"- Tables historiques: `{', '.join(sorted(hist_tables)) if hist_tables else 'n/a'}`")
+    st.markdown(f"- Scenarios exportes: `{', '.join(sorted(scenario_ids)) if scenario_ids else 'aucun'}`")

@@ -1,0 +1,42 @@
+{
+  "question_id": "Q1",
+  "objective": "Identifier la bascule Phase 1 vers Phase 2 (marche et physique), puis expliquer les drivers SR/FAR/IR.",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "run_id": "FULL_20260211_061706",
+  "source_summary_file": "outputs\\combined\\FULL_20260211_061706\\Q1\\summary.json",
+  "source_refs_in_ledger": [
+    "SPEC2-Q1",
+    "SPEC2-Q1/Slides 2-4",
+    "SPEC2-Q1/Slides 3-4",
+    "SPEC2-Q1/Slides 5",
+    "Slides 4-6"
+  ],
+  "scenarios": [
+    "BASE",
+    "DEMAND_UP",
+    "FLEX_UP",
+    "LOW_RIGIDITY"
+  ],
+  "country_filter_notes": {
+    "hist_unfilterable_tables": [
+      "Q1_rule_definition.csv"
+    ],
+    "scen_unfilterable_tables_by_scenario": {
+      "BASE": [
+        "Q1_rule_definition.csv"
+      ],
+      "DEMAND_UP": [
+        "Q1_rule_definition.csv"
+      ],
+      "FLEX_UP": [
+        "Q1_rule_definition.csv"
+      ],
+      "LOW_RIGIDITY": [
+        "Q1_rule_definition.csv"
+      ]
+    }
+  }
+}

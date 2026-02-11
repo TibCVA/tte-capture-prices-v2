@@ -1,0 +1,8 @@
+country,bascule_year_market,pre_window_start_year,pre_window_end_year,post_window_start_year,post_window_end_year,n_pre_years,n_post_years,pre_mean_capture_ratio_pv_vs_ttl,post_mean_capture_ratio_pv_vs_ttl,delta_post_minus_pre_capture_ratio_pv_vs_ttl,pre_mean_h_negative_obs,post_mean_h_negative_obs,delta_post_minus_pre_h_negative_obs,pre_mean_sr_energy,post_mean_sr_energy,delta_post_minus_pre_sr_energy,pre_mean_far_energy,post_mean_far_energy,delta_post_minus_pre_far_energy,pre_mean_ir_p10,post_mean_ir_p10,delta_post_minus_pre_ir_p10
+BE,2025.0,2022.0,2024.0,2025.0,2027.0,0,3,,0.569244405578961,,,128.66666666666666,,,0.001496834511784,,,0.7838209742310935,,,0.4917279291142611,
+CZ,,,,,,0,0,,,,,,,,,,,,,,,
+DE,,,,,,0,0,,,,,,,,,,,,,,,
+ES,,,,,,0,0,,,,,,,,,,,,,,,
+FR,,,,,,0,0,,,,,,,,,,,,,,,
+IT_NORD,,,,,,0,0,,,,,,,,,,,,,,,
+NL,,,,,,0,0,,,,,,,,,,,,,,,

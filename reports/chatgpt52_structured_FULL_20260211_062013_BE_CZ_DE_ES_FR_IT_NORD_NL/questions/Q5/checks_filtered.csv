@@ -1,0 +1,68 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=6.5 EUR/MWh (acceptable).,HIST,,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=18.6 EUR/MWh (acceptable).,HIST,,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=14.2 EUR/MWh (acceptable).,HIST,,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,HIST,,Q5,,True
+WARN,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=58.0 EUR/MWh (a revoir).,HIST,,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=36.1 EUR/MWh (acceptable).,HIST,,Q5,,True
+WARN,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=39.4 EUR/MWh (a revoir).,HIST,,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,HIST,,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=12.4 EUR/MWh (acceptable).,HIST,,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=24.9 EUR/MWh (acceptable).,SCEN,BASE,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,BASE,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=7.7 EUR/MWh (acceptable).,SCEN,BASE,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=42.1 EUR/MWh (acceptable).,SCEN,BASE,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,BASE,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=37.5 EUR/MWh (acceptable).,SCEN,BASE,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,BASE,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=49.6 EUR/MWh (acceptable).,SCEN,BASE,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=22.4 EUR/MWh (acceptable).,SCEN,BASE,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,BASE,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=28.1 EUR/MWh (acceptable).,SCEN,BASE,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,BASE,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=12.2 EUR/MWh (acceptable).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=25.6 EUR/MWh (acceptable).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=11.1 EUR/MWh (acceptable).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=24.8 EUR/MWh (acceptable).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=36.9 EUR/MWh (acceptable).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=9.6 EUR/MWh (acceptable).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=15.4 EUR/MWh (acceptable).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=3.4 EUR/MWh (acceptable).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=8.2 EUR/MWh (acceptable).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=28.4 EUR/MWh (acceptable).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=9.8 EUR/MWh (acceptable).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=21.9 EUR/MWh (acceptable).,SCEN,HIGH_GAS,Q5,,True
+WARN,Q5_ALPHA_NEGATIVE,Alpha negatif hors cas already_above_target.,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=5.4 EUR/MWh (acceptable).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=2.8 EUR/MWh (acceptable).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_GAS,Q5,,True
+WARN,Q5_ALPHA_NEGATIVE,Alpha negatif hors cas already_above_target.,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=33.9 EUR/MWh (acceptable).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=71.4 EUR/MWh (acceptable).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=34.6 EUR/MWh (acceptable).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=21.3 EUR/MWh (acceptable).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=9.2 EUR/MWh (acceptable).,SCEN,HIGH_BOTH,Q5,,True
+WARN,Q5_ALPHA_NEGATIVE,Alpha negatif hors cas already_above_target.,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=36.5 EUR/MWh (acceptable).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_BOTH,Q5,,True
+WARN,Q5_ALPHA_NEGATIVE,Alpha negatif hors cas already_above_target.,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=30.7 EUR/MWh (acceptable).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_BOTH,Q5,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q5,,True
+PASS,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=78.57%,BUNDLE,,Q5,,True
