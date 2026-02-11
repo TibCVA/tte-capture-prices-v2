@@ -1,0 +1,7 @@
+country,year,must_run_scope_coverage,lowload_p20_mw,ir_p10,scope_status,scope_reason,load_net_mode,must_run_mode_hourly
+DE,2025,0.1360255248592001,45686.423536464215,0.0422065713543047,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2030,0.1294751551476486,49857.25699930128,0.0387133450001058,INFO,coverage_coherent,minus_psh_pump,observed
+DE,2035,0.124125970773189,54388.59310511726,0.0354535240723728,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2025,0.1829200019075131,22647.91767894136,0.0783285853686237,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2030,0.1751483076410315,24647.23053829461,0.0721602545060212,INFO,coverage_coherent,minus_psh_pump,observed
+ES,2035,0.1708381047570365,26961.806760644475,0.0657960117096439,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed

@@ -1,0 +1,5 @@
+country,tech,phase2_start_year_for_slope,phase2_start_reason,phase2_end_year,years_used,x_axis_used,x_unit,slope,intercept,r2,p_value,n,slope_method,insufficient_points,robust_flag,reason_code,outlier_years_count,slope_all_years,slope_excluding_outliers,mean_sr_energy_phase2,mean_far_energy_phase2,mean_ir_p10_phase2,mean_ttl_phase2,vre_load_corr_phase2,surplus_load_trough_share_phase2
+DE,PV,2019.0,q1_bascule,2020.0,"2019,2020",pv_penetration_pct_gen,pct_point,-0.1028429956205297,1.7609038704954272,,,2,two_point_delta,True,FRAGILE,insufficient_points,0,-0.1028429956205297,-0.1028429956205297,0.0006266679321282,0.9938248123683266,0.2641506236537365,56.859,,
+DE,WIND,2019.0,q1_bascule,2020.0,"2019,2020",wind_penetration_pct_gen,pct_point,-0.0185342836759086,1.3174427662947898,,,2,two_point_delta,True,FRAGILE,insufficient_points,0,-0.0185342836759086,-0.0185342836759086,0.0006266679321282,0.9938248123683266,0.2641506236537365,56.859,,
+ES,PV,,q1_no_bascule,,,none,pct_point,,,,,0,insufficient,True,NON_TESTABLE,q1_no_bascule,0,,,,,,,,
+ES,WIND,,q1_no_bascule,,,none,pct_point,,,,,0,insufficient,True,NON_TESTABLE,q1_no_bascule,0,,,,,,,,

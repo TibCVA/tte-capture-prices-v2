@@ -1,0 +1,3206 @@
+# PAYLOAD LLM - Audit DE/ES
+
+Ce document est prêt à être copié-collé dans un autre LLM pour un audit rigoureux.
+Généré le: `2026-02-11 10:56:11 UTC`
+Package source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES`
+Run ID: `FULL_20260211_105525`
+Countries scope: `DE, ES`
+
+## Instructions pour l'autre LLM
+1. Lire les sections Méthode + Inputs avant les questions.
+2. Analyser Q1→Q5 en séparant HIST vs SCEN.
+3. Citer systématiquement `test_id` ou `table.colonne` pour chaque conclusion.
+4. Qualifier chaque conclusion: ROBUSTE / FRAGILE / NON_TESTABLE.
+5. Ne pas extrapoler au-delà des données ci-dessous.
+
+### Méthode d'audit (racine)
+Source: `AUDIT_METHODS_Q1_Q5.md`
+
+```markdown
+# Audit Methods Reference (Q1-Q5)
+
+Last updated: 2026-02-10 20:11 UTC
+Auto-generated from Python source code by `scripts/generate_audit_methods.py`.
+Regenerated automatically when analysis engine files change.
+
+## 1. Purpose and governance
+
+This document is the methodological reference for formulas, data, hypotheses, and checks used by Q1-Q5 (HIST + SCEN).
+It is auto-generated from the live codebase to guarantee synchronization with the analysis engine.
+
+Authoritative code paths:
+
+- `src/metrics.py` — formules annuelles et qualite
+- `src/processing.py` — construction table horaire, NRL, regimes, nettoyage
+- `src/data_fetcher.py` — collecte ENTSO-E et cache
+- `src/validation_report.py` — invariants durs et checks de realite
+- `src/modules/q1_transition.py` .. `q5_thermal_anchor.py` — logique analytique Q1-Q5
+- `src/scenario/calibration.py` — calibration historique par pays
+- `src/scenario/phase2_engine.py` — projection prospective
+
+
+## 2. Sources de donnees
+
+L'outil combine plusieurs sources publiques et institutionnelles. Aucune donnee proprietaire n'est utilisee.
+
+### 2.1 ENTSO-E Transparency Platform (source primaire historique)
+
+Collecte via l'API ENTSO-E (bibliotheque `entsoe-py`), cle API requise.
+Donnees horaires par pays-annee, stockees en cache local Parquet :
+
+| Dataset | Contenu | Chemin cache |
+|---------|---------|--------------|
+| `prices_da` | Prix day-ahead (EUR/MWh) | `data/raw/entsoe/prices_da/{country}/{year}.parquet` |
+| `load_total` | Charge totale (MW) | `data/raw/entsoe/load_total/{country}/{year}.parquet` |
+| `generation_by_type` | Generation par filiere (MW) | `data/raw/entsoe/generation_by_type/{country}/{year}.parquet` |
+| `net_position` | Position nette / flux physiques (MW) | `data/raw/entsoe/net_position/{country}/{year}.parquet` |
+| `psh_pump` | Pompage STEP (MW) | `data/raw/entsoe/psh_pump/{country}/{year}.parquet` |
+
+Mapping des codes generation ENTSO-E (PSR) vers colonnes canoniques : `data/static/entsoe_psr_mapping.csv`.
+
+### 2.2 ENTSO-E TYNDP 2024 (source prospective)
+
+Donnees du Ten-Year Network Development Plan 2024 pour les scenarios prospectifs :
+
+| Fichier normalise | Contenu | Source brute |
+|-------------------|---------|--------------|
+| `data/external/normalized/tyndp2024_demand_scenarios.csv` | Demande annuelle par pays/scenario/annee | TYNDP 2024 XLSX |
+| `data/external/normalized/tyndp2024_capacities.csv` | Capacites installees par pays/techno/scenario | TYNDP 2024 XLSX |
+| `data/external/normalized/tyndp2024_fuel_co2_prices.csv` | Prix gaz et CO2 par scenario | TYNDP 2024 XLSX |
+
+Ces donnees alimentent les hypotheses Phase 2 (`data/assumptions/phase2/phase2_scenario_country_year.csv`).
+
+### 2.3 NREL ATB et IRENA (couts technologiques)
+
+Benchmarks de couts utilises pour le cadrage des hypotheses :
+
+| Fichier normalise | Source | Contenu |
+|-------------------|--------|---------|
+| `data/external/normalized/tech_cost_benchmarks_atb.csv` | NREL Annual Technology Baseline 2024 v3 | LCOE, CAPEX, O&M par techno |
+| `data/external/normalized/tech_cost_benchmarks_irena.csv` | IRENA Renewable Power Generation Costs 2023 | LCOE renouvelable global |
+
+### 2.4 Donnees de calibration (pre-calculees)
+
+| Fichier | Contenu | Usage |
+|---------|---------|-------|
+| `data/external/normalized/interconnection_proxy_phase1.csv` | Capacite d'export estimee par pays (GW) | Calibration prospective |
+| `data/external/normalized/surplus_coincidence_matrix_phase1.csv` | Facteurs de coincidence export entre pays | Calibration prospective |
+
+### 2.5 Prix commodites journaliers (optionnel, Q5)
+
+- `data/external/commodity_prices_daily.csv` : prix gaz (EUR/MWh_th) et CO2 (EUR/t) journaliers
+- Utilise par Q5 pour la sensibilite ancre thermique aux commodites reelles
+- Si absent, Q5 utilise les valeurs des hypotheses Phase 2
+
+### 2.6 Configuration et hypotheses
+
+| Fichier | Contenu |
+|---------|---------|
+| `config/countries.yaml` | Definition pays : codes ENTSO-E, fuseaux, composition must-run, flex, techno marginale |
+| `config/thresholds.yaml` | Seuils modele : completude, regime D, coherence, checks |
+| `data/assumptions/phase1_assumptions.csv` | Hypotheses Phase 1 : seuils Q1-Q5, rendements thermiques, VOM |
+| `data/assumptions/phase2/phase2_scenario_country_year.csv` | Hypotheses Phase 2 par scenario/pays/annee : demande, capacites, prix commodites |
+
+### 2.7 Donnees intermediaires produites par le pipeline
+
+| Fichier | Contenu | Producteur |
+|---------|---------|------------|
+| `data/processed/hourly/{country}/{year}.parquet` | Table horaire canonique (prix, charge, VRE, NRL, surplus, regimes) | `src/processing.py` |
+| `data/metrics/annual_metrics.parquet` | Metriques annuelles historiques par pays-annee | `src/metrics.py` |
+| `data/metrics/daily_metrics.parquet` | Metriques journalieres | `src/metrics.py` |
+| `data/metrics/validation_findings.parquet` | Constats de validation (severite, code, message, evidence) | `src/validation_report.py` |
+| `data/processed/scenario/{scen}/hourly/{country}/{year}.parquet` | Table horaire prospective | `src/scenario/phase2_engine.py` |
+| `data/processed/scenario/{scen}/annual_metrics.parquet` | Metriques annuelles prospectives | `src/metrics.py` |
+
+
+## 3. Formules canoniques et pipeline de qualite
+
+### 3.1 Variables horaires
+
+- `gen_vre_mw = gen_solar_mw + gen_wind_on_mw + gen_wind_off_mw`
+- `nrl_mw = load_mw - gen_vre_mw - gen_must_run_mw` (Net Residual Load)
+- `surplus_mw = max(0, -nrl_mw)`
+- `exports_mw = max(net_position_mw, 0)`
+- `flex_sink_observed_mw = exports_mw + flex_sink_psh_pump_mw`
+- `surplus_absorbed_mw = min(surplus_mw, flex_effective_mw)`
+- `surplus_unabsorbed_mw = surplus_mw - surplus_absorbed_mw`
+
+Nettoyage des donnees brutes : les generations negatives < -0.1 MW sont mises a NaN ; les valeurs entre -0.1 et 0 sont arrondies a 0.
+La charge nette (load_mw) est calculee comme `load_total - psh_pump` si les donnees de pompage sont suffisantes (>= 95% de couverture), sinon `load_total` directement.
+
+### 3.2 Classification des regimes (anti-circulaire, sans prix)
+
+Les regimes sont determines uniquement par les grandeurs physiques, sans utiliser le prix :
+
+- **A** (surplus non absorbe) : `surplus_unabsorbed_mw > 0`
+- **B** (surplus absorbe) : `surplus_mw > 0` et `surplus_unabsorbed_mw == 0`
+- **D** (stress thermique) : `surplus_mw == 0` et `nrl_mw >= P90(nrl positif)`, avec minimum 200 heures NRL positif
+- **C** (normal) : toutes les heures restantes
+
+Le seuil du regime D (quantile 0.90 du NRL positif) est configurable dans `config/thresholds.yaml`.
+
+### 3.3 Metriques annuelles
+
+- **Prix baseload** : `mean(price_da)` sur toutes les heures
+- **Prix peak/offpeak** : moyennes sur heures locales 8h-20h LJ / reste
+- **Capture price (techno X)** : `sum(price * gen_X) / sum(gen_X)` — moyenne ponderee par la production
+- **Capture ratio vs baseload** : `capture_X / baseload`
+- **Capture ratio vs TTL** : `capture_X / ttl`
+- **TTL** (Top Tail Level) : `P95(price)` sur les heures en regime C ou D uniquement
+- **SR** (Surplus Ratio) : `surplus_energy / gen_primary_energy` — part de l'energie en surplus
+- **FAR** (Flex Absorption Ratio) : `surplus_absorbed_energy / surplus_energy` — part du surplus absorbe (NaN si pas de surplus)
+- **IR** (Inflexibility Ratio) : `P10(gen_must_run_mw) / P10(load_mw)` — rapport must-run / charge en creux
+- **Penetration VRE** : `gen_vre_twh / gen_primary_twh`
+- **Heures negatives** : nombre d'heures avec `price < 0`
+- **Heures basses** : nombre d'heures avec `price <= 5 EUR/MWh`
+- **Jours spread > 50** : nombre de jours ou `max(price) - min(price) >= 50 EUR/MWh`
+
+### 3.4 Pipeline de qualite des donnees
+
+Le pipeline applique 3 niveaux de controle :
+
+**Niveau 1 — Completude et flags horaires** (dans `src/processing.py`) :
+- `q_missing_price` : prix day-ahead absent
+- `q_missing_load` : charge totale absente
+- `q_missing_generation` : generation VRE ET must-run absentes simultanement
+- `q_missing_net_position` : position nette absente
+- `q_any_critical_missing` : au moins un des trois premiers flags actif
+- Completude = part des heures sans donnee critique manquante
+
+**Niveau 2 — Invariants durs** (dans `src/validation_report.py`, severite ERROR) :
+- `INV_NRL` : identite NRL violee (`load - vre - must_run` != nrl, tolerance 1e-6)
+- `INV_SURPLUS` : identite surplus violee (`max(-nrl, 0)` != surplus)
+- `INV_UNABS_NEG` : surplus non absorbe negatif (impossible physiquement)
+- `INV_UNABS_GT_SURPLUS` : surplus non absorbe > surplus total
+- `INV_FAR_RANGE` : FAR hors [0, 1]
+- `INV_SR_RANGE` : SR hors [0, 1]
+
+**Niveau 3 — Checks de realite** (dans `src/modules/reality_checks.py`, severite WARN/FAIL) :
+- `RC_SR_RANGE` : SR hors [0, 1] → FAIL
+- `RC_FAR_RANGE` : FAR hors [0, 1] → FAIL
+- `RC_FAR_NAN_WHEN_NO_SURPLUS` : FAR fini alors que surplus = 0 → FAIL
+- `RC_IR_NEGATIVE` : IR negatif → FAIL
+- `RC_CAPTURE_RANGE` : capture price PV hors [-200, 500] EUR/MWh → WARN
+- `RC_TTL_LOW` : TTL < baseload - 20 EUR/MWh → WARN
+- `RC_IR_GT_1` : IR > 1 (must-run depasse la charge en creux) → WARN
+- `RC_LOW_REGIME_COHERENCE` : coherence regime < 0.55 → WARN
+- `RC_TTL_LOW_SAMPLE` : TTL calcule sur moins de 500 heures C+D → WARN
+- `RC_NEG_NOT_IN_AB` : moins de 50% des heures negatives en regime A/B → WARN
+- `RC_D_NOT_ABOVE_C` : mediane prix regime D <= mediane prix regime C → WARN
+
+**Quality flag** (decision globale par pays-annee) :
+- `OK` : completude >= 0.98
+- `WARN` : completude >= 0.90 mais < 0.98
+- `FAIL` : completude < 0.90 ou invariants durs violes
+
+Tous les constats sont traces dans `data/metrics/validation_findings.parquet` avec : severite, code, message, evidence quantitative, suggestion de correction.
+
+
+## 4. Question-by-question analytical logic
+
+## 4.1 Q1 - Transition Phase 1 -> Phase 2
+
+Q1 - Phase 1 to Phase 2 transition analysis.
+
+### Objective
+
+Detect transition year with two independent diagnostics: market symptoms and physical stress.
+
+### Configurable parameters (current values)
+
+| Parametre | Valeur | Unite | Description |
+|-----------|--------|-------|-------------|
+| `capture_ratio_pv_vs_ttl_crisis_max` | 0.7 | ratio | Seuil crise capture ratio pv/ttl |
+| `capture_ratio_pv_vs_ttl_stage2_max` | 0.8 | ratio | Seuil capture ratio pv/ttl |
+| `days_spread_gt50_stage2_min` | 150.0 | days | Seuil jours spread>50 |
+| `h_below_5_stage2_min` | 500.0 | hours | Seuil heures basses |
+| `h_negative_stage2_min` | 200.0 | hours | Seuil heures negatives stage2 |
+| `h_negative_stage2_strong` | 300.0 | hours | Seuil fort heures negatives |
+| `stage1_capture_ratio_pv_vs_ttl_min` | 0.9 | ratio | Stage1 min capture ratio pv vs ttl |
+| `stage1_days_spread_gt50_max` | 120.0 | days | Stage1 max days spread gt50 |
+| `stage1_h_below_5_max` | 300.0 | hours | Stage1 max hours below 5 |
+| `stage1_h_negative_max` | 100.0 | hours | Stage1 max negative hours |
+| `far_energy_tension_max` | 0.95 | ratio | Seuil far tension |
+| `ir_p10_high_min` | 0.7 | ratio | Seuil inflexibilite haute |
+| `sr_energy_material_min` | 0.01 | ratio | Seuil surplus ratio materialite |
+| `regime_coherence_min_for_causality` | 0.55 | ratio | Seuil coherence minimale causalite |
+| `q1_require_non_capture_signal` | 1.0 | bool01 | Q1: exiger au moins un signal non-capture (h_negative, h_below_5 ou spread) pour classer phase2. |
+| `q1_min_non_capture_flags` | 1.0 | count | Q1: nombre minimal de flags non-capture requis pour phase2. |
+
+
+### Calculations
+
+1. `stage2_market_score` from points on: `h_negative_obs`, `h_below_5_obs`, `capture_ratio_pv_vs_ttl`, `days_spread_gt50`
+2. Phase2 market condition: score >= 2, with optional non-capture signal gate (`q1_require_non_capture_signal`)
+3. Physical stress flags: `sr_energy >= sr_energy_material_min`, `far_energy <= far_energy_tension_max`, `ir_p10 >= ir_p10_high_min`
+4. Transition years: market transition year, physical transition year
+5. Confidence penalty from coherence/completeness
+
+### Outputs
+
+- `Q1_country_summary`
+- `Q1_year_panel`
+- checks/warnings on incoherent transition signals
+
+### Robustness
+
+- `quality_flag == FAIL` invalidates strong conclusions
+- capture-only signals are warned
+
+
+## 4.2 Q2 - Phase 2 slope and drivers
+
+Q2 - Phase 2 slope and drivers.
+
+### Objective
+
+Estimate cannibalization slope for PV/Wind after Q1 transition, and rank drivers.
+
+### Configurable parameters (current values)
+
+| Parametre | Valeur | Unite | Description |
+|-----------|--------|-------|-------------|
+| `exclude_year_2022` | 0.0 | bool | Exclude 2022 from regressions (1=yes) |
+| `min_points_regression` | 3.0 | count | Nombre minimal de points regression |
+
+
+### Calculations
+
+1. Build Phase2 subset per country (years >= transition year from Q1)
+2. Regression per tech: preferred x = penetration, fallback x = `sr_energy`, y = capture ratio vs TTL
+3. Estimator: OLS when data sufficient, `DELTA_2PT` directional slope when only two points
+4. Driver features: mean SR/FAR/IR/TTL on phase2 subset, hourly `corr(gen_vre_mw, load_mw)`, surplus share in low-load quartile
+5. Cross-country driver correlations against slope
+
+### Outputs
+
+- `Q2_country_slopes`
+- `Q2_driver_correlations`
+- robustness flag per slope (`ROBUST`, `FRAGILE`, `NON_TESTABLE`)
+
+
+## 4.3 Q3 - Exit Phase 2 and inversion conditions
+
+Q3 - Exit from Phase 2 and inversion conditions.
+
+### Objective
+
+Classify trend status and estimate static inversion orders of magnitude.
+
+### Configurable parameters (current values)
+
+| Parametre | Valeur | Unite | Description |
+|-----------|--------|-------|-------------|
+| `demand_k_max` | 0.3 | ratio | Borne max hausse demande |
+| `far_target` | 0.95 | ratio | Cible FAR inversion |
+| `require_recent_stage2` | 1.0 | bool | Require recent stage2 stress |
+| `sr_energy_target` | 0.01 | ratio | Cible SR inversion |
+| `stage2_recent_h_negative_min` | 200.0 | hours | Recent stage2 threshold on negative hours |
+| `trend_capture_ratio_min` | 0.0 | ratio/year | Improvement threshold for capture trend |
+| `trend_h_negative_max` | -10.0 | hours/year | Improvement threshold for h_negative trend |
+| `trend_window_years` | 3.0 | years | Fenetre tendance Q3 |
+| `stage2_recent_h_negative_min_scen` | 80.0 | h/an | Q3 SCEN: seuil h_negative recent pour qualifier un contexte Stage2 en prospectif. |
+| `stage2_recent_sr_energy_min_scen` | 0.02 | ratio | Q3 SCEN: seuil SR recent pour qualifier un contexte Stage2 meme si h_negative reste faible. |
+
+
+### Calculations
+
+1. Trends on rolling window: `trend_h_negative`, `trend_capture_ratio_pv_vs_ttl`, `trend_sr_energy`, `trend_far_energy`
+2. Status assignment: `degradation`, `stabilisation`, `amelioration`, `transition_partielle`, `hors_scope_stage2`
+3. Counterfactuals (binary search): demand uplift `k` for SR target, must-run reduction `r` for SR target, additional absorbed energy for FAR target
+4. Additional sink power proxy: `P95(surplus_unabsorbed_mw)`
+
+### Outputs
+
+- `Q3_status`
+
+### Interpretation
+
+`hors_scope_stage2` means the scenario is not stressed enough for a phase2-exit statement (explicit non-testability).
+
+
+## 4.4 Q4 - BESS sizing and impact
+
+Q4 - BESS sizing and impact simulation.
+
+### Objective
+
+Quantify battery impact in three dispatch modes and estimate minimum sizing for target objective.
+
+### Dispatch modes
+
+- `SURPLUS_FIRST` (system stress absorption)
+- `PRICE_ARBITRAGE_SIMPLE` (simple value spread)
+- `PV_COLOCATED` (PV + storage value uplift)
+
+### Configurable parameters (current values)
+
+| Parametre | Valeur | Unite | Description |
+|-----------|--------|-------|-------------|
+| `bess_eta_roundtrip` | 0.88 | ratio | Rendement roundtrip BESS |
+| `bess_max_cycles_per_day` | 1.0 | cycles/day | Cycles max journaliers BESS |
+| `bess_soc_init_frac` | 0.5 | ratio | SOC initial fraction |
+| `target_far` | 0.95 | ratio | Cible FAR pour sizing |
+| `target_surplus_unabs_energy_twh` | 0.0 | TWh | Cible surplus non absorbe |
+
+
+### Calculations
+
+1. Numpy dispatch simulation with daily masks
+2. SOC and power constraints enforced each hour
+3. Post-BESS absorbed and unabsorbed surplus recomputation
+4. Frontier over grid: FAR before/after, unabsorbed energy before/after, capture uplift, price-taker revenue
+5. Objective selection: `FAR_TARGET` or `SURPLUS_UNABS_TARGET`, choose minimum feasible by power then energy
+
+### Invariants
+
+- `0 <= SOC <= Emax`
+- `charge <= Pmax`, `discharge <= Pmax`
+- discharged energy <= charged energy * eta
+- monotonic surplus reduction in `SURPLUS_FIRST`
+
+### Outputs
+
+- `Q4_sizing_summary`
+- `Q4_bess_frontier`
+
+
+## 4.5 Q5 - CO2/Gas thermal anchor
+
+Q5 - Thermal anchor sensitivity to gas and CO2.
+
+### Objective
+
+Measure thermal anchor behavior and sensitivities to gas/CO2 on non-surplus hours.
+
+### Thermal defaults (from `src/constants.py`)
+
+- **CCGT**: efficiency=0.55, emission_factor=0.202 tCO2/MWhth, VOM=3.0 EUR/MWh
+- **COAL**: efficiency=0.38, emission_factor=0.341 tCO2/MWhth, VOM=4.0 EUR/MWh
+
+### Configurable parameters (current values)
+
+| Parametre | Valeur | Unite | Description |
+|-----------|--------|-------|-------------|
+| `ccgt_ef_t_per_mwh_th` | 0.202 | tCO2/MWhth | Facteur emission CCGT |
+| `ccgt_efficiency` | 0.55 | ratio | Rendement CCGT |
+| `ccgt_vom_eur_mwh` | 3.0 | EUR/MWh | VOM CCGT |
+| `coal_ef_t_per_mwh_th` | 0.341 | tCO2/MWhth | Facteur emission charbon |
+| `coal_efficiency` | 0.38 | ratio | Rendement charbon |
+| `coal_vom_eur_mwh` | 4.0 | EUR/MWh | VOM charbon |
+
+
+### Calculations
+
+1. Thermal anchor: `tca = gas/eff + co2*(ef/eff) + vom`
+2. Restrict to regimes C/D for comparison
+3. Compute: `ttl_obs = P95(price on C/D)`, `tca_q95 = P95(tca on C/D)`, `alpha = ttl_obs - tca_q95`, `corr_cd = corr(price, tca) on C/D`
+4. Sensitivities: `dTCA/dGas = 1/eff`, `dTCA/dCO2 = ef/eff`
+5. CO2 required for target TTL: solve from `ttl_target = alpha + tca_q95_scenario`
+
+### Outputs
+
+- `Q5_summary`
+- checks on derivative signs and weak/fragile anchor relation
+
+
+## 5. Prospective engine (SCEN) mechanics
+
+Main code: `src/scenario/calibration.py`, `src/scenario/phase2_engine.py`.
+
+### 5.1 Historical calibration per country
+
+Calibrated values include: must-run floors, export and PSH realization factors, stress penalty, regime-B price fit, C/D levels, NRL quantiles, surplus percentile scaling.
+
+### 5.2 Prospective physical projection
+
+1. Select historical reference year by country
+2. Scale load profile to target annual demand
+3. Scale VRE profiles to target capacities
+4. Build must-run profiles from scenario capacities and calibrated floors/caps
+5. Apply conservative flex ordering: exports sink, PSH sink, BESS sink
+6. Recompute surplus absorption and unabsorbed surplus
+7. Reclassify regimes (A/B/C/D) after BESS
+8. Inject synthetic piecewise-affine prices with calibrated regime-B behavior
+
+
+## 6. Standard evidence outputs
+
+Per question bundle: `outputs/combined/{run_id}/Qx/` with summary.json, test_ledger.csv, comparison_hist_vs_scen.csv, hist/tables/*.csv, scen/{scenario_id}/tables/*.csv.
+
+Status semantics: `PASS` (test passed), `WARN` (potential fragility), `FAIL` (hard inconsistency), `NON_TESTABLE` (not enough signal/data).
+
+
+## 7. Known limitations
+
+1. No full equilibrium dispatch model.
+2. Scenario logic is pragmatic stress-testing, not market forecast.
+3. Some question/scenario pairs can be `NON_TESTABLE` by design when stress is absent.
+4. Correlations and slopes are explanatory signals, not automatic causal proof.
+```
+
+### Protocole d'audit LLM
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\LLM_AUDIT_PROTOCOL.md`
+
+```markdown
+# LLM Audit Protocol (DE, ES) - FULL_20260211_105525
+
+Use this protocol to review analytical consistency country-by-country and question-by-question.
+
+## 1) Global method and assumptions
+- Open `AUDIT_METHODS_Q1_Q5.md` (root project reference).
+- Open `inputs/phase1_assumptions.csv`.
+- Open `inputs/phase2_scenario_country_year.csv`.
+- Open `inputs/test_registry.csv`.
+
+## 2) Data quality baseline for selected countries
+- Open `inputs/annual_metrics_hist.csv`.
+- Open `inputs/validation_findings_hist.csv`.
+- Check completeness, quality_flag, regime_coherence, nrl_price_corr.
+
+## 3) Per-question review sequence (Q1 -> Q5)
+For each `questions/Qx`:
+1. Read `question_context.json` (objective, source refs, filterability notes).
+2. Read `test_ledger.csv` (what each test checks, source_ref, status).
+3. Read `hist/tables/*.csv` (historical outputs).
+4. Read `scen/<scenario>/tables/*.csv` for each scenario.
+5. Read `comparison_hist_vs_scen.csv` (delta and interpretability_status).
+6. Read `checks_filtered.csv` + `warnings_filtered.csv`.
+
+### Q1 additional mandatory tables
+- `hist/tables/Q1_scope_audit.csv`
+- `hist/tables/Q1_ir_diagnostics.csv`
+- `hist/tables/Q1_rule_definition.csv`
+- `hist/tables/Q1_before_after_bascule.csv`
+
+## 4) Robustness rubric
+- Robust: status PASS and interpretable deltas with non-null denominators.
+- Fragile: WARN or low statistical strength (`n`, `p_value`, `r2`) or low coherence.
+- Non-testable: explicit `NON_TESTABLE` or out-of-scope status (for example `hors_scope_stage2`).
+
+## 5) Reporting rules for external reviewer
+- No conclusion without numeric evidence (`test_id` or `table.column`).
+- Distinguish historical fact vs prospective stress-test output.
+- Explicitly document limits and non-testable zones.
+```
+
+### Manifest
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\manifest.json`
+
+```json
+{
+  "package_name": "chatgpt52_structured_FULL_20260211_105525_DE_ES",
+  "run_id": "FULL_20260211_105525",
+  "run_dir": "outputs\\combined\\FULL_20260211_105525",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "generated_at_utc": "2026-02-11T10:55:52.202412+00:00",
+  "questions": [
+    "Q1",
+    "Q2",
+    "Q3",
+    "Q4",
+    "Q5"
+  ],
+  "method_reference_file": "AUDIT_METHODS_Q1_Q5.md"
+}
+```
+
+### Index des fichiers exportés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\file_index.csv`
+
+```csv
+category,file,rows
+inputs,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\phase1_assumptions.csv,44
+inputs,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\phase2_scenario_country_year.csv,192
+inputs,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\annual_metrics_hist.csv,14
+inputs,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\validation_findings_hist.csv,18
+inputs,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\annual_metrics_scenarios.csv,192
+inputs,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\test_registry.csv,24
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\checks_filtered.csv,14
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\warnings_filtered.csv,0
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\test_ledger.csv,16
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\comparison_hist_vs_scen.csv,8
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_before_after_bascule.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_country_summary.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_ir_diagnostics.csv,14
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_rule_application.csv,14
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_rule_definition.csv,1
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_scope_audit.csv,14
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_year_panel.csv,14
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_before_after_bascule.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_country_summary.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_ir_diagnostics.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_rule_application.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_rule_definition.csv,1
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_scope_audit.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_year_panel.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\checks_filtered.csv,1
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_before_after_bascule.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_country_summary.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_ir_diagnostics.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_rule_application.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_rule_definition.csv,1
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_scope_audit.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_year_panel.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\checks_filtered.csv,1
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_before_after_bascule.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_country_summary.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_ir_diagnostics.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_rule_application.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_rule_definition.csv,1
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_scope_audit.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_year_panel.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\checks_filtered.csv,1
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_before_after_bascule.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_country_summary.csv,2
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_ir_diagnostics.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_rule_application.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_rule_definition.csv,1
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_scope_audit.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_year_panel.csv,6
+Q1,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\checks_filtered.csv,1
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\checks_filtered.csv,20
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\warnings_filtered.csv,1
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\test_ledger.csv,9
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\comparison_hist_vs_scen.csv,12
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\hist\tables\Q2_country_slopes.csv,4
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\hist\tables\Q2_driver_correlations.csv,8
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\hist\tables\Q2_driver_diagnostics.csv,16
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\BASE\tables\Q2_country_slopes.csv,4
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\BASE\tables\Q2_driver_correlations.csv,8
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\BASE\tables\Q2_driver_diagnostics.csv,16
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\BASE\checks_filtered.csv,5
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_CO2\tables\Q2_country_slopes.csv,4
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_CO2\tables\Q2_driver_correlations.csv,8
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_CO2\tables\Q2_driver_diagnostics.csv,16
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_CO2\checks_filtered.csv,5
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_GAS\tables\Q2_country_slopes.csv,4
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_GAS\tables\Q2_driver_correlations.csv,8
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_GAS\tables\Q2_driver_diagnostics.csv,16
+Q2,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_GAS\checks_filtered.csv,5
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\checks_filtered.csv,37
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\warnings_filtered.csv,0
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\test_ledger.csv,10
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\comparison_hist_vs_scen.csv,16
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\hist\tables\Q3_status.csv,2
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\BASE\tables\Q3_status.csv,2
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\BASE\checks_filtered.csv,7
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\DEMAND_UP\tables\Q3_status.csv,2
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\DEMAND_UP\checks_filtered.csv,7
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\FLEX_UP\tables\Q3_status.csv,2
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\FLEX_UP\checks_filtered.csv,7
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\LOW_RIGIDITY\tables\Q3_status.csv,2
+Q3,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\LOW_RIGIDITY\checks_filtered.csv,7
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\checks_filtered.csv,20
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\warnings_filtered.csv,8
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\test_ledger.csv,10
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\comparison_hist_vs_scen.csv,28
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\hist\tables\Q4_bess_frontier.csv,48
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\hist\tables\Q4_sizing_summary.csv,2
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\BASE\tables\Q4_bess_frontier.csv,48
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\BASE\tables\Q4_sizing_summary.csv,2
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\BASE\checks_filtered.csv,4
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\FLEX_UP\tables\Q4_bess_frontier.csv,48
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\FLEX_UP\tables\Q4_sizing_summary.csv,2
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\FLEX_UP\checks_filtered.csv,4
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_CO2\tables\Q4_bess_frontier.csv,48
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_CO2\tables\Q4_sizing_summary.csv,2
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_CO2\checks_filtered.csv,4
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_GAS\tables\Q4_bess_frontier.csv,48
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_GAS\tables\Q4_sizing_summary.csv,2
+Q4,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_GAS\checks_filtered.csv,4
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\checks_filtered.csv,23
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\warnings_filtered.csv,0
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\test_ledger.csv,10
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\comparison_hist_vs_scen.csv,24
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\hist\tables\Q5_summary.csv,2
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\BASE\tables\Q5_summary.csv,2
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\BASE\checks_filtered.csv,4
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_BOTH\tables\Q5_summary.csv,2
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_BOTH\checks_filtered.csv,6
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_CO2\tables\Q5_summary.csv,2
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_CO2\checks_filtered.csv,4
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_GAS\tables\Q5_summary.csv,2
+Q5,reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_GAS\checks_filtered.csv,4
+```
+
+## Inputs
+
+### Registry des tests
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\test_registry.csv`
+
+```csv
+test_id,question_id,source_ref,mode,scenario_group,title,what_is_tested,metric_rule,severity_if_fail
+Q1-H-01,Q1,SPEC2-Q1/Slides 2-4,HIST,HIST_BASE,Score marche de bascule,La signature marche de phase 2 est calculee et exploitable.,stage2_market_score present et non vide,HIGH
+Q1-H-02,Q1,SPEC2-Q1/Slides 3-4,HIST,HIST_BASE,Stress physique SR/FAR/IR,La bascule physique est fondee sur SR/FAR/IR.,sr_energy/far_energy/ir_p10 presentes,CRITICAL
+Q1-H-03,Q1,SPEC2-Q1,HIST,HIST_BASE,Concordance marche vs physique,La relation entre bascule marche et bascule physique est mesurable.,bascule_year_market et bascule_year_physical comparables,MEDIUM
+Q1-H-04,Q1,Slides 4-6,HIST,HIST_BASE,Robustesse seuils,Le diagnostic reste stable sous variation raisonnable de seuils.,delta bascules sous choc de seuil <= 50%,MEDIUM
+Q1-S-01,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Bascule projetee par scenario,Chaque scenario fournit un diagnostic de bascule projetee.,Q1_country_summary non vide en SCEN,HIGH
+Q1-S-02,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Effets DEMAND_UP/FLEX_UP/LOW_RIGIDITY,Les leviers scenario modifient la bascule vs BASE.,delta bascule_year_market vs BASE effectivement observable (finite_share/nonzero_share),MEDIUM
+Q1-S-03,Q1,SPEC2-Q1,SCEN,DEFAULT,Qualite de causalite,Le regime_coherence respecte le seuil d'interpretation.,part regime_coherence >= seuil min,MEDIUM
+Q2-H-01,Q2,SPEC2-Q2/Slides 10,HIST,HIST_BASE,Pentes OLS post-bascule,Les pentes PV/Wind sont estimees en historique.,Q2_country_slopes non vide,HIGH
+Q2-H-02,Q2,SPEC2-Q2/Slides 10-12,HIST,HIST_BASE,Robustesse statistique,R2/p-value/n sont disponibles pour qualifier la robustesse.,"colonnes r2,p_value,n presentes",MEDIUM
+Q2-H-03,Q2,Slides 10-13,HIST,HIST_BASE,Drivers physiques,Les drivers SR/FAR/IR/corr VRE-load sont exploites.,driver correlations non vides,MEDIUM
+Q2-S-01,Q2,SPEC2-Q2/Slides 11,SCEN,DEFAULT,Pentes projetees,Les pentes sont reproduites en mode scenario.,Q2_country_slopes non vide en SCEN,HIGH
+Q2-S-02,Q2,SPEC2-Q2,SCEN,DEFAULT,Delta pente vs BASE,Les differences de pente vs BASE sont calculables.,delta slope par pays/tech vs BASE,MEDIUM
+Q3-H-01,Q3,SPEC2-Q3/Slides 16,HIST,HIST_BASE,Tendances glissantes,Les tendances h_negative et capture_ratio sont estimees.,Q3_status non vide,HIGH
+Q3-H-02,Q3,SPEC2-Q3,HIST,HIST_BASE,Statuts sortie phase 2,Les statuts degradation/stabilisation/amelioration sont attribues.,status dans ensemble attendu,MEDIUM
+Q3-S-01,Q3,SPEC2-Q3/Slides 17,SCEN,DEFAULT,Conditions minimales d'inversion,Les besoins demande/must-run/flex sont quantifies en scenario.,"inversion_k, inversion_r et additional_absorbed presentes",HIGH
+Q3-S-02,Q3,Slides 17-19,SCEN,DEFAULT,Validation entree phase 3,Le statut prospectif est interpretable pour la transition phase 3.,status non vide en SCEN,MEDIUM
+Q4-H-01,Q4,SPEC2-Q4/Slides 22,HIST,HIST_BASE,Simulation BESS 3 modes,"SURPLUS_FIRST, PRICE_ARBITRAGE_SIMPLE et PV_COLOCATED sont executes.",3 modes executes avec sorties non vides,CRITICAL
+Q4-H-02,Q4,SPEC2-Q4,HIST,HIST_BASE,Invariants physiques BESS,Bornes SOC/puissance/energie respectees.,aucun check FAIL Q4,CRITICAL
+Q4-S-01,Q4,SPEC2-Q4/Slides 23,SCEN,DEFAULT,Comparaison effet batteries par scenario,Impact FAR/surplus/capture compare entre scenarios utiles.,Q4 summary non vide pour >=1 scenario,HIGH
+Q4-S-02,Q4,Slides 23-25,SCEN,DEFAULT,Sensibilite valeur commodites,Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.,delta pv_capture ou revenus vs BASE,MEDIUM
+Q5-H-01,Q5,SPEC2-Q5/Slides 28,HIST,HIST_BASE,Ancre thermique historique,TTL/TCA/alpha/corr sont estimes hors surplus.,Q5_summary non vide avec ttl_obs et tca_q95,HIGH
+Q5-H-02,Q5,SPEC2-Q5,HIST,HIST_BASE,Sensibilites analytiques,dTCA/dCO2 et dTCA/dGas sont positives.,dTCA_dCO2 > 0 et dTCA_dGas > 0,CRITICAL
+Q5-S-01,Q5,SPEC2-Q5/Slides 29,SCEN,DEFAULT,Sensibilites scenarisees,BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.,Q5_summary non vide sur scenarios selectionnes,HIGH
+Q5-S-02,Q5,SPEC2-Q5/Slides 31,SCEN,DEFAULT,CO2 requis pour TTL cible,Le CO2 requis est calcule et interpretable.,co2_required_* non NaN,MEDIUM
+```
+
+### Hypothèses Phase 1
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\phase1_assumptions.csv`
+
+```csv
+param_group,param_name,param_value,unit,description,source,last_updated,owner
+PHASE_THRESHOLDS,capture_ratio_pv_vs_ttl_crisis_max,0.7,ratio,Seuil crise capture ratio pv/ttl,default,2026-02-09,system
+PHASE_THRESHOLDS,capture_ratio_pv_vs_ttl_stage2_max,0.8,ratio,Seuil capture ratio pv/ttl,default,2026-02-09,system
+PHASE_THRESHOLDS,capture_ratio_pv_stage2_max,0.9,ratio,Seuil capture ratio pv en declenchement phase2,default,2026-02-10,system
+PHASE_THRESHOLDS,days_spread_gt50_stage2_min,150.0,days,Seuil jours spread>50,default,2026-02-09,system
+PHASE_THRESHOLDS,h_below_5_stage2_min,500.0,hours,Seuil heures basses,default,2026-02-09,system
+PHASE_THRESHOLDS,h_negative_stage2_min,200.0,hours,Seuil heures negatives stage2,default,2026-02-09,system
+PHASE_THRESHOLDS,h_negative_stage2_strong,300.0,hours,Seuil fort heures negatives,default,2026-02-09,system
+PHASE_THRESHOLDS,stage1_capture_ratio_pv_vs_ttl_min,0.9,ratio,Stage1 min capture ratio pv vs ttl,default,2026-02-10,system
+PHASE_THRESHOLDS,stage1_days_spread_gt50_max,120.0,days,Stage1 max days spread gt50,default,2026-02-10,system
+PHASE_THRESHOLDS,stage1_h_below_5_max,300.0,hours,Stage1 max hours below 5,default,2026-02-10,system
+PHASE_THRESHOLDS,stage1_h_negative_max,100.0,hours,Stage1 max negative hours,default,2026-02-10,system
+PHYSICS_THRESHOLDS,far_energy_tension_max,0.95,ratio,Seuil far tension,default,2026-02-09,system
+PHYSICS_THRESHOLDS,ir_p10_high_min,0.7,ratio,Seuil inflexibilite haute,default,2026-02-09,system
+PHYSICS_THRESHOLDS,sr_energy_material_min,0.01,ratio,Seuil surplus ratio materialite,default,2026-02-09,system
+PHYSICS_THRESHOLDS,sr_hours_material_min,0.05,share,Seuil part d'heures de surplus materialite,default,2026-02-10,system
+Q2,exclude_year_2022,0.0,bool,Exclude 2022 from regressions (1=yes),default,2026-02-10,system
+Q2,min_points_regression,3.0,count,Nombre minimal de points regression,default,2026-02-09,system
+Q3,demand_k_max,0.3,ratio,Borne max hausse demande,default,2026-02-09,system
+Q3,far_target,0.95,ratio,Cible FAR inversion,default,2026-02-09,system
+Q3,require_recent_stage2,1.0,bool,Require recent stage2 stress,default,2026-02-10,system
+Q3,sr_energy_target,0.01,ratio,Cible SR inversion,default,2026-02-09,system
+Q3,stage2_recent_h_negative_min,200.0,hours,Recent stage2 threshold on negative hours,default,2026-02-10,system
+Q3,trend_capture_ratio_min,0.0,ratio/year,Improvement threshold for capture trend,default,2026-02-10,system
+Q3,trend_h_negative_max,-10.0,hours/year,Improvement threshold for h_negative trend,default,2026-02-10,system
+Q3,trend_window_years,3.0,years,Fenetre tendance Q3,default,2026-02-09,system
+Q3,h_negative_target,100.0,hours,Target max negative hours for phase3 inversion proxy,default,2026-02-10,system
+Q3,h_below_5_target,300.0,hours,Target max hours below 5 EUR/MWh for phase3 inversion proxy,default,2026-02-10,system
+Q3,slope_capture_target,0.0,ratio/year,Target minimum capture-ratio slope for phase3 trend status,default,2026-02-10,system
+Q4,bess_eta_roundtrip,0.88,ratio,Rendement roundtrip BESS,default,2026-02-09,system
+Q4,bess_max_cycles_per_day,1.0,cycles/day,Cycles max journaliers BESS,default,2026-02-09,system
+Q4,bess_soc_init_frac,0.5,ratio,SOC initial fraction,default,2026-02-09,system
+Q4,target_far,0.95,ratio,Cible FAR pour sizing,default,2026-02-09,system
+Q4,target_surplus_unabs_energy_twh,0.0,TWh,Cible surplus non absorbe,default,2026-02-09,system
+Q5,ccgt_ef_t_per_mwh_th,0.202,tCO2/MWhth,Facteur emission CCGT,default,2026-02-09,system
+Q5,ccgt_efficiency,0.55,ratio,Rendement CCGT,default,2026-02-09,system
+Q5,ccgt_vom_eur_mwh,3.0,EUR/MWh,VOM CCGT,default,2026-02-09,system
+Q5,coal_ef_t_per_mwh_th,0.341,tCO2/MWhth,Facteur emission charbon,default,2026-02-09,system
+Q5,coal_efficiency,0.38,ratio,Rendement charbon,default,2026-02-09,system
+Q5,coal_vom_eur_mwh,4.0,EUR/MWh,VOM charbon,default,2026-02-09,system
+QUALITY,regime_coherence_min_for_causality,0.55,ratio,Seuil coherence minimale causalite,default,2026-02-09,system
+PHASE_THRESHOLDS,q1_require_non_capture_signal,1.0,bool01,"Q1: exiger au moins un signal non-capture (h_negative, h_below_5 ou spread) pour classer phase2.",codex_adjustment,2026-02-10,codex
+PHASE_THRESHOLDS,q1_min_non_capture_flags,1.0,count,Q1: nombre minimal de flags non-capture requis pour phase2.,codex_adjustment,2026-02-10,codex
+Q3,stage2_recent_h_negative_min_scen,80.0,h/an,Q3 SCEN: seuil h_negative recent pour qualifier un contexte Stage2 en prospectif.,codex_adjustment,2026-02-10,codex
+Q3,stage2_recent_sr_energy_min_scen,0.02,ratio,Q3 SCEN: seuil SR recent pour qualifier un contexte Stage2 meme si h_negative reste faible.,codex_adjustment,2026-02-10,codex
+```
+
+### Hypothèses Phase 2 (DE/ES)
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\phase2_scenario_country_year.csv`
+
+```csv
+scenario_id,country,year,demand_total_twh,demand_peak_gw,demand_shape_reference,cap_pv_gw,cap_wind_on_gw,cap_wind_off_gw,cap_must_run_nuclear_gw,cap_must_run_chp_gw,cap_must_run_biomass_gw,cap_must_run_hydro_ror_gw,must_run_min_output_factor,interconnection_export_gw,export_coincidence_factor,psh_pump_gw,bess_power_gw,bess_energy_gwh,bess_eta_roundtrip,co2_eur_per_t,gas_eur_per_mwh_th,marginal_tech,marginal_efficiency,marginal_emission_factor_t_per_mwh,supported_vre_share,negative_price_rule,negative_price_rule_threshold_hours,price_exposure_share,source_label,notes
+BASE,DE,2025,480.1727000000001,53.353,historical_mean_2018_2024,19.466700000000003,36.46300000000001,5.3717500000000005,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.5,0.5,0.88,80.0,39.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2026,489.3188400000001,54.36919999999999,historical_mean_2018_2024,19.80526,36.85368,5.46942,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.6,1.0,0.88,82.0,39.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2027,498.4649800000001,55.3854,historical_mean_2018_2024,20.14382,37.24436,5.56709,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.7,1.5,0.88,84.0,40.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2028,507.61112,56.4016,historical_mean_2018_2024,20.482380000000003,37.63504,5.66476,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.8,2.0,0.88,86.0,40.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2029,516.7572600000001,57.4178,historical_mean_2018_2024,20.82094,38.02572000000001,5.76243,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.9,2.5,0.88,88.0,41.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2030,525.9034,58.434,historical_mean_2018_2024,21.1595,38.4164,5.8601,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.0,3.0,0.88,90.0,42.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+BASE,DE,2031,535.04954,59.4502,historical_mean_2018_2024,21.49806,38.80708,5.95777,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.1,3.5,0.88,92.0,42.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2032,544.19568,60.4664,historical_mean_2018_2024,21.83662,39.19776,6.05544,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.2,4.0,0.88,94.0,43.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2033,553.34182,61.4826,historical_mean_2018_2024,22.17518,39.588440000000006,6.15311,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.3,4.5,0.88,96.0,43.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2034,562.48796,62.4988,historical_mean_2018_2024,22.51374,39.97912,6.25078,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.4,5.0,0.88,98.0,44.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2035,571.6341,63.515,historical_mean_2018_2024,22.8523,40.3698,6.34845,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.5,5.5,0.88,100.0,45.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2036,580.7802399999999,64.5312,historical_mean_2018_2024,23.19086,40.76048,6.4461200000000005,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.6,6.0,0.88,102.0,45.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2037,589.92638,65.5474,historical_mean_2018_2024,23.52942,41.15116,6.54379,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.7,6.5,0.88,104.0,46.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2038,599.0725199999999,66.56360000000001,historical_mean_2018_2024,23.867980000000003,41.54184,6.64146,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.8,7.0,0.88,106.0,46.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2039,608.21866,67.5798,historical_mean_2018_2024,24.20654,41.93252,6.73913,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.9,7.5,0.88,108.0,47.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,DE,2040,617.3648,68.596,historical_mean_2018_2024,24.5451,42.3232,6.8368,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,2.0,8.0,0.88,110.0,48.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+BASE,ES,2025,234.2802,26.030500000000004,historical_mean_2018_2024,12.5165,13.37405,1.9703,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.5,0.5,0.88,80.0,39.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2026,238.74268,26.5264,historical_mean_2018_2024,12.73418,13.51734,2.00612,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.6,1.0,0.88,82.0,39.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2027,243.20516,27.0223,historical_mean_2018_2024,12.95186,13.66063,2.04194,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.7,1.5,0.88,84.0,40.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2028,247.66764,27.5182,historical_mean_2018_2024,13.16954,13.80392,2.07776,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.8,2.0,0.88,86.0,40.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2029,252.13012,28.014100000000003,historical_mean_2018_2024,13.38722,13.94721,2.11358,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.9,2.5,0.88,88.0,41.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2030,256.5926,28.51,historical_mean_2018_2024,13.6049,14.0905,2.1494,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.0,3.0,0.88,90.0,42.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+BASE,ES,2031,261.05508,29.0059,historical_mean_2018_2024,13.82258,14.23379,2.18522,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.1,3.5,0.88,92.0,42.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2032,265.51756,29.501800000000003,historical_mean_2018_2024,14.04026,14.37708,2.22104,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.2,4.0,0.88,94.0,43.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2033,269.98004000000003,29.9977,historical_mean_2018_2024,14.25794,14.52037,2.25686,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.3,4.5,0.88,96.0,43.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2034,274.44252,30.4936,historical_mean_2018_2024,14.47562,14.66366,2.29268,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.4,5.0,0.88,98.0,44.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2035,278.905,30.9895,historical_mean_2018_2024,14.6933,14.80695,2.3285,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.5,5.5,0.88,100.0,45.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2036,283.36748,31.4854,historical_mean_2018_2024,14.91098,14.95024,2.36432,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.6,6.0,0.88,102.0,45.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2037,287.82996,31.9813,historical_mean_2018_2024,15.12866,15.09353,2.40014,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.7,6.5,0.88,104.0,46.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2038,292.29244,32.4772,historical_mean_2018_2024,15.34634,15.23682,2.43596,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.8,7.0,0.88,106.0,46.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2039,296.75492,32.9731,historical_mean_2018_2024,15.56402,15.38011,2.47178,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.9,7.5,0.88,108.0,47.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+BASE,ES,2040,301.2174,33.469,historical_mean_2018_2024,15.7817,15.5234,2.5076,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,2.0,8.0,0.88,110.0,48.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+DEMAND_UP,DE,2025,528.1899,58.6875,historical_mean_2018_2024,19.466700000000003,36.46300000000001,5.3717500000000005,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.5,0.5,0.88,80.0,39.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2026,538.2506599999999,59.8054,historical_mean_2018_2024,19.80526,36.85368,5.46942,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.6,1.0,0.88,82.0,39.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2027,548.31142,60.9233,historical_mean_2018_2024,20.14382,37.24436,5.56709,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.7,1.5,0.88,84.0,40.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2028,558.37218,62.0412,historical_mean_2018_2024,20.482380000000003,37.63504,5.66476,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.8,2.0,0.88,86.0,40.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2029,568.43294,63.1591,historical_mean_2018_2024,20.82094,38.02572000000001,5.76243,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.9,2.5,0.88,88.0,41.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2030,578.4937,64.277,historical_mean_2018_2024,21.1595,38.4164,5.8601,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.0,3.0,0.88,90.0,42.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+DEMAND_UP,DE,2031,588.55446,65.3949,historical_mean_2018_2024,21.49806,38.80708,5.95777,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.1,3.5,0.88,92.0,42.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2032,598.61522,66.5128,historical_mean_2018_2024,21.83662,39.19776,6.05544,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.2,4.0,0.88,94.0,43.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2033,608.67598,67.6307,historical_mean_2018_2024,22.17518,39.588440000000006,6.15311,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.3,4.5,0.88,96.0,43.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2034,618.73674,68.7486,historical_mean_2018_2024,22.51374,39.97912,6.25078,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.4,5.0,0.88,98.0,44.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2035,628.7975,69.8665,historical_mean_2018_2024,22.8523,40.3698,6.34845,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.5,5.5,0.88,100.0,45.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2036,638.85826,70.98440000000001,historical_mean_2018_2024,23.19086,40.76048,6.4461200000000005,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.6,6.0,0.88,102.0,45.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2037,648.91902,72.1023,historical_mean_2018_2024,23.52942,41.15116,6.54379,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.7,6.5,0.88,104.0,46.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2038,658.97978,73.2202,historical_mean_2018_2024,23.867980000000003,41.54184,6.64146,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.8,7.0,0.88,106.0,46.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2039,669.0405400000001,74.3381,historical_mean_2018_2024,24.20654,41.93252,6.73913,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.9,7.5,0.88,108.0,47.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,DE,2040,679.1013,75.456,historical_mean_2018_2024,24.5451,42.3232,6.8368,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,2.0,8.0,0.88,110.0,48.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+DEMAND_UP,ES,2025,257.70815000000005,28.634,historical_mean_2018_2024,12.5165,13.37405,1.9703,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.5,0.5,0.88,80.0,39.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2026,262.61688000000004,29.1794,historical_mean_2018_2024,12.73418,13.51734,2.00612,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.6,1.0,0.88,82.0,39.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2027,267.52561000000003,29.7248,historical_mean_2018_2024,12.95186,13.66063,2.04194,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.7,1.5,0.88,84.0,40.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2028,272.43434,30.270200000000003,historical_mean_2018_2024,13.16954,13.80392,2.07776,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.8,2.0,0.88,86.0,40.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2029,277.34307,30.8156,historical_mean_2018_2024,13.38722,13.94721,2.11358,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.9,2.5,0.88,88.0,41.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2030,282.2518,31.361,historical_mean_2018_2024,13.6049,14.0905,2.1494,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.0,3.0,0.88,90.0,42.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+DEMAND_UP,ES,2031,287.16053,31.9064,historical_mean_2018_2024,13.82258,14.23379,2.18522,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.1,3.5,0.88,92.0,42.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2032,292.06926,32.4518,historical_mean_2018_2024,14.04026,14.37708,2.22104,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.2,4.0,0.88,94.0,43.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2033,296.97799,32.9972,historical_mean_2018_2024,14.25794,14.52037,2.25686,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.3,4.5,0.88,96.0,43.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2034,301.88672,33.5426,historical_mean_2018_2024,14.47562,14.66366,2.29268,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.4,5.0,0.88,98.0,44.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2035,306.79545,34.088,historical_mean_2018_2024,14.6933,14.80695,2.3285,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.5,5.5,0.88,100.0,45.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2036,311.70418,34.6334,historical_mean_2018_2024,14.91098,14.95024,2.36432,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.6,6.0,0.88,102.0,45.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2037,316.61291,35.178799999999995,historical_mean_2018_2024,15.12866,15.09353,2.40014,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.7,6.5,0.88,104.0,46.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2038,321.52164,35.7242,historical_mean_2018_2024,15.34634,15.23682,2.43596,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.8,7.0,0.88,106.0,46.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2039,326.43037,36.2696,historical_mean_2018_2024,15.56402,15.38011,2.47178,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.9,7.5,0.88,108.0,47.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+DEMAND_UP,ES,2040,331.3391,36.815,historical_mean_2018_2024,15.7817,15.5234,2.5076,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,2.0,8.0,0.88,110.0,48.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+FLEX_UP,DE,2025,480.1727000000001,53.353,historical_mean_2018_2024,19.466700000000003,36.46300000000001,5.3717500000000005,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,0.9,1.0,0.88,80.0,39.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2026,489.3188400000001,54.36919999999999,historical_mean_2018_2024,19.80526,36.85368,5.46942,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.08,2.0,0.88,82.0,39.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2027,498.4649800000001,55.3854,historical_mean_2018_2024,20.14382,37.24436,5.56709,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.26,3.0,0.88,84.0,40.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2028,507.61112,56.4016,historical_mean_2018_2024,20.482380000000003,37.63504,5.66476,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.44,4.0,0.88,86.0,40.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2029,516.7572600000001,57.4178,historical_mean_2018_2024,20.82094,38.02572000000001,5.76243,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.62,5.0,0.88,88.0,41.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2030,525.9034,58.434,historical_mean_2018_2024,21.1595,38.4164,5.8601,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.8,6.0,0.88,90.0,42.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+FLEX_UP,DE,2031,535.04954,59.4502,historical_mean_2018_2024,21.49806,38.80708,5.95777,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.98,7.0,0.88,92.0,42.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2032,544.19568,60.4664,historical_mean_2018_2024,21.83662,39.19776,6.05544,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.16,8.0,0.88,94.0,43.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2033,553.34182,61.4826,historical_mean_2018_2024,22.17518,39.588440000000006,6.15311,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.34,9.0,0.88,96.0,43.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2034,562.48796,62.4988,historical_mean_2018_2024,22.51374,39.97912,6.25078,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.52,10.0,0.88,98.0,44.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2035,571.6341,63.515,historical_mean_2018_2024,22.8523,40.3698,6.34845,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.7,11.0,0.88,100.0,45.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2036,580.7802399999999,64.5312,historical_mean_2018_2024,23.19086,40.76048,6.4461200000000005,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.88,12.0,0.88,102.0,45.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2037,589.92638,65.5474,historical_mean_2018_2024,23.52942,41.15116,6.54379,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,3.06,13.0,0.88,104.0,46.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2038,599.0725199999999,66.56360000000001,historical_mean_2018_2024,23.867980000000003,41.54184,6.64146,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,3.24,14.0,0.88,106.0,46.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2039,608.21866,67.5798,historical_mean_2018_2024,24.20654,41.93252,6.73913,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,3.42,15.0,0.88,108.0,47.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,DE,2040,617.3648,68.596,historical_mean_2018_2024,24.5451,42.3232,6.8368,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,3.6,16.0,0.88,110.0,48.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+FLEX_UP,ES,2025,234.2802,26.030500000000004,historical_mean_2018_2024,12.5165,13.37405,1.9703,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,0.9,1.0,0.88,80.0,39.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2026,238.74268,26.5264,historical_mean_2018_2024,12.73418,13.51734,2.00612,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.08,2.0,0.88,82.0,39.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2027,243.20516,27.0223,historical_mean_2018_2024,12.95186,13.66063,2.04194,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.26,3.0,0.88,84.0,40.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2028,247.66764,27.5182,historical_mean_2018_2024,13.16954,13.80392,2.07776,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.44,4.0,0.88,86.0,40.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2029,252.13012,28.014100000000003,historical_mean_2018_2024,13.38722,13.94721,2.11358,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.62,5.0,0.88,88.0,41.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2030,256.5926,28.51,historical_mean_2018_2024,13.6049,14.0905,2.1494,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.8,6.0,0.88,90.0,42.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+FLEX_UP,ES,2031,261.05508,29.0059,historical_mean_2018_2024,13.82258,14.23379,2.18522,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,1.98,7.0,0.88,92.0,42.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2032,265.51756,29.501800000000003,historical_mean_2018_2024,14.04026,14.37708,2.22104,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.16,8.0,0.88,94.0,43.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2033,269.98004000000003,29.9977,historical_mean_2018_2024,14.25794,14.52037,2.25686,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.34,9.0,0.88,96.0,43.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2034,274.44252,30.4936,historical_mean_2018_2024,14.47562,14.66366,2.29268,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.52,10.0,0.88,98.0,44.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2035,278.905,30.9895,historical_mean_2018_2024,14.6933,14.80695,2.3285,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.7,11.0,0.88,100.0,45.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2036,283.36748,31.4854,historical_mean_2018_2024,14.91098,14.95024,2.36432,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,2.88,12.0,0.88,102.0,45.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2037,287.82996,31.9813,historical_mean_2018_2024,15.12866,15.09353,2.40014,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,3.06,13.0,0.88,104.0,46.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2038,292.29244,32.4772,historical_mean_2018_2024,15.34634,15.23682,2.43596,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,3.24,14.0,0.88,106.0,46.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2039,296.75492,32.9731,historical_mean_2018_2024,15.56402,15.38011,2.47178,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,3.42,15.0,0.88,108.0,47.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+FLEX_UP,ES,2040,301.2174,33.469,historical_mean_2018_2024,15.7817,15.5234,2.5076,1.5,1.0,1.2,1.0,0.55,3.75,0.35,1.3,3.6,16.0,0.88,110.0,48.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+HIGH_CO2,DE,2025,480.1727000000001,53.353,historical_mean_2018_2024,19.466700000000003,36.46300000000001,5.3717500000000005,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.5,0.5,0.88,120.0,39.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2026,489.3188400000001,54.36919999999999,historical_mean_2018_2024,19.80526,36.85368,5.46942,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.6,1.0,0.88,123.0,39.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2027,498.4649800000001,55.3854,historical_mean_2018_2024,20.14382,37.24436,5.56709,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.7,1.5,0.88,126.0,40.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2028,507.61112,56.4016,historical_mean_2018_2024,20.482380000000003,37.63504,5.66476,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.8,2.0,0.88,129.0,40.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2029,516.7572600000001,57.4178,historical_mean_2018_2024,20.82094,38.02572000000001,5.76243,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.9,2.5,0.88,132.0,41.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2030,525.9034,58.434,historical_mean_2018_2024,21.1595,38.4164,5.8601,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.0,3.0,0.88,135.0,42.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+HIGH_CO2,DE,2031,535.04954,59.4502,historical_mean_2018_2024,21.49806,38.80708,5.95777,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.1,3.5,0.88,138.0,42.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2032,544.19568,60.4664,historical_mean_2018_2024,21.83662,39.19776,6.05544,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.2,4.0,0.88,141.0,43.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2033,553.34182,61.4826,historical_mean_2018_2024,22.17518,39.588440000000006,6.15311,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.3,4.5,0.88,144.0,43.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2034,562.48796,62.4988,historical_mean_2018_2024,22.51374,39.97912,6.25078,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.4,5.0,0.88,147.0,44.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2035,571.6341,63.515,historical_mean_2018_2024,22.8523,40.3698,6.34845,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.5,5.5,0.88,150.0,45.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2036,580.7802399999999,64.5312,historical_mean_2018_2024,23.19086,40.76048,6.4461200000000005,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.6,6.0,0.88,153.0,45.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2037,589.92638,65.5474,historical_mean_2018_2024,23.52942,41.15116,6.54379,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.7,6.5,0.88,156.0,46.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2038,599.0725199999999,66.56360000000001,historical_mean_2018_2024,23.867980000000003,41.54184,6.64146,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.8,7.0,0.88,159.0,46.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2039,608.21866,67.5798,historical_mean_2018_2024,24.20654,41.93252,6.73913,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.9,7.5,0.88,162.0,47.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,DE,2040,617.3648,68.596,historical_mean_2018_2024,24.5451,42.3232,6.8368,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,2.0,8.0,0.88,165.0,48.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+HIGH_CO2,ES,2025,234.2802,26.030500000000004,historical_mean_2018_2024,12.5165,13.37405,1.9703,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.5,0.5,0.88,120.0,39.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2026,238.74268,26.5264,historical_mean_2018_2024,12.73418,13.51734,2.00612,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.6,1.0,0.88,123.0,39.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2027,243.20516,27.0223,historical_mean_2018_2024,12.95186,13.66063,2.04194,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.7,1.5,0.88,126.0,40.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2028,247.66764,27.5182,historical_mean_2018_2024,13.16954,13.80392,2.07776,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.8,2.0,0.88,129.0,40.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2029,252.13012,28.014100000000003,historical_mean_2018_2024,13.38722,13.94721,2.11358,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.9,2.5,0.88,132.0,41.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2030,256.5926,28.51,historical_mean_2018_2024,13.6049,14.0905,2.1494,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.0,3.0,0.88,135.0,42.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+HIGH_CO2,ES,2031,261.05508,29.0059,historical_mean_2018_2024,13.82258,14.23379,2.18522,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.1,3.5,0.88,138.0,42.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2032,265.51756,29.501800000000003,historical_mean_2018_2024,14.04026,14.37708,2.22104,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.2,4.0,0.88,141.0,43.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2033,269.98004000000003,29.9977,historical_mean_2018_2024,14.25794,14.52037,2.25686,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.3,4.5,0.88,144.0,43.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2034,274.44252,30.4936,historical_mean_2018_2024,14.47562,14.66366,2.29268,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.4,5.0,0.88,147.0,44.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2035,278.905,30.9895,historical_mean_2018_2024,14.6933,14.80695,2.3285,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.5,5.5,0.88,150.0,45.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2036,283.36748,31.4854,historical_mean_2018_2024,14.91098,14.95024,2.36432,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.6,6.0,0.88,153.0,45.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2037,287.82996,31.9813,historical_mean_2018_2024,15.12866,15.09353,2.40014,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.7,6.5,0.88,156.0,46.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2038,292.29244,32.4772,historical_mean_2018_2024,15.34634,15.23682,2.43596,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.8,7.0,0.88,159.0,46.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2039,296.75492,32.9731,historical_mean_2018_2024,15.56402,15.38011,2.47178,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.9,7.5,0.88,162.0,47.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_CO2,ES,2040,301.2174,33.469,historical_mean_2018_2024,15.7817,15.5234,2.5076,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,2.0,8.0,0.88,165.0,48.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+HIGH_GAS,DE,2025,480.1727000000001,53.353,historical_mean_2018_2024,19.466700000000003,36.46300000000001,5.3717500000000005,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.5,0.5,0.88,80.0,58.5,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2026,489.3188400000001,54.36919999999999,historical_mean_2018_2024,19.80526,36.85368,5.46942,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.6,1.0,0.88,82.0,59.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2027,498.4649800000001,55.3854,historical_mean_2018_2024,20.14382,37.24436,5.56709,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.7,1.5,0.88,84.0,60.3,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2028,507.61112,56.4016,historical_mean_2018_2024,20.482380000000003,37.63504,5.66476,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.8,2.0,0.88,86.0,61.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2029,516.7572600000001,57.4178,historical_mean_2018_2024,20.82094,38.02572000000001,5.76243,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.9,2.5,0.88,88.0,62.1,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2030,525.9034,58.434,historical_mean_2018_2024,21.1595,38.4164,5.8601,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.0,3.0,0.88,90.0,63.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+HIGH_GAS,DE,2031,535.04954,59.4502,historical_mean_2018_2024,21.49806,38.80708,5.95777,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.1,3.5,0.88,92.0,63.9,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2032,544.19568,60.4664,historical_mean_2018_2024,21.83662,39.19776,6.05544,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.2,4.0,0.88,94.0,64.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2033,553.34182,61.4826,historical_mean_2018_2024,22.17518,39.588440000000006,6.15311,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.3,4.5,0.88,96.0,65.7,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2034,562.48796,62.4988,historical_mean_2018_2024,22.51374,39.97912,6.25078,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.4,5.0,0.88,98.0,66.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2035,571.6341,63.515,historical_mean_2018_2024,22.8523,40.3698,6.34845,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.5,5.5,0.88,100.0,67.5,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2036,580.7802399999999,64.5312,historical_mean_2018_2024,23.19086,40.76048,6.4461200000000005,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.6,6.0,0.88,102.0,68.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2037,589.92638,65.5474,historical_mean_2018_2024,23.52942,41.15116,6.54379,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.7,6.5,0.88,104.0,69.3,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2038,599.0725199999999,66.56360000000001,historical_mean_2018_2024,23.867980000000003,41.54184,6.64146,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.8,7.0,0.88,106.0,70.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2039,608.21866,67.5798,historical_mean_2018_2024,24.20654,41.93252,6.73913,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.9,7.5,0.88,108.0,71.1,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,DE,2040,617.3648,68.596,historical_mean_2018_2024,24.5451,42.3232,6.8368,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,2.0,8.0,0.88,110.0,72.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+HIGH_GAS,ES,2025,234.2802,26.030500000000004,historical_mean_2018_2024,12.5165,13.37405,1.9703,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.5,0.5,0.88,80.0,58.5,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2026,238.74268,26.5264,historical_mean_2018_2024,12.73418,13.51734,2.00612,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.6,1.0,0.88,82.0,59.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2027,243.20516,27.0223,historical_mean_2018_2024,12.95186,13.66063,2.04194,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.7,1.5,0.88,84.0,60.3,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2028,247.66764,27.5182,historical_mean_2018_2024,13.16954,13.80392,2.07776,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.8,2.0,0.88,86.0,61.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2029,252.13012,28.014100000000003,historical_mean_2018_2024,13.38722,13.94721,2.11358,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,0.9,2.5,0.88,88.0,62.1,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2030,256.5926,28.51,historical_mean_2018_2024,13.6049,14.0905,2.1494,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.0,3.0,0.88,90.0,63.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+HIGH_GAS,ES,2031,261.05508,29.0059,historical_mean_2018_2024,13.82258,14.23379,2.18522,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.1,3.5,0.88,92.0,63.9,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2032,265.51756,29.501800000000003,historical_mean_2018_2024,14.04026,14.37708,2.22104,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.2,4.0,0.88,94.0,64.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2033,269.98004000000003,29.9977,historical_mean_2018_2024,14.25794,14.52037,2.25686,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.3,4.5,0.88,96.0,65.7,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2034,274.44252,30.4936,historical_mean_2018_2024,14.47562,14.66366,2.29268,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.4,5.0,0.88,98.0,66.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2035,278.905,30.9895,historical_mean_2018_2024,14.6933,14.80695,2.3285,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.5,5.5,0.88,100.0,67.5,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2036,283.36748,31.4854,historical_mean_2018_2024,14.91098,14.95024,2.36432,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.6,6.0,0.88,102.0,68.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2037,287.82996,31.9813,historical_mean_2018_2024,15.12866,15.09353,2.40014,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.7,6.5,0.88,104.0,69.3,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2038,292.29244,32.4772,historical_mean_2018_2024,15.34634,15.23682,2.43596,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.8,7.0,0.88,106.0,70.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2039,296.75492,32.9731,historical_mean_2018_2024,15.56402,15.38011,2.47178,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,1.9,7.5,0.88,108.0,71.1,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+HIGH_GAS,ES,2040,301.2174,33.469,historical_mean_2018_2024,15.7817,15.5234,2.5076,1.5,1.0,1.2,1.0,0.55,3.0,0.45,1.0,2.0,8.0,0.88,110.0,72.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+LOW_RIGIDITY,DE,2025,480.1727000000001,53.353,historical_mean_2018_2024,19.466700000000003,36.46300000000001,5.3717500000000005,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.5,0.5,0.88,80.0,39.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2026,489.3188400000001,54.36919999999999,historical_mean_2018_2024,19.80526,36.85368,5.46942,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.6,1.0,0.88,82.0,39.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2027,498.4649800000001,55.3854,historical_mean_2018_2024,20.14382,37.24436,5.56709,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.7,1.5,0.88,84.0,40.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2028,507.61112,56.4016,historical_mean_2018_2024,20.482380000000003,37.63504,5.66476,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.8,2.0,0.88,86.0,40.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2029,516.7572600000001,57.4178,historical_mean_2018_2024,20.82094,38.02572000000001,5.76243,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.9,2.5,0.88,88.0,41.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2030,525.9034,58.434,historical_mean_2018_2024,21.1595,38.4164,5.8601,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.0,3.0,0.88,90.0,42.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+LOW_RIGIDITY,DE,2031,535.04954,59.4502,historical_mean_2018_2024,21.49806,38.80708,5.95777,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.1,3.5,0.88,92.0,42.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2032,544.19568,60.4664,historical_mean_2018_2024,21.83662,39.19776,6.05544,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.2,4.0,0.88,94.0,43.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2033,553.34182,61.4826,historical_mean_2018_2024,22.17518,39.588440000000006,6.15311,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.3,4.5,0.88,96.0,43.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2034,562.48796,62.4988,historical_mean_2018_2024,22.51374,39.97912,6.25078,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.4,5.0,0.88,98.0,44.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2035,571.6341,63.515,historical_mean_2018_2024,22.8523,40.3698,6.34845,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.5,5.5,0.88,100.0,45.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2036,580.7802399999999,64.5312,historical_mean_2018_2024,23.19086,40.76048,6.4461200000000005,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.6,6.0,0.88,102.0,45.6,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2037,589.92638,65.5474,historical_mean_2018_2024,23.52942,41.15116,6.54379,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.7,6.5,0.88,104.0,46.2,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2038,599.0725199999999,66.56360000000001,historical_mean_2018_2024,23.867980000000003,41.54184,6.64146,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.8,7.0,0.88,106.0,46.8,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2039,608.21866,67.5798,historical_mean_2018_2024,24.20654,41.93252,6.73913,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.9,7.5,0.88,108.0,47.4,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,DE,2040,617.3648,68.596,historical_mean_2018_2024,24.5451,42.3232,6.8368,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,2.0,8.0,0.88,110.0,48.0,coal,0.38,0.341,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+LOW_RIGIDITY,ES,2025,234.2802,26.030500000000004,historical_mean_2018_2024,12.5165,13.37405,1.9703,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.5,0.5,0.88,80.0,39.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2026,238.74268,26.5264,historical_mean_2018_2024,12.73418,13.51734,2.00612,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.6,1.0,0.88,82.0,39.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2027,243.20516,27.0223,historical_mean_2018_2024,12.95186,13.66063,2.04194,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.7,1.5,0.88,84.0,40.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2028,247.66764,27.5182,historical_mean_2018_2024,13.16954,13.80392,2.07776,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.8,2.0,0.88,86.0,40.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2029,252.13012,28.014100000000003,historical_mean_2018_2024,13.38722,13.94721,2.11358,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,0.9,2.5,0.88,88.0,41.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2030,256.5926,28.51,historical_mean_2018_2024,13.6049,14.0905,2.1494,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.0,3.0,0.88,90.0,42.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+LOW_RIGIDITY,ES,2031,261.05508,29.0059,historical_mean_2018_2024,13.82258,14.23379,2.18522,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.1,3.5,0.88,92.0,42.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2032,265.51756,29.501800000000003,historical_mean_2018_2024,14.04026,14.37708,2.22104,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.2,4.0,0.88,94.0,43.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2033,269.98004000000003,29.9977,historical_mean_2018_2024,14.25794,14.52037,2.25686,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.3,4.5,0.88,96.0,43.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2034,274.44252,30.4936,historical_mean_2018_2024,14.47562,14.66366,2.29268,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.4,5.0,0.88,98.0,44.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2035,278.905,30.9895,historical_mean_2018_2024,14.6933,14.80695,2.3285,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.5,5.5,0.88,100.0,45.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2036,283.36748,31.4854,historical_mean_2018_2024,14.91098,14.95024,2.36432,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.6,6.0,0.88,102.0,45.6,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2037,287.82996,31.9813,historical_mean_2018_2024,15.12866,15.09353,2.40014,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.7,6.5,0.88,104.0,46.2,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2038,292.29244,32.4772,historical_mean_2018_2024,15.34634,15.23682,2.43596,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.8,7.0,0.88,106.0,46.8,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2039,296.75492,32.9731,historical_mean_2018_2024,15.56402,15.38011,2.47178,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,1.9,7.5,0.88,108.0,47.4,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption_interpolated_2025_2039_from_2030_2040,Auto-generated baseline for phase2 engine | generated annual trajectory row
+LOW_RIGIDITY,ES,2040,301.2174,33.469,historical_mean_2018_2024,15.7817,15.5234,2.5076,1.5,1.0,1.2,1.0,0.42,3.0,0.45,1.0,2.0,8.0,0.88,110.0,48.0,gas_ccgt,0.55,0.202,0.35,support_suspension,6.0,0.65,internal_assumption,Auto-generated baseline for phase2 engine
+```
+
+### Métriques annuelles historiques (DE/ES)
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\annual_metrics_hist.csv`
+
+```csv
+country,year,n_hours_expected,n_hours_with_price,n_hours_with_load,n_hours_with_vre,n_hours_with_must_run,missing_share_price,missing_share_load,missing_share_generation,missing_share_net_position,load_net_mode,must_run_mode,entsoe_code_used,data_version_hash,load_total_twh,load_net_twh,gen_solar_twh,gen_wind_on_twh,gen_wind_off_twh,gen_vre_twh,gen_primary_twh,gen_must_run_twh,exports_twh,vre_penetration_pct_gen,pv_penetration_pct_gen,wind_penetration_pct_gen,vre_penetration_proxy,baseload_price_eur_mwh,peakload_price_eur_mwh,offpeak_price_eur_mwh,capture_rate_pv_eur_mwh,capture_rate_wind_eur_mwh,capture_ratio_pv,capture_ratio_wind,capture_price_pv_eur_mwh,capture_price_wind_eur_mwh,capture_ratio_pv_vs_baseload,capture_ratio_wind_vs_baseload,capture_ratio_pv_vs_ttl,capture_ratio_wind_vs_ttl,h_negative_obs,h_below_5_obs,days_spread_50_obs,days_spread_gt50,avg_daily_spread_obs,max_daily_spread_obs,surplus_twh,surplus_unabsorbed_twh,sr_energy_share_load,sr_energy_share_gen,sr_energy,sr_hours,far_observed,far_energy,ir_p10,ir_mean,ttl_price_based_eur_mwh,ttl_eur_mwh,tca_ccgt_median_eur_mwh,tca_method,h_regime_a,h_regime_b,h_regime_c,h_regime_d,regime_coherence,nrl_price_corr,completeness,quality_flag,h_negative,h_below_5,vre_penetration_share_gen,pv_penetration_share_gen,wind_penetration_share_gen,sr_hours_share,p10_load_mw,p10_must_run_mw,p50_load_mw,p50_must_run_mw,ir_p10_excess
+DE,2018,8760,8760,8750,8760,8760,0.0,0.001141552511415525,0.0,0.00011415525114155251,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",fc4a9d60921bdf9622584b73439596dab0669c58debc359b7973c02885ab6e05,559.9527225899999,559.9527225899999,42.53518894,93.84295614749999,19.0654565625,155.44360164999998,575.9773977325,205.21734064749998,34.114891,26.987795399949416,7.384871195892748,19.60292420405667,0.2776012962862519,44.47275456621005,52.1181577266922,40.218063255152806,43.77257363689873,38.17753675887097,0.9842559576949769,0.8584477649576012,43.77257363689873,38.17753675887097,0.9842559576949769,0.8584477649576012,0.6055344788089055,0.5281346949178073,133,232,38,38,32.14734972677596,99.53,0.15389169749999995,0.0,0.0002748298048952968,0.00026718357023355205,0.00026718357023355205,0.008904109589041096,1.0,1.0,0.37949412707031116,0.3660721093180351,72.28749999999995,72.28749999999995,,none,0,78,7814,868,0.9888127853881279,0.6964810903936534,0.9988584474885844,OK,133.0,232.0,0.26987795399949416,0.07384871195892748,0.1960292420405667,0.008904109589041096,49206.191,18673.4605,63728.1,24085.081250000003,-0.6205058729296888
+DE,2019,8760,8759,8759,8760,8760,0.00011415525114155251,0.00011415525114155251,0.0,0.00011415525114155251,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",2ead0a9da339783edacd7f22b12d41c625e65a2a99af6562cf4fed8867550224,502.47891799250004,502.47891799250004,41.83308617,99.9897749475,24.3804648275,166.203325945,515.6919337375,156.9665405575,34.1900773,32.229188604994086,8.112030348586776,24.11715825640731,0.3307667645222097,37.669692887315904,44.45564814814815,33.892615958770214,34.906182773392544,32.78952818581776,0.926638368882113,0.8704485137137555,34.906182773392544,32.78952818581776,0.926638368882113,0.8704485137137555,0.5979133739875393,0.5616568719735827,211,335,31,31,29.95035519125683,117.32000000000001,0.2857743125,0.003529419999999982,0.0005687289600959248,0.0005541570340820306,0.0005541570340820306,0.015639269406392695,0.9876496247366533,0.9876496247366533,0.2843253281938316,0.31234867052667953,58.38,58.38,,none,6,131,7760,863,0.9990866537275944,0.813246051355149,0.9997716894977169,OK,211.0,335.0,0.32229188604994086,0.08112030348586775,0.24117158256407312,0.015639269406392695,44252.279,12582.043750000003,56884.927500000005,18371.4075,-0.7156746718061684
+DE,2020,8784,8783,8783,8784,8784,0.00011384335154826958,0.00011384335154826958,0.0,0.00011384335154826958,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",733a5defd1c10d00b64d81cb5fa9bb20285eaf0bdddb0211a2dd1080991d5985,490.2538991575,490.2538991575,45.93743737,103.4146983125,26.88256224,176.2346979225,493.92594583249996,138.029930155,21.1321214,35.680388813238146,9.300470598395796,26.379918214842345,0.3594763819836188,30.47081976545599,37.464856870229006,26.57132470296152,24.511203174738068,25.24537518940176,0.8044156134757428,0.8285098787536335,24.511203174738068,25.24537518940176,0.8044156134757428,0.8285098787536335,0.44293619528602535,0.4562032453178966,298,598,42,42,32.382179836512265,164.57999999999998,0.345342565,0.0,0.00070441574374721,0.0006991788301744984,0.0006991788301744984,0.015938069216757743,1.0,1.0,0.24397591911364153,0.28151579539155985,55.337999999999994,55.337999999999994,,none,0,140,7779,865,0.9982921553000114,0.7903113754356191,0.9997723132969034,OK,298.0,598.0,0.35680388813238145,0.09300470598395795,0.26379918214842346,0.015938069216757743,42656.7355,10407.216250000001,55683.177500000005,16086.86375,-0.7560240808863585
+DE,2021,8760,8759,8759,8760,8760,0.00011415525114155251,0.00011415525114155251,0.0,0.00011415525114155251,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",ebf5faacd8e60ed01f73a092174fa747eb7fb51517519a8ad7c85c1342ac6ff9,509.6973813775,509.6973813775,46.4220778,89.86921309,24.0098839125,160.30117480250001,504.186187665,150.0659387725,23.4870805,31.79404329676125,9.207328351256729,22.58671494550452,0.31450264541142553,96.86022947825094,115.51968071519796,86.47433979029678,75.45790652091513,83.19114655913475,0.7790391053931841,0.8588782724060605,75.45790652091513,83.19114655913475,0.7790391053931841,0.8588782724060605,0.3018750960974995,0.33281251123815836,139,248,202,202,80.08633879781421,351.21000000000004,0.18532896000000001,0.0,0.0003636058704071285,0.00036758039893615543,0.00036758039893615543,0.008789954337899543,1.0,1.0,0.27015488274244776,0.2943880299169914,249.9639999999992,249.9639999999992,,none,0,77,7814,869,0.9737412946683411,0.5221576401467792,0.9997716894977169,OK,139.0,248.0,0.3179404329676125,0.09207328351256729,0.2258671494550452,0.008789954337899543,45579.835999999996,12313.615249999999,58128.347499999996,17753.003750000003,-0.7298451172575522
+DE,2022,8760,8759,8759,8760,8760,0.00011415525114155251,0.00011415525114155251,0.0,0.00011415525114155251,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",8779e3327f0c26a267f8af48323efa726e51ef11fa8e9466e79634f0f6afb9d1,487.25054390749995,487.25054390749995,55.987503705,101.2674993075,24.7436552725,181.998658285,490.9224705575,152.84826037,28.8383439,37.072790348813975,11.40455103662695,25.66823931218703,0.3735217139532856,235.46672222856492,267.36034935897436,217.82031033871255,222.26978029580732,173.5038161884555,0.9439541103394327,0.7368506876315086,222.26978029580732,173.5038161884555,0.9439541103394327,0.7368506876315086,0.4327589952236369,0.3378117216890906,69,161,358,358,186.4810382513661,687.46,0.9049946575,0.0,0.001857349712208438,0.0018434573925130632,0.0018434573925130632,0.04257990867579909,1.0,1.0,0.31041471179310715,0.31365960253800035,513.6109999999999,513.6109999999999,,none,0,373,7548,839,0.9733987898161891,0.5909121520525994,0.9997716894977169,OK,69.0,161.0,0.3707279034881398,0.1140455103662695,0.2566823931218703,0.04257990867579909,42830.4555,13295.2035,55575.7675,18020.7975,-0.6895852882068929
+DE,2023,8760,8759,8759,8760,8760,0.00011415525114155251,0.00011415525114155251,0.0,0.00011415525114155251,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",665add90b6dbd1e6064d153dc4fc9879ade96a1336b5746ce7f0ed15e4701e76,463.039837155,463.039837155,55.798730455,119.46608692750002,23.5168147175,198.7816321,444.473392015,128.784043015,16.7474867,44.72295432552947,12.55389669155199,32.169057633977474,0.4292970413114994,95.1827480305971,106.2381314102564,89.06591948927115,72.18210511017934,79.91071132318326,0.7583528171195051,0.8395503699630048,72.18210511017934,79.91071132318326,0.7583528171195051,0.8395503699630048,0.4296438792423975,0.4756462554466297,300,530,340,340,97.58131147540985,594.9,2.5567322000000003,0.0,0.005521624695855593,0.005752272792774322,0.005752272792774322,0.07751141552511416,1.0,1.0,0.23904623188592336,0.2780956006537334,168.00449999999992,168.00449999999992,,none,0,679,7273,808,0.9867564790501199,0.8419341186601034,0.9997716894977169,OK,300.0,530.0,0.4472295432552947,0.1255389669155199,0.3216905763397747,0.07751141552511416,40906.756499999996,9778.606000000002,52824.7425,14321.170000000002,-0.7609537681140767
+DE,2024,8784,8783,8783,8784,8784,0.00011384335154826958,0.00011384335154826958,0.0,0.00011384335154826958,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",b93be6909a4bd71719b1711c2cd72a4765db54dc541bc67c20b93bca4544aa88,470.357313537993,470.357313537993,63.44404522,112.996908715,25.661745662500003,202.1026995975,428.492190735,123.19544645750001,11.7971791,47.1660170167465,14.806348071635412,32.359668945111096,0.4296790839230253,78.51545827166116,87.85491730279898,73.30828338357865,46.22796099131209,65.83122843523844,0.5887752808034911,0.838449266989748,46.22796099131209,65.83122843523844,0.5887752808034911,0.838449266989748,0.3164803003464944,0.45068582954109665,457,756,315,315,110.90152588555858,828.93,2.9484350598330002,0.0,0.006268500510080496,0.006880954014063825,0.006880954014063825,0.07570582877959928,1.0,1.0,0.22630464874543665,0.2618890318690237,146.069,146.069,,none,0,665,7307,812,0.9939656153933736,0.798724901005636,0.9997723132969034,OK,457.0,756.0,0.47166017016746503,0.1480634807163541,0.323596689451111,0.07570582877959928,41651.345,9425.893,53519.9775,14138.20625,-0.7736953512545633
+ES,2018,8760,8759,8757,8760,8760,0.00011415525114155251,0.00034246575342465754,0.0,0.00011415525114155251,entsoe_total_load_no_pumping_adjust,observed,ES,bf4812e74b6b6f0f9588f795fbd3ecc39b9eb06714642c121e1f300e2a1b750f,254.516312,254.516312,12.023741,48.902871,0.0,60.926612,246.072839,66.932674,1.6264807,24.759584295282586,4.886252805820638,19.873331489461947,0.23938195364075524,57.300062792556226,61.49363026819923,54.96591434156745,59.342028861067455,53.09425838495249,1.0356363670298891,0.926600352554062,59.342028861067455,53.09425838495249,1.0356363670298891,0.926600352554062,0.8037930156251731,0.7191664133954488,0,57,5,5,18.345327868852458,63.3,0.001484,0.0,5.830667544797679e-06,6.030734663893564e-06,6.030734663893564e-06,0.00034246575342465754,1.0,1.0,0.2941978481508908,0.26288983729801124,73.82749999999999,73.82749999999999,,none,0,3,7881,876,0.9938349126612627,0.717322385044847,0.9995433789954338,OK,0.0,57.0,0.24759584295282586,0.04886252805820637,0.19873331489461948,0.00034246575342465754,22957.0,6753.9,29172.0,7745.0,-0.7058021518491092
+ES,2019,8760,8759,8759,8760,8760,0.00011415525114155251,0.00011415525114155251,0.0,0.00011415525114155251,entsoe_total_load_no_pumping_adjust,observed,ES,586a010942020321b15fdadb915addba7ab6e7e6969ee7d40e9b3f149b11363c,249.964346,249.964346,14.421334,52.346548,0.0,66.767882,246.324252,67.57312,2.5393687999999996,27.105687506563502,5.8546139419516035,21.2510735646119,0.26710962210586625,47.67961867793127,51.243438697318005,45.69598898169539,48.57853958864,45.65081383781028,1.0188533578001284,0.9574492226159511,48.57853958864,45.65081383781028,1.0188533578001284,0.9574492226159511,0.756474758843297,0.7108836264199555,0,69,2,2,16.83762295081967,55.23,0.003224,0.0,1.2897839438269328e-05,1.308843921710153e-05,1.308843921710153e-05,0.0005707762557077625,1.0,1.0,0.29135819919783734,0.27030017382365396,64.217,64.217,,none,0,5,7879,876,0.9956616052060737,0.6819177627648636,0.9997716894977169,OK,0.0,69.0,0.27105687506563503,0.05854613941951603,0.212510735646119,0.0005707762557077625,22638.8,6596.0,28751.0,7890.0,-0.7086418008021627
+ES,2020,8784,8783,8783,8784,8784,0.00011384335154826958,0.00011384335154826958,0.0,0.00011384335154826958,entsoe_total_load_no_pumping_adjust,observed,ES,aadf283bd90c9fdd7a58c5c8b1b316a5eeddca6e50f69b1cc7effcd15ec82f04,237.904532,237.904532,20.030933,53.148687,0.0,73.17962,238.656838,69.740548,5.5799319,30.66311471033568,8.393194667231786,22.269920043103898,0.30760078164463045,33.95808038255721,37.37387722646311,32.05361766270615,32.896135604866735,32.37432130900995,0.9687277736041889,0.9533613485890453,32.896135604866735,32.37432130900995,0.9687277736041889,0.9533613485890453,0.6328735759608061,0.6228346314667453,0,60,0,0,16.82008174386921,49.489999999999995,0.143823,0.0,0.0006045408163977305,0.0006026351526537865,0.0006026351526537865,0.015938069216757743,1.0,1.0,0.3059516604886905,0.29311172812074415,51.97899999999999,51.97899999999999,,none,0,140,7779,865,0.997609017420016,0.7267869347642084,0.9997723132969034,OK,0.0,60.0,0.3066311471033568,0.08393194667231786,0.222699200431039,0.015938069216757743,21150.4,6471.0,26795.0,8122.0,-0.6940483395113095
+ES,2021,8760,8759,8759,8760,8760,0.00011415525114155251,0.00011415525114155251,0.0,0.00011415525114155251,entsoe_total_load_no_pumping_adjust,observed,ES,100694b77bd2a9e8920e497fba215c1e06c075b891317874e8e9cdfd7345d628,243.928617,243.928617,25.354406,59.007867,0.0,84.362273,247.29159,66.875375,6.879464,34.11449333962388,10.252837955386997,23.861655384236883,0.34584819951650037,111.94053088252083,119.24339399744571,107.87574195841478,102.39616733438757,103.78184356536731,0.9147371959656877,0.9271158779324007,102.39616733438757,103.78184356536731,0.9147371959656877,0.9271158779324007,0.40146307140306625,0.4068958707952807,0,202,130,130,49.48653005464481,248.98000000000002,0.318652,0.0,0.0013063329916719038,0.0012885678805332602,0.0012885678805332602,0.02317351598173516,1.0,1.0,0.2859684981487956,0.2741283152717243,255.0575,255.0575,,none,0,203,7701,856,0.9588994177417514,0.3751809059748108,0.9997716894977169,OK,0.0,202.0,0.3411449333962388,0.10252837955386998,0.23861655384236882,0.02317351598173516,22309.8,6379.9,28039.0,7873.0,-0.7140315018512045
+ES,2022,8760,8759,8759,8760,8760,0.00011415525114155251,0.00011415525114155251,0.0,0.0028538812785388126,entsoe_total_load_no_pumping_adjust,observed,ES,993b2f6bf63272da8ed52aa372e273a53d53ad25106904b3c1c5bb6c86a628d3,236.074608,236.074608,31.0917916,58.817717200000004,0.0,89.9095088,261.42073980000004,66.9526826,19.3090617,34.39264569015652,11.893391329160332,22.499254360996186,0.38085209401258435,167.52426875214064,170.57403846153846,165.83686291895728,151.07895653475305,160.5904117834413,0.9018332547284886,0.958609835933931,151.07895653475305,160.5904117834413,0.9018332547284886,0.958609835933931,0.5595454736975258,0.5947726943161421,0,114,329,329,94.1781693989071,281.45000000000005,0.626367,0.0,0.002653258668124104,0.0023960111216853037,0.0023960111216853037,0.043835616438356165,1.0,1.0,0.3049924924924925,0.283575773637219,270.003,270.003,,none,0,384,7538,838,0.950907637858203,0.47869832125592837,0.9997716894977169,OK,0.0,114.0,0.3439264569015652,0.11893391329160333,0.22499254360996188,0.043835616438356165,21312.0,6500.0,27172.0,7812.0,-0.6950075075075075
+ES,2023,8760,8759,8759,8760,8760,0.00011415525114155251,0.00011415525114155251,0.0,0.00011415525114155251,entsoe_total_load_no_pumping_adjust,observed,ES,47d6bf442268d0ea68a7fc82f3687b7f79f3cb6586c171c8bc47168d36d8f00f,229.124044,229.124044,40.4262,61.05184,0.0,101.47804,244.850968,64.702416,13.448894600000001,41.44481879279317,16.51053305208906,24.93428574070412,0.4428956395340159,87.11351866651445,87.7176858974359,86.77923922681326,73.07910508828432,76.31964002657413,0.8388951130311212,0.8760941033588467,73.07910508828432,76.31964002657413,0.8388951130311212,0.8760941033588467,0.4893864853763817,0.5110872711519215,0,558,273,273,73.0756830601093,190.0,2.818976,0.0012438000000000002,0.01230327446559908,0.011513027794115154,0.011513027794115154,0.13150684931506848,0.9995587759526864,0.9995587759526864,0.29508513931888547,0.2823581006603221,149.328,149.328,,none,3,1149,6847,761,0.9366366023518666,0.7478810502523656,0.9997716894977169,OK,0.0,558.0,0.4144481879279317,0.16510533052089058,0.24934285740704118,0.13150684931506848,20672.0,6100.0,26108.0,7672.0,-0.7049148606811145
+ES,2024,8784,8783,8783,8784,8784,0.00011384335154826958,0.00011384335154826958,0.0,0.00011384335154826958,entsoe_total_load_no_pumping_adjust,observed,ES,660eff69331b9d10038666327666bba9968b079ac4f8085b82a208d451a26b9e,232.02486,232.02486,47.252452,58.9115,0.0,106.163952,242.172744,64.546884,12.3539402,43.83810921347945,19.511878677808596,24.326230535670852,0.4575542120788264,63.03954912899921,60.2145038167939,64.6146408937755,42.801173474764866,55.609473014267174,0.6789574809169381,0.8821362744913085,42.801173474764866,55.609473014267174,0.6789574809169381,0.8821362744913085,0.3057226676768919,0.3972105215304798,247,1690,271,271,71.06787465940056,173.81,3.567012,0.002132,0.01537340438434054,0.014729205033907532,0.014729205033907532,0.1691712204007286,0.9994023008613372,0.9994023008613372,0.29519897012608387,0.2781578481133162,140.0,140.0,,none,5,1481,6568,730,0.9461459637936923,0.693152070717716,0.9997723132969034,OK,247.0,1690.0,0.4383810921347945,0.19511878677808597,0.2432623053567085,0.1691712204007286,21128.8,6237.200000000001,26556.0,7532.0,-0.7048010298739161
+```
+
+### Métriques annuelles prospectives (DE/ES)
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\annual_metrics_scenarios.csv`
+
+```csv
+country,year,n_hours_expected,n_hours_with_price,n_hours_with_load,n_hours_with_vre,n_hours_with_must_run,missing_share_price,missing_share_load,missing_share_generation,missing_share_net_position,load_net_mode,must_run_mode,entsoe_code_used,data_version_hash,load_total_twh,load_net_twh,gen_solar_twh,gen_wind_on_twh,gen_wind_off_twh,gen_vre_twh,gen_primary_twh,gen_must_run_twh,exports_twh,vre_penetration_pct_gen,pv_penetration_pct_gen,wind_penetration_pct_gen,vre_penetration_proxy,baseload_price_eur_mwh,peakload_price_eur_mwh,offpeak_price_eur_mwh,capture_rate_pv_eur_mwh,capture_rate_wind_eur_mwh,capture_ratio_pv,capture_ratio_wind,capture_price_pv_eur_mwh,capture_price_wind_eur_mwh,capture_ratio_pv_vs_baseload,capture_ratio_wind_vs_baseload,capture_ratio_pv_vs_ttl,capture_ratio_wind_vs_ttl,h_negative,h_negative_obs,h_below_5,h_below_5_obs,days_spread_50_obs,days_spread_gt50,avg_daily_spread_obs,max_daily_spread_obs,surplus_twh,surplus_unabsorbed_twh,sr_energy_share_load,sr_energy_share_gen,sr_energy,sr_hours,far_observed,far_energy,ir_p10,ir_mean,ttl_price_based_eur_mwh,ttl_eur_mwh,tca_ccgt_median_eur_mwh,tca_method,h_regime_a,h_regime_b,h_regime_c,h_regime_d,regime_coherence,nrl_price_corr,completeness,quality_flag,scenario_id,mode,horizon_year,calib_mustrun_scale,calib_vre_scale_pv,calib_vre_scale_wind_on,calib_vre_scale_wind_off,calib_export_cap_eff_gw,calib_export_coincidence_used,calib_flex_realization_factor,calib_price_b_floor,calib_price_b_intercept,calib_price_b_slope_surplus_norm,vre_penetration_share_gen,pv_penetration_share_gen,wind_penetration_share_gen,sr_hours_share,p10_load_mw,p10_must_run_mw,p50_load_mw,p50_must_run_mw,ir_p10_excess,must_run_scope_coverage,core_sanity_issue_count,core_sanity_issues
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:BASE,3c673d51e6f45cac5ae37faaed11ee61d33aef687f7d60b6535c9c52727efc1f,525.9034,524.423312869,31.697453747499996,98.74950692264126,21.756967075256217,152.20392774539746,176.5478818501475,22.6446,3.4586516,0.8621113215880268,0.17954026644400387,0.6825710551440229,0.2902310481063944,126.8851482532473,134.8957779383934,122.4272072131127,122.4715392464344,121.69258827712454,0.9652157162002611,0.9590766922086181,122.4715392464344,121.69258827712454,0.9652157162002611,0.9590766922086181,0.5978761206044051,0.5940734723602696,0,0,0,0,121,121,32.443118408552564,95.37989405474895,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05069604702394818,0.04318000257485993,204.84433986529757,204.84433986529757,,none,0,0,7884,876,1.0,0.6729421509073772,1.0,OK,BASE,SCEN,2030,9425.893,21.1595,38.4164,5.8601,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+DE,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:BASE,61e8ec3925a709261922e373bc87c0c11ab25ca49e1bf3b6db221fa86737697c,617.3648,615.8812870144999,36.75064727891181,109.3064128317157,25.451076930673285,171.50813704130078,195.91705033430082,22.70664,3.4966016,0.8754120008883853,0.18758268979755854,0.687829311090827,0.2784759671343333,138.01219566964647,145.97391811676596,133.6002857785675,133.15273800112763,132.62324489460528,0.9647896503280717,0.9609530828134893,133.15273800112763,132.62324489460528,0.9647896503280717,0.9609530828134893,0.6001143033753848,0.5977278981723613,0,0,0,0,122,122,35.457981764211375,103.1412567759477,0.0,0.0,0.0,0.0,0.0,0.0,,,0.043264048243779316,0.036868533723554114,221.8789608116333,221.8789608116333,,none,0,0,7905,879,1.0,0.6808902763526699,1.0,OK,BASE,SCEN,2040,9425.893,24.5451,42.3232,6.8368,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:BASE,f4745b5be052577b9c5a1b8dffadc62e0e29186528f69bdfb370d4d96195da76,256.5926,255.23969,31.101249710331462,46.29946036015223,0.0,77.4007100704837,120.57657087048369,22.644600000000004,6.6676834000000005,0.6419216395996451,0.2579377526313848,0.38398388696826025,0.30324715592031826,98.66115688731401,97.31064458352448,99.4127213037086,92.13420270147233,96.19877619118401,0.9338447430400959,0.9750420451795188,92.13420270147233,96.19877619118401,0.9338447430400959,0.9750420451795188,0.5703919152839889,0.5955552074125496,0,0,0,0,197,197,41.31304690736875,79.58802578261405,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0944955713769326,0.08871896059738986,161.5278902675193,161.5278902675193,,none,0,0,7884,876,1.0,0.7162492897942901,1.0,OK,BASE,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+ES,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:BASE,dce1e53ca70c1a732fd92714fb132f899b3a6ee779f8d2b7648d26108105465b,301.2174,299.86286160000003,36.137043115351815,51.0458476562065,0.0,87.18289077155832,130.46665917155832,22.70664,6.671025300000001,0.6682388537052703,0.27698297285157797,0.39125588085369223,0.290742542462145,105.51371698585235,104.257888452442,106.20962196933453,98.40603141928085,103.01805804292654,0.9326373312436285,0.976347540260946,98.40603141928085,103.01805804292654,0.9326373312436285,0.976347540260946,0.5701749971834855,0.5968975692577833,0,0,0,0,198,198,44.54542933422071,85.78810122554783,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08064739954379686,0.07572341529338623,172.5891733334165,172.5891733334165,,none,0,0,7905,879,1.0,0.7218755416093814,1.0,OK,BASE,SCEN,2040,6237.200000000001,15.7817,15.5234,2.5076,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,5f11be867d20978ee3bb435bae265e1b036c3e37b66965d74a6f42d936314a4c,480.17270000000013,480.17270000000013,31.697453747499996,93.72828455868506,19.943855546237707,145.36959385242278,169.71354795717278,22.6446,3.4586516,85.6558569437879,18.67703205138275,66.97882489240514,0.30274439561520833,121.26224202715035,125.28668552736826,119.0226263479246,116.70794685121577,116.19498788609418,0.9624425946626083,0.9582124323586099,116.70794685121577,116.19498788609418,0.9624425946626083,0.9582124323586099,0.5947668981791557,0.592152757318915,0,0,0,0,121,121,31.01223866591052,91.3878440192006,0.0,0.0,0.0,0.0,0.0,0.0,,,0.055270510106827694,0.047159282483156574,196.2246843402186,196.2246843402186,,none,0,0,7884,876,1.0,0.6702923995696501,1.0,OK,BASE,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.856558569437879,0.1867703205138275,0.6697882489240514,0.0,42620.312833719305,2355.646431232241,54781.97026983656,2586.265437959775,-0.9447294898931723,,,
+DE,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,670dfcd0790aa840387d7ed6d6b52fce3e5dad5243a8f8a42c55e70a50dee933,489.31884000000014,489.31884000000014,31.697453747499996,94.7325290314763,20.306477852041407,146.73646063101768,171.0804147357677,22.6446,3.4586516,85.77046113528012,18.52780974166824,67.2426513936119,0.2998790331290282,122.39580981383992,124.14454528419614,121.42263293161605,117.85113444878147,117.3004428347682,0.9628690281802068,0.9583697596607139,117.85113444878147,117.3004428347682,0.9628690281802068,0.9583697596607139,0.5953586668791305,0.5925766908997399,0,0,0,0,121,121,31.28214042155566,92.17062995545699,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05423741719892237,0.04627780119808997,197.94980908996754,197.94980908996754,,none,0,0,7884,876,1.0,0.6708233841731053,1.0,OK,BASE,SCEN,2026,9425.893,19.80526,36.85368,5.46942,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8577046113528012,0.18527809741668239,0.672426513936119,0.0,43432.12772453045,2355.646431232241,55825.435609627355,2586.265437959775,-0.9457625828010776,,,
+DE,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,cb93c2be7aee8c010544058618001b2a18066957b0ebd2ae2cf04e35449c62d2,498.46498000000014,498.46498000000014,31.697453747499996,95.73677350426752,20.669100157845104,148.10332740961263,172.44728151436263,22.6446,3.4586516,85.88324855516933,18.380952989891007,67.50229556527833,0.2971188214859399,123.5293881311417,124.58234052474576,122.9434167564495,119.04392808091033,118.40581201771491,0.9636891259797264,0.9585234235274647,119.04392808091033,118.40581201771491,0.9636891259797264,0.9585234235274647,0.5961599405699679,0.5929643199243456,0,0,0,0,121,121,31.551548932613205,92.95341589171342,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0532422359307423,0.04542866782737675,199.68454768546937,199.68454768546937,,none,0,0,7884,876,1.0,0.6713228874727939,1.0,OK,BASE,SCEN,2027,9425.893,20.14382,37.24436,5.56709,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8588324855516933,0.18380952989891006,0.6750229556527833,0.0,44243.9426153416,2355.646431232241,56868.90094941815,2586.265437959775,-0.9467577640692577,,,
+DE,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,6150f8ee278519829d15b539a9cc9e551eba5ca7c9471bdc111749a79e42162f,507.61112,507.61112,31.72202261,97.19849206057513,21.087971354113154,150.0084860246883,174.41739931768828,22.70664,3.4966016,86.00545966830926,18.187418648652535,67.81804101965672,0.2955185182402787,124.61904946876905,127.11386896557539,123.24478449171473,120.15635965889147,119.45247632437783,0.964189344816051,0.958541064416592,120.15635965889147,119.45247632437783,0.964189344816051,0.958541064416592,0.5968244187977532,0.5933281846973266,0,0,0,0,120,120,31.51110942977977,93.68193207681173,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05242090399684957,0.04473235338106856,201.32614530239093,201.32614530239093,,none,0,0,7905,879,1.0,0.6720054159929238,1.0,OK,BASE,SCEN,2028,9425.893,20.482380000000003,37.63504,5.66476,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8600545966830926,0.18187418648652537,0.6781804101965672,0.0,44945.5406096182,2356.0858693832993,57752.532861835556,2586.504602787825,-0.9475790960031504,,,
+DE,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,f0124f340c0921ae523324f25fc3aed1fb8efb33caf6fe63ee057e98c6005200,516.7572600000001,516.7572600000001,31.697453747499996,97.74526244985003,21.394344769452513,150.83706096680254,175.18101507155257,22.6446,3.4586516,86.10354318656805,18.094114670218797,68.00942851634925,0.29189151782173806,125.79657467555668,136.4886748817877,119.84638671430658,121.38408649738994,120.63374954154446,0.9649236222087363,0.9589589370988223,121.38408649738994,120.63374954154446,0.9649236222087363,0.9589589370988223,0.5975438901340415,0.5938501665460085,0,0,0,0,120,120,31.88094650291234,94.51898776422622,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05135755628933543,0.04382057448017275,203.13836105019996,203.13836105019996,,none,0,0,7884,876,1.0,0.6722364106138063,1.0,OK,BASE,SCEN,2029,9425.893,20.82094,38.02572000000001,5.76243,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8610354318656804,0.18094114670218797,0.6800942851634925,0.0,45867.57239696389,2355.646431232241,58955.83162899973,2586.265437959775,-0.9486424437106645,,,
+DE,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,db07bcad2c8a309d42ba792a75e9c712a2b790f17e1f0144acd10e28ebc37e07,535.0495400000001,535.0495400000001,32.15984738746886,99.7537513954325,22.11958938105992,154.03318816396126,178.37714226871128,22.6446,3.4586516,86.35253721686058,18.029130290148135,68.32340692671245,0.28788584355004065,128.0494943746868,132.6245371755476,125.50346842367472,123.67992919306752,122.83307972342288,0.9658759669223415,0.9592625126968475,123.67992919306752,122.83307972342288,0.9658759669223415,0.9592625126968475,0.5987315978164085,0.594632019660289,0,0,0,0,121,121,32.65547894773701,96.08452011730196,0.0,0.0,0.0,0.0,0.0,0.0,,,0.049601743547658686,0.042322436161705695,206.569904852411,206.569904852411,,none,0,0,7884,876,1.0,0.6735034503113816,1.0,OK,BASE,SCEN,2031,9425.893,21.49806,38.80708,5.95777,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8635253721686058,0.18029130290148135,0.6832340692671245,0.0,47491.20217858617,2355.646431232241,61042.76230858132,2586.265437959775,-0.9503982564523413,,,
+DE,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,342240e474d587cbf8bd813f73007a2ec2e2fcb14664e2224927631aeddf7c5d,544.19568,544.19568,32.69532083322664,101.23446565095534,22.542339879633197,156.4721263638152,180.88103965681518,22.70664,3.4966016,86.5055434559029,18.075593160709012,68.42995029519386,0.28752915929765405,129.12007778894366,131.23970393459197,127.93849895881631,124.72109613796125,123.87123281952974,0.965931079609688,0.9593491185933644,124.72109613796125,123.87123281952974,0.965931079609688,0.9593491185933644,0.5990924629155856,0.595010180732806,0,0,0,0,121,121,32.82858029696325,96.80906022090893,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0488968118770316,0.04172513828114181,208.1833837985288,208.1833837985288,,none,0,0,7905,879,1.0,0.674567845024401,1.0,OK,BASE,SCEN,2032,9425.893,21.83662,39.19776,6.05544,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8650554345590289,0.1807559316070901,0.6842995029519386,0.0,48184.85661822931,2356.0858693832993,61914.874702644316,2586.504602787825,-0.9511031881229683,,,
+DE,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,09a5b99d760cb8d55eda0306c086bb5df48df9ce4a28eb2bb3b528488366dd1d,553.3418200000001,553.3418200000001,33.17277952474091,101.76224034101499,22.84483399266732,157.77985385842322,182.12380796317325,22.6446,3.4586516,86.63329392405822,18.214411336846574,68.41888258721166,0.28513994091106865,130.28538255732897,132.90399645037522,128.83678763777147,125.83028877653732,125.04325957940837,0.9658051141782441,0.959764304521162,125.83028877653732,125.04325957940837,0.9658051141782441,0.959764304521162,0.5991929421864335,0.5954451772818181,0,0,0,0,121,121,33.2121541840314,97.65000541745653,0.0,0.0,0.0,0.0,0.0,0.0,,,0.047962017525392794,0.040923348247923846,209.99961768138843,209.99961768138843,,none,0,0,7884,876,1.0,0.6751932631088217,1.0,OK,BASE,SCEN,2033,9425.893,22.17518,39.588440000000006,6.15311,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8663329392405822,0.18214411336846573,0.6841888258721165,0.0,49114.831960208474,2355.646431232241,63129.692988162904,2586.265437959775,-0.9520379824746072,,,
+DE,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,1aff03c34b9f3f8edf63c8581799acf233cf7decfd0e2266e6945f1ebac0b4d1,562.48796,562.48796,33.67924559337694,102.76648481380623,23.207456298471026,159.6531867056542,183.99714081040418,22.6446,3.4586516,86.76938456895118,18.304222253149565,68.4651623158016,0.28383396278500644,131.40333262713673,139.09357118854444,127.14915810380478,126.91115851266659,126.13700889230415,0.9658138494309204,0.9599224492290768,126.91115851266659,126.13700889230415,0.9658138494309204,0.9599224492290768,0.5994309173544415,0.5957744286536695,0,0,0,0,122,122,33.716966993169336,98.4327480675338,0.0,0.0,0.0,0.0,0.0,0.0,,,0.047182147806990836,0.04025792836525781,211.71940725510566,211.71940725510566,,none,0,0,7884,876,1.0,0.6760051592561089,1.0,OK,BASE,SCEN,2034,9425.893,22.51374,39.97912,6.25078,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8676938456895118,0.18304222253149566,0.6846516231580161,0.0,49926.646851019614,2355.646431232241,64173.1583279537,2586.265437959775,-0.9528178521930092,,,
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,e156a00ab07a5a5d04bd1e173d33ab33775038e80256343987abe07018c0d154,571.6341,571.6341,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,185.87047365763516,22.6446,3.4586516,86.90273198012588,18.3922228147874,68.51050916533849,0.2825697759333902,132.52128607491684,144.02080926995404,126.12176463801985,127.9956494768802,127.23516333548923,0.9658497383169206,0.9601111421719885,127.9956494768802,127.23516333548923,0.9658497383169206,0.9601111421719885,0.5996655238082546,0.5961026111452854,0,0,0,0,121,121,33.773809686030425,99.21549071761106,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04642723390429778,0.03961380190579953,213.44506961818823,213.44506961818823,,none,0,0,7884,876,1.0,0.6767959000871794,1.0,OK,BASE,SCEN,2035,9425.893,22.8523,40.3698,6.34845,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8690273198012588,0.18392222814787398,0.6851050916533848,0.0,50738.46174183076,2355.646431232241,65216.62366774449,2586.265437959775,-0.9535727660957022,,,
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,8eb53f8f094110a49439a85b319d06df45d57559860ce8f142dbf0a32450fffd,234.2802,234.2802,28.613131445241326,43.94530341930337,0.0,72.5584348645447,115.73429566454469,22.644600000000004,6.6676834000000005,62.69397886591454,24.723122287084507,37.97085657883004,0.30970792608399983,95.29191913310169,92.5993792683497,96.79032617937092,89.09658218346348,92.85001380188986,0.9349857049160203,0.9743744763099899,89.09658218346348,92.85001380188986,0.9349857049160203,0.9743744763099899,0.571299975376471,0.5953675135315121,0,0,0,0,195,195,39.25075237435021,76.30446300965609,0.0,0.0,0.0,0.0,0.0,0.0,,,0.10257314750653108,0.09665605544130491,155.95411521723113,155.95411521723113,,none,0,0,7884,876,1.0,0.7144035890581533,1.0,OK,BASE,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6269397886591453,0.24723122287084506,0.37970856578830037,0.0,21392.62454815791,2194.3088333300393,26877.445663145587,2648.9347173361994,-0.8974268524934689,,,
+ES,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,95f97b285d4ce77027fb084bacd6f8a818b28937bc5899174223d04315f8aaea,238.74268,238.74268,29.110755098259354,44.416134807473135,0.0,73.52688990573249,116.7027507057325,22.644600000000004,6.6676834000000005,63.00356200783261,24.944360713195614,38.059201294637,0.30797547345004456,95.98080592496514,92.96475677121533,97.65924692523957,89.73051353749331,93.52460558267047,0.9348797676031381,0.9744094632398185,89.73051353749331,93.52460558267047,0.9348797676031381,0.9744094632398185,0.5712733364877421,0.5954285935585077,0,0,0,0,195,195,39.56739910631013,76.93212901715596,0.0,0.0,0.0,0.0,0.0,0.0,,,0.10065589241295107,0.09484940019941136,157.07106879723707,157.07106879723707,,none,0,0,7884,876,1.0,0.715077804078102,1.0,OK,BASE,SCEN,2026,6237.200000000001,12.73418,13.51734,2.00612,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6300356200783261,0.24944360713195612,0.38059201294637,0.0,21800.103110979966,2194.3088333300393,27389.397009110267,2648.9347173361994,-0.899344107587049,,,
+ES,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,0e8822d1e211565479977acf7854f805a5c4a5946e135137e42fe484137aa58a,243.20516,243.20516,29.608378751277378,44.88696619564292,0.0,74.49534494692031,117.6712057469203,22.644600000000004,6.6676834000000005,63.30804930064211,25.161957475779744,38.14609182486235,0.30630659705953733,96.66969388195953,93.40495242807904,98.48653294264784,90.35659578878496,94.21140571435485,0.9346941338111269,0.9745702291081378,90.35659578878496,94.21140571435485,0.9346941338111269,0.9745702291081378,0.5711547469785856,0.5955214572167185,0,0,0,0,195,195,39.88413470877131,77.55979502465584,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09880899530445655,0.09310904423244969,158.19985085788443,158.19985085788443,,none,0,0,7884,876,1.0,0.7157342651122341,1.0,OK,BASE,SCEN,2027,6237.200000000001,12.95186,13.66063,2.04194,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6330804930064211,0.25161957475779745,0.3814609182486235,0.0,22207.581673802022,2194.3088333300393,27901.348355074944,2648.9347173361994,-0.9011910046955435,,,
+ES,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,a60d594200261120c339345b283f8f332883128f6e159a95e9fab4148c54ae25,247.66764,247.66764,30.155701527044,45.391653721379456,0.0,75.54735524842346,118.83112364842346,22.70664,6.671025300000001,63.57539416351867,25.3769388028875,38.198455360631165,0.3050352288592222,97.32936658820583,94.22146925473314,99.04134393291535,90.9511631187144,94.84316297042542,0.9344678415870393,0.9744557711106929,90.9511631187144,94.84316297042542,0.9344678415870393,0.9744557711106929,0.5711181587620962,0.5955575580286041,0,0,0,0,196,196,40.25784486578604,78.1239308548588,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09729618681509154,0.09168190079252986,159.25104415494664,159.25104415494664,,none,0,0,7905,879,1.0,0.7160408088825325,1.0,OK,BASE,SCEN,2028,6237.200000000001,13.16954,13.80392,2.07776,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6357539416351867,0.253769388028875,0.3819845536063116,0.0,22551.292773837155,2194.1547946450837,28341.20687562576,2649.646301748664,-0.9027038131849084,,,
+ES,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,b9499e57991203468a6bbc193fe2f6cd6280f0d68c5eedf21322ae290061e850,252.13012,252.13012,30.60362605731343,45.82862897198248,0.0,76.4322550292959,119.6081158292959,22.644600000000004,6.6676834000000005,63.90223146594805,25.586579844624236,38.315651621323816,0.30314607008990396,98.04748250006956,98.28164719258,97.91716909975993,91.61806125341008,95.59834845114803,0.9344254326300022,0.9750209389729124,91.61806125341008,95.59834845114803,0.9344254326300022,0.9750209389729124,0.5711164400944623,0.5959282230969218,0,0,0,0,196,196,40.6924265395121,78.8151270396556,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09531133175385631,0.08981314886138952,160.41923296457114,160.41923296457114,,none,0,0,7884,876,1.0,0.7170107499692413,1.0,OK,BASE,SCEN,2029,6237.200000000001,13.38722,13.94721,2.11358,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6390223146594805,0.25586579844624235,0.38315651621323815,0.0,23022.538799446134,2194.3088333300393,28925.251047004298,2648.9347173361994,-0.9046886682461437,,,
+ES,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,2011c72f3a125b5062e320d899ca99000b4987ff9e475090ae433a428aa56c77,261.0550799999999,261.0550799999999,31.59887336334949,46.77029174832202,0.0,78.3691651116715,121.5450259116715,22.644600000000004,6.6676834000000005,64.47747616477822,25.997668869076417,38.479807295701804,0.3002016475284508,99.4252921187118,96.49023980760865,101.05865811700161,92.88073611340049,96.98198858017412,0.9341761450648066,0.9754257343732978,92.88073611340049,96.98198858017412,0.9341761450648066,0.9754257343732978,0.5711131173053249,0.5963312538013092,0,0,0,0,196,196,41.32745380080086,80.07045905465534,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09205282468534842,0.08674261385758136,162.63106782004655,162.63106782004655,,none,0,0,7884,876,1.0,0.7182487146953734,1.0,OK,BASE,SCEN,2031,6237.200000000001,13.82258,14.23379,2.18522,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6447747616477822,0.2599766886907642,0.38479807295701807,0.0,23837.49592509024,2194.3088333300393,29949.15373893365,2648.9347173361994,-0.9079471753146515,,,
+ES,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,47b9ccf546242c34bc226d7f6ec265344b739ac9b4de89060e654782d6603359,265.51756,265.51756,32.14948205647994,47.27638503298847,0.0,79.42586708946843,122.70963548946841,22.70664,6.671025300000001,64.72667510799116,26.199639440082258,38.52703566790888,0.2991360235815229,100.0824712608046,96.87472822727685,101.87061737736686,93.46044142233556,97.60528680417745,0.9338342693276158,0.9752485682515587,93.46044142233556,97.60528680417745,0.9338342693276158,0.9752485682515587,0.570980451970997,0.5963026701571867,0,0,0,0,196,196,41.52485298456148,80.62998155896838,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09075526669306859,0.08551841166362029,163.6841350692736,163.6841350692736,,none,0,0,7905,879,1.0,0.7185131946887806,1.0,OK,BASE,SCEN,2032,6237.200000000001,14.04026,14.37708,2.22104,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6472667510799115,0.26199639440082256,0.3852703566790888,0.0,24176.611171951543,2194.1547946450837,30383.816380175365,2649.646301748664,-0.9092447333069315,,,
+ES,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,e193f1b030fef39e06f25b5a2d4cc6913c59a028cfbae18672fc5b577b8c10cf,269.98004,269.98004,32.59412066938554,47.71195452466156,0.0,80.3060751940471,123.48193599404709,22.644600000000004,6.6676834000000005,65.03467454374747,26.395861392193314,38.63881315155416,0.29745189753304396,100.80311882796155,97.47948924885736,102.64172242491281,94.1401257593172,98.36430922447758,0.9339009234424984,0.9758062088570272,94.1401257593172,98.36430922447758,0.9339009234424984,0.9758062088570272,0.5710053304808557,0.5966270433910591,0,0,0,0,196,196,41.96471096523827,81.32579106965508,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08900975610070878,0.08387508943253733,164.8673326395041,164.8673326395041,,none,0,0,7884,876,1.0,0.7194474506143496,1.0,OK,BASE,SCEN,2033,6237.200000000001,14.25794,14.52037,2.25686,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6503467454374747,0.26395861392193315,0.3863881315155416,0.0,24652.45305073436,2194.3088333300393,30973.056430863016,2648.9347173361994,-0.9109902438992912,,,
+ES,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,1f55de1fb7af57b79686a987dcca4a4d7c64a159b3201f4c742acb06d31143d8,274.44252,274.44252,33.091744322403564,48.182785912831335,0.0,81.2745302352349,124.4503910352349,22.644600000000004,6.6676834000000005,65.3067696767816,26.590309638347776,38.71646003843381,0.2961440896083993,101.49203686441277,100.27917210882153,102.1629833249526,94.77403611547187,99.05229209584058,0.9338076074094784,0.975961219776961,94.77403611547187,99.05229209584058,0.9338076074094784,0.975961219776961,0.5710124995602142,0.5967889436290551,0,0,0,0,196,196,42.282902885806344,81.95345707715494,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08756244299338019,0.08251126684013835,165.97541417826318,165.97541417826318,,none,0,0,7884,876,1.0,0.7200312379091495,1.0,OK,BASE,SCEN,2034,6237.200000000001,14.47562,14.66366,2.29268,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.653067696767816,0.26590309638347776,0.3871646003843381,0.0,25059.93161355641,2194.3088333300393,31485.00777682769,2648.9347173361994,-0.9124375570066198,,,
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,664cc79770c57b288405962c0cb91f77215c9dbe6006f9339d9c94ef99fb8761,278.905,278.905,33.5893679754216,48.65361730100112,0.0,82.24298527642273,125.41884607642272,22.644600000000004,6.6676834000000005,65.57466269966221,26.781754916605,38.7929077830572,0.2948781315373433,102.18095820676898,102.37194419919388,102.07467389115513,95.40682213699847,99.73814506791585,0.9337045160991477,0.9760932645208713,95.40682213699847,99.73814506791585,0.9337045160991477,0.9760932645208713,0.5709691825648695,0.5968903049531534,0,0,0,0,195,195,42.421549424273515,82.58112308465482,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08616144390548612,0.08119108657069612,167.09627253158976,167.09627253158976,,none,0,0,7884,876,1.0,0.7206055615416163,1.0,OK,BASE,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6557466269966221,0.26781754916605,0.387929077830572,0.0,25467.410176378464,2194.3088333300393,31996.959122792367,2648.9347173361994,-0.9138385560945139,,,
+DE,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:BASE,0fd642bdc82c7995d69095bfa3ae59c5817e3ac2826bc6240e9625c463a0b756,580.7802399999999,579.2967270144998,34.72298405606922,105.27043924133554,23.996708405153246,163.990131702558,188.399044995558,19.625559437326835,3.4966016,87.04403555040552,18.430552053428883,68.61348349697664,0.2830848579927387,132.6114441759362,141.11144072218227,127.8731482288799,127.89256950480588,127.30110576775398,0.9644157810025069,0.959955655100649,127.89256950480588,127.30110576775398,0.9644157810025069,0.959955655100649,0.5968771142083421,0.5941167414212651,0,0,0,0,122,122,34.39372601623945,100.3655201595954,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04310921290288491,0.033878250164592436,214.26951454560967,214.26951454560967,,none,0,0,7905,879,1.0,0.6786928540673827,1.0,OK,BASE,SCEN,2036,9425.893,23.19086,40.76048,6.4461200000000005,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8704403555040552,0.18430552053428884,0.6861348349697663,0.0,51213.35142939926,2207.767270240238,65970.18921353607,2243.198428039677,-0.9568907870971151,0.13812859443186482,0.0,
+DE,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:BASE,1cbfa324efa4a0f18aab948544f620b7ddf08be6da39287d09af0f24ee8448b8,589.92638,588.446292869,35.19864379928503,105.77921823217994,24.29532321588214,165.27318524734713,189.6171393520971,19.582011821916065,3.4586516,87.16152232444237,18.563007500036807,68.59851482440556,0.28086366971835147,133.7805611084052,136.07338599314758,132.50459672691744,128.99346313486987,128.46576611552996,0.9642167895404755,0.9602722925599889,128.99346313486987,128.46576611552996,0.9642167895404755,0.9602722925599889,0.5968847665575048,0.5944429814891213,0,0,0,0,121,121,34.554798966649344,101.21470089720907,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04234195201024247,0.03327748353455159,216.1111664464676,216.1111664464676,,none,0,0,7884,876,1.0,0.6792209476398613,1.0,OK,BASE,SCEN,2037,9425.893,23.52942,41.15116,6.54379,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8716152232444238,0.18563007500036807,0.6859851482440555,0.0,52156.217957009816,2208.396077771456,67190.98159951149,2244.1658585011546,-0.9576580479897575,0.13709475587655023,0.0,
+DE,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:BASE,962adb85cf10e391f7e355cd7b8f2a45414a2b37a39ac2f122a7ca50dd113a98,599.0725200000002,597.592432869,35.70510986792107,106.78346270497123,24.657945521685832,167.14651809457808,191.49047219932814,19.582011821916065,3.4586516,87.28711991507875,18.645893687470025,68.64122622760874,0.27969985712857703,134.89924807674132,136.43728356693902,134.04332640735623,130.0728432133719,129.54990983890946,0.964222151478385,0.9603456778736918,130.0728432133719,129.54990983890946,0.964222151478385,0.9603456778736918,0.5971431248068175,0.5947424233108102,0,0,0,0,121,121,34.92294951841899,102.00143214897395,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04169184916141986,0.03276817232759152,217.82523788656516,217.82523788656516,,none,0,0,7884,876,1.0,0.6799324474392449,1.0,OK,BASE,SCEN,2038,9425.893,23.867980000000003,41.54184,6.64146,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8728711991507875,0.18645893687470025,0.6864122622760874,0.0,52969.49217150643,2208.396077771456,68234.10555208597,2244.1658585011546,-0.9583081508385801,0.135886975606372,0.0,
+DE,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:BASE,f92cd91eb8e2477b05776e837d5ae18e71ef7965c1efbe366b63876d791e37b9,608.21866,606.7385728690001,36.21157593655708,107.78770717776241,25.020567827489533,169.01985094180907,193.36380504655907,19.582011821916065,3.4586516,87.41028389522624,18.72717385129957,68.68311004392667,0.27857113178512527,136.01793764900785,138.9592076823627,134.39085209864135,131.1341843631736,130.6578041691258,0.9640947850684467,0.9605924514624402,131.1341843631736,130.6578041691258,0.9640947850684467,0.9605924514624402,0.5973173928567271,0.595147476774974,0,0,0,0,121,121,35.206400342571236,102.78816340073884,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04106140732742583,0.0322742161081359,219.53853333486896,219.53853333486896,,none,0,0,7884,876,1.0,0.6806266459203806,1.0,OK,BASE,SCEN,2039,9425.893,24.20654,41.93252,6.73913,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8741028389522624,0.18727173851299567,0.6868311004392668,0.0,53782.76638600302,2208.396077771456,69279.05267711743,2244.1658585011546,-0.9589385926725742,0.13468935133981075,0.0,
+ES,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:BASE,2fdafaaec544a986e8eca59fa53ef6e144634358fc620faa9fba9c4b5122d286,283.36748,282.01294160000003,34.14326258591588,49.16111634459749,0.0,83.30437893051337,126.58814733051338,16.919452248912282,6.671025300000001,65.8074082662819,26.97192691885288,38.83548134742902,0.29539204285408355,100.01356641566201,98.55983752772651,100.82394294468136,92.79869082962684,97.39982119636683,0.9278610308120625,0.9738660932414678,92.79869082962684,97.39982119636683,0.9278610308120625,0.9738660932414678,0.5497294942412381,0.5769860971828654,0,0,0,0,196,196,45.0419901792257,87.34620941044389,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07452679803015333,0.05999530430383724,168.8079169878121,168.8079169878121,,none,0,0,7905,879,1.0,0.7164281464593041,1.0,OK,BASE,SCEN,2036,6237.200000000001,14.91098,14.95024,2.36432,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.658074082662819,0.2697192691885288,0.3883548134742902,0.0,25589.426929043642,1907.0980524482022,32256.28747943177,1944.6687142945586,-0.9254732019698466,0.16075923054449331,0.0,
+ES,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:BASE,7d787b431384d416e8fd8cb029941cb0d40408944b8ec746a8ba75a77b7350e2,287.82996,286.47705,34.584615281457644,49.59528007734066,0.0,84.1798953587983,127.3557561587983,16.879156992445363,6.6676834000000005,66.09822586568875,27.155910596089996,38.94231526959875,0.29384516267113997,100.74001712576076,97.06201984556553,102.78683437550691,93.47912945733525,98.16673394942339,0.9279244944006587,0.9744561967552084,93.47912945733525,98.16673394942339,0.9279244944006587,0.9744561967552084,0.5498646651534492,0.5774381790423464,0,0,0,0,196,196,45.49205012498595,88.04951886119092,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0731564439910304,0.05891975288228277,170.00388528556982,170.00388528556982,,none,0,0,7884,876,1.0,0.7174104710973128,1.0,OK,BASE,SCEN,2037,6237.200000000001,15.12866,15.09353,2.40014,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6609822586568874,0.27155910596089994,0.3894231526959875,0.0,26069.83871847061,1907.1766960629911,32853.60285113707,1945.179478936571,-0.9268435560089696,0.15958560218707285,0.0,
+ES,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:BASE,998a7de12175c97d68d2bbd91a8d3c8abaa9d098c74ff7427513ae76773801ec,292.29244,290.93953,35.082238934475676,50.066111465510446,0.0,85.14835039998611,128.32421119998614,16.879156992445363,6.6676834000000005,66.35408049949916,27.338752840492397,39.01532765900676,0.2926668314889562,101.43234234358717,97.54053754176405,103.59814416293861,94.11421844949665,98.86124794489699,0.9278521650490782,0.9746521243689614,94.11421844949665,98.86124794489699,0.9278521650490782,0.9746521243689614,0.549976124582585,0.5777163845366161,0,0,0,0,196,196,45.796868061795486,88.679705658489,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07203837215261978,0.058016031690315044,171.12418929262873,171.12418929262873,,none,0,0,7884,876,1.0,0.7180070098176414,1.0,OK,BASE,SCEN,2038,6237.200000000001,15.34634,15.23682,2.43596,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6635408049949916,0.273387528404924,0.3901532765900676,0.0,26474.455752865506,1907.1766960629911,33366.69181210006,1945.179478936571,-0.9279616278473802,0.15859889130220894,0.0,
+ES,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:BASE,2239d1296189ef730e5cd8b8fca60c5c936edef14f4b3fbb5b1c1e9b888d938d,296.75492,295.40201,35.57986258749369,50.536942853680216,0.0,86.11680544117391,129.29266624117392,16.879156992445363,6.6676834000000005,66.60610222124846,27.518855958253184,39.087246262995286,0.2915241011432993,102.12466863675,98.47402825016229,104.14417182933046,94.75094938276662,99.54031721753732,0.9277968844118245,0.9746941512397457,94.75094938276662,99.54031721753732,0.9277968844118245,0.9746941512397457,0.5501222815417091,0.5779292637151853,0,0,0,0,196,196,46.116571953487814,89.31079141164042,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07095393965417314,0.057139614562694965,172.2361601446656,172.2361601446656,,none,0,0,7884,876,1.0,0.7185923497419937,1.0,OK,BASE,SCEN,2039,6237.200000000001,15.56402,15.38011,2.47178,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6660610222124846,0.27518855958253186,0.39087246262995284,0.0,26879.0810680633,1907.1766960629911,33880.68710694128,1945.179478936571,-0.9290460603458268,0.1576197599255486,0.0,
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:DEMAND_UP,27e465e68b67d2c941180cca1c2006df1d46a847b0eea49f89f4e65ebffd0689,578.4937000000001,577.0136128690001,31.697453747499996,98.74950692264126,21.756967075256217,152.20392774539746,176.5478818501475,22.6446,3.4586516,0.8621113215880268,0.17954026644400387,0.6825710551440229,0.2637787468975233,128.6041244627808,137.37106632026098,123.72529327983342,124.33686924114802,123.64805811999652,0.9668186752216664,0.9614626174433574,124.33686924114802,123.64805811999652,0.9668186752216664,0.9614626174433574,0.5971518379471358,0.5938436894510023,0,0,0,0,119,119,32.89345644125173,97.58259643274272,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04606303708740628,0.03924448140383999,208.21650598713427,208.21650598713427,,none,0,0,7884,876,1.0,0.6782905135897174,1.0,OK,DEMAND_UP,SCEN,2030,9425.893,21.1595,38.4164,5.8601,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+DE,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:DEMAND_UP,54e995b6e77f5907e9facb41bd5542b4a755f7068ce1391e5220f78244283858,679.1013,677.6177870144999,36.75064727891181,109.3064128317157,25.451076930673285,171.50813704130078,195.91705033430082,22.70664,3.4966016,0.8754120008883853,0.18758268979755854,0.687829311090827,0.25310453817474954,140.025314250469,148.6850412325381,135.2266120374753,135.34675865661825,134.9028395556721,0.9665877872233729,0.9634175097394596,135.34675865661825,134.9028395556721,0.9665877872233729,0.9634175097394596,0.5991217231431424,0.5971566847533442,0,0,0,0,121,121,36.289160701628525,105.72032655546892,0.0,0.0,0.0,0.0,0.0,0.0,,,0.03931190101673813,0.033509509985035435,225.90861494147683,225.90861494147683,,none,0,0,7905,879,1.0,0.68579579593025,1.0,OK,DEMAND_UP,SCEN,2040,9425.893,24.5451,42.3232,6.8368,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:DEMAND_UP,08c732c86e912850ebbc702d88571c992a2db19749593b78709c89775e2b5540,282.2518,280.89889,31.101249710331462,46.29946036015223,0.0,77.4007100704837,120.57657087048369,22.644600000000004,6.6676834000000005,0.6419216395996451,0.2579377526313848,0.38398388696826025,0.27554651451447065,100.2119227992864,99.0544876129467,100.85603918230272,93.77119541313097,97.87297645108453,0.9357289311866064,0.9766599993008165,93.77119541313097,97.87297645108453,0.9357289311866064,0.9766599993008165,0.5700742879112846,0.5950107291508077,0,0,0,0,195,195,42.008991886179494,82.0703956245834,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08583552164462828,0.08061477209824505,164.48943129272254,164.48943129272254,,none,0,0,7884,876,1.0,0.7213663787266826,1.0,OK,DEMAND_UP,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+ES,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:DEMAND_UP,6409045417df95b541cc1594c2adaa7eac3ebe10896d1f8593e3b5b1c1d3f818,331.3391,329.9845616,36.137043115351815,51.0458476562065,0.0,87.18289077155832,130.46665917155832,22.70664,6.671025300000001,0.6682388537052703,0.27698297285157797,0.39125588085369223,0.2642029383097004,107.32957859597659,106.3439477786375,107.87575618265495,100.31173346110411,104.95432195259197,0.9346140623425913,0.9778695055505076,100.31173346110411,104.95432195259197,0.9346140623425913,0.9778695055505076,0.5696061837867059,0.595968474839665,0,0,0,0,197,197,45.595846875534555,88.70395134534763,0.0,0.0,0.0,0.0,0.0,0.0,,,0.07326076434136554,0.06881121919735289,176.10717073722418,176.10717073722418,,none,0,0,7905,879,1.0,0.7268893808842096,1.0,OK,DEMAND_UP,SCEN,2040,6237.200000000001,15.7817,15.5234,2.5076,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,da1fece779c1800aa7655fa17a5c59013ab071d473f63093304fdc287b39cc4c,528.1899,528.1899,31.697453747499996,93.72828455868506,19.943855546237707,145.36959385242278,169.71354795717278,22.6446,3.4586516,85.6558569437879,18.67703205138275,66.97882489240514,0.2752222143066779,122.83133846932799,127.3586932764439,120.31185103935518,118.37156813306056,117.97500875251843,0.9636919177805665,0.9604634307716006,118.37156813306056,117.97500875251843,0.9636919177805665,0.9604634307716006,0.5939778881468974,0.591987988823147,0,0,0,0,121,121,31.811525180597176,93.39900578524114,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05024592493792999,0.04287208066644213,199.28615272591753,199.28615272591753,,none,0,0,7884,876,1.0,0.676034076936789,1.0,OK,DEMAND_UP,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.856558569437879,0.1867703205138275,0.6697882489240514,0.0,46882.337903864405,2355.646431232241,60260.15931065623,2586.265437959775,-0.94975407506207,,,
+DE,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,1baedce1664008598532a30371c95989fc12385e9a00ced72ff4d9e3bfb4c1ce,538.2506599999999,538.2506599999999,31.697453747499996,94.7325290314763,20.306477852041407,146.73646063101768,171.0804147357677,22.6446,3.4586516,85.77046113528012,18.52780974166824,67.2426513936119,0.2726173352597797,123.9948766830958,126.20518660993925,122.76483213958589,119.59848952934978,119.10964643175446,0.9645437999427812,0.9606013540073358,119.59848952934978,119.10964643175446,0.9645437999427812,0.9606013540073358,0.5947918163225312,0.5923606829941783,0,0,0,0,120,120,31.884313088672307,94.2200998438882,0.0,0.0,0.0,0.0,0.0,0.0,,,0.049306748770865896,0.04207073336426565,201.07621901861614,201.07621901861614,,none,0,0,7884,876,1.0,0.6764713326651406,1.0,OK,DEMAND_UP,SCEN,2026,9425.893,19.80526,36.85368,5.46942,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8577046113528012,0.18527809741668239,0.672426513936119,0.0,47775.33481631895,2355.646431232241,61407.97186895443,2586.265437959775,-0.9506932512291341,,,
+DE,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,197fb5e81f743d0e34a52b2903b34c6e0acd6facf0d5bee6d69f217ad8aacf78,548.31142,548.31142,31.697453747499996,95.73677350426752,20.669100157845104,148.10332740961263,172.44728151436263,22.6446,3.4586516,85.88324855516933,18.380952989891007,67.50229556527833,0.27010804810451083,125.15843713392054,126.61030076682772,124.3504703787206,120.86613909705673,120.26581812373814,0.9657050844101623,0.9609085961584255,120.86613909705673,120.26581812373814,0.9657050844101623,0.9609085961584255,0.5957334351372097,0.5927745313590985,0,0,0,0,119,119,31.953646071325977,95.04119390253527,0.0,0.0,0.0,0.0,0.0,0.0,,,0.048402037784244484,0.041298793302536,202.88627760034782,202.88627760034782,,none,0,0,7884,876,1.0,0.6768941822942396,1.0,OK,DEMAND_UP,SCEN,2027,9425.893,20.14382,37.24436,5.56709,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8588324855516933,0.18380952989891006,0.6750229556527833,0.0,48668.331728773526,2355.646431232241,62555.784427252656,2586.265437959775,-0.9515979622157555,,,
+DE,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,07fc0522dfdb13d33ac913f718a20cc31d74331a6259c76ff6abb56cdbf6e275,558.37218,558.37218,31.72202261,97.19849206057513,21.087971354113154,150.0084860246883,174.41739931768828,22.70664,3.4966016,86.00545966830926,18.187418648652535,67.81804101965672,0.26865322341934783,126.27358836627256,128.973983713628,124.78608245459372,121.98753441350424,121.34688851303686,0.9660573995859206,0.9609839245326174,121.98753441350424,121.34688851303686,0.9660573995859206,0.9609839245326174,0.5963003928816464,0.5931687827217773,0,0,0,0,120,120,32.35802284534813,95.80249796283482,0.0,0.0,0.0,0.0,0.0,0.0,,,0.047655371707905084,0.04066577958808765,204.57396283774762,204.57396283774762,,none,0,0,7905,879,1.0,0.6775006814165774,1.0,OK,DEMAND_UP,SCEN,2028,9425.893,20.482380000000003,37.63504,5.66476,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8600545966830926,0.18187418648652537,0.6781804101965672,0.0,49440.090066330784,2356.0858693832993,63527.780231813595,2586.504602787825,-0.9523446282920949,,,
+DE,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,9be18c42b778aa02257c4651da52c6725129908ce565748298ed5369215cb333,568.4329400000001,568.4329400000001,31.697453747499996,97.74526244985003,21.394344769452513,150.83706096680254,175.18101507155257,22.6446,3.4586516,86.10354318656805,18.094114670218797,68.00942851634925,0.265355946766214,127.48559125130762,139.1137860367812,121.01446366280312,123.22503637551048,122.55968212096936,0.9665801065518184,0.9613610520060419,123.22503637551048,122.55968212096936,0.9665801065518184,0.9613610520060419,0.5967928391342592,0.593570452951409,0,0,0,0,118,118,32.31100832927147,96.68338201982937,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04668869131400574,0.03983688911483559,206.47874487614087,206.47874487614087,,none,0,0,7884,876,1.0,0.6776693337717989,1.0,OK,DEMAND_UP,SCEN,2029,9425.893,20.82094,38.02572000000001,5.76243,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8610354318656804,0.18094114670218797,0.6800942851634925,0.0,50454.32555368265,2355.646431232241,64851.40954384909,2586.265437959775,-0.9533113086859942,,,
+DE,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,e305dd7555b3d35386699591c8102922e7f2a965ff2e98530ee9b6060cff5b50,588.55446,588.55446,32.15984738746886,99.7537513954325,22.11958938105992,154.03318816396126,178.37714226871128,22.6446,3.4586516,86.35253721686058,18.029130290148135,68.32340692671245,0.261714418346199,129.79844391661516,134.91650579432098,126.95022611260404,125.5653164442935,124.83070464918544,0.9673869166332911,0.9617272817952958,125.5653164442935,124.83070464918544,0.9673869166332911,0.9617272817952958,0.5978067521029795,0.5943093222097102,0,0,0,0,117,117,32.67345522061419,98.3255306176864,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04509249673916794,0.03847494418783268,210.04332253286987,210.04332253286987,,none,0,0,7884,876,1.0,0.6788064544579628,1.0,OK,DEMAND_UP,SCEN,2031,9425.893,21.49806,38.80708,5.95777,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8635253721686058,0.18029130290148135,0.6832340692671245,0.0,52240.31937859177,2355.646431232241,67147.03466044553,2586.265437959775,-0.9549075032608321,,,
+DE,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,e316f206245dc14fd8d2a8c188c36fd9a862447c26f53f6797a9f1a3e5d3221b,598.61522,598.61522,32.69532083322664,101.23446565095534,22.542339879633197,156.4721263638152,180.88103965681518,22.70664,3.4966016,86.5055434559029,18.075593160709012,68.42995029519386,0.2613901570424741,130.894180858249,133.53354437864255,129.4228760873062,126.62295270473506,125.89935650384712,0.9673688461510795,0.9618407455423018,126.62295270473506,125.89935650384712,0.9673688461510795,0.9618407455423018,0.5981491789840525,0.5947310113909593,0,0,0,0,118,118,33.078318204792694,99.08246073809806,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04445164924014675,0.037931945666199396,211.69125889264322,211.69125889264322,,none,0,0,7905,879,1.0,0.6798277442765543,1.0,OK,DEMAND_UP,SCEN,2032,9425.893,21.83662,39.19776,6.05544,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8650554345590289,0.1807559316070901,0.6842995029519386,0.0,53003.33980084112,2356.0858693832993,68106.35898725962,2586.504602787825,-0.9555483507598532,,,
+DE,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,7e1a4f54d991c9be7ee3836b0ddc966d230b3238070eff863688216e8c69077b,608.67598,608.67598,33.17277952474091,101.76224034101499,22.84483399266732,157.77985385842322,182.12380796317325,22.6446,3.4586516,86.63329392405822,18.214411336846574,68.41888258721166,0.25921813747015815,132.09424501944287,135.01357762195084,130.4792950691193,127.75972639678032,127.10308896964398,0.9671861660436112,0.9622151892456462,127.75972639678032,127.10308896964398,0.9671861660436112,0.9622151892456462,0.5981606850841718,0.5950863618655391,0,0,0,0,118,118,33.476378732659086,99.96763216262227,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04360183568993924,0.03720304520641672,213.58763553442546,213.58763553442546,,none,0,0,7884,876,1.0,0.6803909036795022,1.0,OK,DEMAND_UP,SCEN,2033,9425.893,22.17518,39.588440000000006,6.15311,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8663329392405822,0.18214411336846573,0.6841888258721165,0.0,54026.31320350089,2355.646431232241,69442.65977704195,2586.265437959775,-0.9563981643100607,,,
+DE,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,87f5426a95f226a97333238bd67d55135411beb7c9c769b39b29c5a6ef769c2e,618.73674,618.73674,33.67924559337694,102.76648481380623,23.207456298471026,159.6531867056542,183.99714081040418,22.6446,3.4586516,86.76938456895118,18.304222253149565,68.4651623158016,0.2580308819315533,133.24215175071495,141.48767335913442,128.68079937158927,128.8659126717538,128.2371396517068,0.9671557459748268,0.9624367211633439,128.8659126717538,128.2371396517068,0.9671557459748268,0.9624367211633439,0.598332583147751,0.5954131502465413,0,0,0,0,119,119,33.997063584886526,100.78868293509015,0.0,0.0,0.0,0.0,0.0,0.0,,,0.042892862751891456,0.03659811764208474,215.3750544451495,215.3750544451495,,none,0,0,7884,876,1.0,0.6811525214505035,1.0,OK,DEMAND_UP,SCEN,2034,9425.893,22.51374,39.97912,6.25078,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8676938456895118,0.18304222253149566,0.6846516231580161,0.0,54919.31011595545,2355.646431232241,70590.47233534016,2586.265437959775,-0.9571071372481086,,,
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,6a172982e72f6968a7d64c3a36b638ab33e3f3aad1f920a6ff050c497168cf5e,628.7975,628.7975,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,185.87047365763516,22.6446,3.4586516,86.90273198012588,18.3922228147874,68.51050916533849,0.2568816185701838,134.39006079713556,146.8435918894391,127.45963091421184,129.9843275824149,129.3655310745405,0.9672168225195522,0.9626123413235174,129.9843275824149,129.3655310745405,0.9672168225195522,0.9626123413235174,0.5985579624956839,0.5957084991500518,0,0,0,0,119,119,34.291086266844395,101.60973370755809,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04220657694786119,0.036012547759811386,217.16247335587352,217.16247335587352,,none,0,0,7884,876,1.0,0.6818934043118587,1.0,OK,DEMAND_UP,SCEN,2035,9425.893,22.8523,40.3698,6.34845,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8690273198012588,0.18392222814787398,0.6851050916533848,0.0,55812.30702841001,2355.646431232241,71738.28489363837,2586.265437959775,-0.9577934230521388,,,
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,29e11465fad24754b08665a46822eda1e86d36490aa72bfcfc613b7d4c372a38,257.70815000000005,257.70815000000005,28.613131445241326,43.94530341930337,0.0,72.5584348645447,115.73429566454469,22.644600000000004,6.6676834000000005,62.69397886591454,24.723122287084507,37.97085657883004,0.2815527365531307,96.70763158365578,94.01346700404807,98.20694278893856,90.603932900698,94.3748029958919,0.9368850360307103,0.9758775129784262,90.603932900698,94.3748029958919,0.9368850360307103,0.9758775129784262,0.5710054150928136,0.5947702470932872,0,0,0,0,193,193,39.85854167042527,78.56552568680506,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09324834124361064,0.08786916517774078,158.6743847008366,158.6743847008366,,none,0,0,7884,876,1.0,0.7193047676590574,1.0,OK,DEMAND_UP,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6269397886591453,0.24723122287084506,0.37970856578830037,0.0,23531.880611124467,2194.3088333300393,29565.182198814815,2648.9347173361994,-0.9067516587563893,,,
+ES,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,9d41d63cfb26e6d8a281a737c9f12db22c530a6bcf8259301d67e996940d3659,262.61688000000004,262.61688000000004,29.110755098259354,44.416134807473135,0.0,73.52688990573249,116.7027507057325,22.644600000000004,6.6676834000000005,63.00356200783261,24.944360713195614,38.059201294637,0.27997777563168247,97.42353014717831,94.41620946801741,99.09711372342777,91.26793399960175,95.09261297527623,0.936816125033888,0.9760743922091434,91.26793399960175,95.09261297527623,0.936816125033888,0.9760743922091434,0.5709779114097948,0.5949053426295384,0,0,0,0,193,193,40.19188956982717,79.23745312726899,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09150538043274142,0.08622674978089756,159.84494702124846,159.84494702124846,,none,0,0,7884,876,1.0,0.7199754484510856,1.0,OK,DEMAND_UP,SCEN,2026,6237.200000000001,12.73418,13.51734,2.00612,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6300356200783261,0.24944360713195612,0.38059201294637,0.0,23980.10721285299,2194.3088333300393,30128.328908822965,2648.9347173361994,-0.9084946195672585,,,
+ES,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,922601dccf6ed84cd6509b99c972f127fbc84e3aa4cfd98b110c7305d72f8ed8,267.52561000000003,267.52561000000003,29.608378751277378,44.88696619564292,0.0,74.49534494692031,117.6712057469203,22.644600000000004,6.6676834000000005,63.30804930064211,25.161957475779744,38.14609182486235,0.278460611479104,98.13943596621465,94.93956817330488,99.92017262708768,91.91544028640554,95.82755655370906,0.936580074884965,0.9764429111524395,91.91544028640554,95.82755655370906,0.936580074884965,0.9764429111524395,0.5709026598544771,0.5952014890359968,0,0,0,0,194,194,40.699905280034145,79.90938056773295,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08982638152833144,0.08464460654813571,161.00019626784496,161.00019626784496,,none,0,0,7884,876,1.0,0.7206369615054886,1.0,OK,DEMAND_UP,SCEN,2027,6237.200000000001,12.95186,13.66063,2.04194,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6330804930064211,0.25161957475779745,0.3814609182486235,0.0,24428.333814581514,2194.3088333300393,30691.475618831122,2648.9347173361994,-0.9101736184716686,,,
+ES,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,98f1df6965b2ef2b0ad98af59fdd2fa46e5f2d7e705c1e06d69bc7d8f5cf349f,272.43434,272.43434,30.155701527044,45.391653721379456,0.0,75.54735524842346,118.83112364842346,22.70664,6.671025300000001,63.57539416351867,25.3769388028875,38.198455360631165,0.2773048186525364,98.82203625889085,95.70551227591575,100.53876557154663,92.51832568446966,96.47579639333269,0.9362114887219393,0.9762579283489813,92.51832568446966,96.47579639333269,0.9362114887219393,0.9762579283489813,0.5706964072352012,0.595107941907686,0,0,0,0,195,195,41.09045479688812,80.51091057339916,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08845109970164862,0.08334720211849946,162.11478556993976,162.11478556993976,,none,0,0,7905,879,1.0,0.7209506888768991,1.0,OK,DEMAND_UP,SCEN,2028,6237.200000000001,13.16954,13.80392,2.07776,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6357539416351867,0.253769388028875,0.3819845536063116,0.0,24806.416223722626,2194.1547946450837,31175.320239513596,2649.646301748664,-0.9115489002983513,,,
+ES,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,fd2881dd63063a5bf386d8e0eee2e33c30a099028deeda6d5aff9242d8b8e7e9,277.34307,277.34307,30.60362605731343,45.82862897198248,0.0,76.4322550292959,119.6081158292959,22.644600000000004,6.6676834000000005,63.90223146594805,25.586579844624236,38.315651621323816,0.2755873980528733,99.5712543786834,100.03985822282262,99.31047484068696,93.23786115423262,97.24139473612236,0.9363933570590162,0.9766010817369011,93.23786115423262,97.24139473612236,0.9363933570590162,0.9766010817369011,0.5708936950925115,0.5954072569835464,0,0,0,0,195,195,41.54649918731291,81.25323544866087,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08664668460062695,0.0816483353991863,163.3191292104281,163.3191292104281,,none,0,0,7884,876,1.0,0.7219154528472554,1.0,OK,DEMAND_UP,SCEN,2029,6237.200000000001,13.38722,13.94721,2.11358,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6390223146594805,0.25586579844624235,0.38315651621323815,0.0,25324.78701803856,2194.3088333300393,31817.769038847426,2648.9347173361994,-0.913353315399373,,,
+ES,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,caa0dcf432fd71704163a15baf060d211d370dc796b6e91151072b5057a7be3a,287.16053,287.16053,31.59887336334949,46.77029174832202,0.0,78.3691651116715,121.5450259116715,22.644600000000004,6.6676834000000005,64.47747616477822,25.997668869076417,38.479807295701804,0.2729106437840587,101.00308108143554,98.1272345661341,102.60349886500417,94.5630644022316,98.6714392651697,0.936239403686987,0.9769151416837877,94.5630644022316,98.6714392651697,0.936239403686987,0.9769151416837877,0.5707796354542237,0.5955776548648739,0,0,0,0,195,195,42.21733086984408,82.5970903295888,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08368440297996248,0.07885693761604357,165.67350782755022,165.67350782755022,,none,0,0,7884,876,1.0,0.7231391560479695,1.0,OK,DEMAND_UP,SCEN,2031,6237.200000000001,13.82258,14.23379,2.18522,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6447747616477822,0.2599766886907642,0.38479807295701807,0.0,26221.240221495613,2194.3088333300393,32944.06245886374,2648.9347173361994,-0.9163155970200375,,,
+ES,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,af6833987efd309a9ca4b3bb7ecfe2046377fb9ce27f52e33bd058bf9e2f7dda,292.06926,292.06926,32.14948205647994,47.27638503298847,0.0,79.42586708946843,122.70963548946841,22.70664,6.671025300000001,64.72667510799116,26.199639440082258,38.52703566790888,0.27194189176042843,101.68288282723731,98.46169909475508,103.4785214185359,95.17310389691899,99.3195775634886,0.9359795990306583,0.9767580816157224,95.17310389691899,99.3195775634886,0.9359795990306583,0.9767580816157224,0.570631632096263,0.5954927424196323,0,0,0,0,194,194,42.2488553481462,83.19351325222914,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08250480372187351,0.07774402550956577,166.78553824170706,166.78553824170706,,none,0,0,7905,879,1.0,0.7233976563684341,1.0,OK,DEMAND_UP,SCEN,2032,6237.200000000001,14.04026,14.37708,2.22104,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6472667510799115,0.26199639440082256,0.3852703566790888,0.0,26594.26719008573,2194.1547946450837,33422.1916099775,2649.646301748664,-0.9174951962781265,,,
+ES,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,9d4de83b59cc3434cc668709adc9136ed32b6af7c72f5add0d7d4c94a6e86cff,296.97799,296.97799,32.59412066938554,47.71195452466156,0.0,80.3060751940471,123.48193599404709,22.644600000000004,6.6676834000000005,65.03467454374747,26.395861392193314,38.63881315155416,0.2704108651083776,102.43492071697102,99.14246295616773,104.25628032933025,95.88878586950177,100.10897033681388,0.9360946950351404,0.9772933842885106,95.88878586950177,100.10897033681388,0.9360946950351404,0.9772933842885106,0.5706631300824679,0.5957787226494577,0,0,0,0,195,195,42.8895592895213,83.9409452105167,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08091797480500021,0.07625009516698528,168.03045582363916,168.03045582363916,,none,0,0,7884,876,1.0,0.7243193846616625,1.0,OK,DEMAND_UP,SCEN,2033,6237.200000000001,14.25794,14.52037,2.25686,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6503467454374747,0.26395861392193315,0.3863881315155416,0.0,27117.69342495266,2194.3088333300393,34070.355878880044,2648.9347173361994,-0.9190820251949998,,,
+ES,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,c8d6ab0651a6510377e716c98d783d93c298916cfdb4885c2da2e87e36790148,301.88672,301.88672,33.091744322403564,48.182785912831335,0.0,81.2745302352349,124.4503910352349,22.644600000000004,6.6676834000000005,65.3067696767816,26.590309638347776,38.71646003843381,0.26922194601748267,103.15084646664356,102.05574644074491,103.75664648097047,96.54901962098263,100.8279415286787,0.9359983260263812,0.9774805053226973,96.54901962098263,100.8279415286787,0.9359983260263812,0.9774805053226973,0.5706375989392845,0.5959274851861017,0,0,0,0,195,195,43.22541117994304,84.61287265098065,0.0,0.0,0.0,0.0,0.0,0.0,,,0.07960223461455875,0.07501025550246133,169.19498434812286,169.19498434812286,,none,0,0,7884,876,1.0,0.7248958359308288,1.0,OK,DEMAND_UP,SCEN,2034,6237.200000000001,14.47562,14.66366,2.29268,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.653067696767816,0.26590309638347776,0.3871646003843381,0.0,27565.920026681186,2194.3088333300393,34633.50258888821,2648.9347173361994,-0.9203977653854413,,,
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,cdd2d2440988283b068e3155ab7d13d880fbf474019a79c135cc02c31b5a6bc0,306.79545,306.79545,33.5893679754216,48.65361730100112,0.0,82.24298527642273,125.41884607642272,22.644600000000004,6.6676834000000005,65.57466269966221,26.781754916605,38.7929077830572,0.268071072359198,103.86677468049072,104.41715203952859,103.56048791991743,97.21007426804198,101.53067810272398,0.9359111666562698,0.9775087212927049,97.21007426804198,101.53067810272398,0.9359111666562698,0.9775087212927049,0.5706116038386401,0.5959730357912724,0,0,0,0,195,195,43.56131820351032,85.2848000914446,0.0,0.0,0.0,0.0,0.0,0.0,,,0.07832859813422788,0.0738100907298332,170.36119422403377,170.36119422403377,,none,0,0,7884,876,1.0,0.7254620423276266,1.0,OK,DEMAND_UP,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6557466269966221,0.26781754916605,0.387929077830572,0.0,28014.14662840971,2194.3088333300393,35196.64929889636,2648.9347173361994,-0.9216714018657721,,,
+DE,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:DEMAND_UP,f2bc9a5c7fbbf8b1eacc52ebb1374998d21327b620d3d5738d4d020e0793454f,638.85826,637.3747470144999,34.72298405606922,105.27043924133554,23.996708405153246,163.990131702558,188.399044995558,19.625559437326835,3.4966016,87.04403555040552,18.430552053428883,68.61348349697664,0.25728997339586673,134.5104998747229,143.71243737832808,129.38090918122387,129.87260906288054,129.45646699404762,0.9655202321293735,0.9624264805693058,129.87260906288054,129.45646699404762,0.9655202321293735,0.9624264805693058,0.5957187823141287,0.5938099606749576,0,0,0,0,120,120,34.93078726975238,102.81813877958889,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.03916996911572668,0.030791240991667912,218.00992837321246,218.00992837321246,,none,0,0,7905,879,1.0,0.6836807336182911,1.0,OK,DEMAND_UP,SCEN,2036,9425.893,23.19086,40.76048,6.4461200000000005,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8704403555040552,0.18430552053428884,0.6861348349697663,0.0,56363.77357657458,2207.767270240238,72580.2591843201,2243.198428039677,-0.9608300308842733,0.13819794138347183,0.0,
+DE,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:DEMAND_UP,738deb13bd85b6810f068b16e019c09564277bb3c63a7454056bb149d289a931,648.9190200000002,647.438932869,35.19864379928503,105.77921823217994,24.29532321588214,165.27318524734713,189.6171393520971,19.582011821916065,3.4586516,87.16152232444237,18.563007500036807,68.59851482440556,0.25527223782321995,135.71477905274685,138.44934941581778,134.19298189973722,131.04025227283506,130.6627501321077,0.965556243671185,0.9627746590614451,131.04025227283506,130.6627501321077,0.965556243671185,0.9627746590614451,0.5957606088890627,0.5940443354439505,0,0,0,0,120,120,35.33795219015707,103.71242885675406,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.03847506086174915,0.03024534180411761,219.95454267644647,219.95454267644647,,none,0,0,7884,876,1.0,0.6841372792104753,1.0,OK,DEMAND_UP,SCEN,2037,9425.893,23.52942,41.15116,6.54379,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8716152232444238,0.18563007500036807,0.6859851482440555,0.0,57398.117853712945,2208.396077771456,73933.73341710088,2244.1658585011546,-0.9615249391382509,0.1371642496057908,0.0,
+DE,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:DEMAND_UP,b761a019eb960fc9c476d654c93f771ad424c067d7c02acb4df7ec2aab4583b4,658.97978,657.4996928690001,35.70510986792107,106.78346270497123,24.657945521685832,167.14651809457808,191.49047219932814,19.582011821916065,3.4586516,87.28711991507875,18.645893687470025,68.64122622760874,0.2542153553946683,136.86351186458802,138.6869052355232,135.84878762191403,132.15206488360494,131.8034217226328,0.9655755802492884,0.9630282017974109,132.15206488360494,131.8034217226328,0.9655755802492884,0.9630282017974109,0.5960130047193938,0.5944406050892489,0,0,0,0,120,120,35.73239115374352,104.53788480275804,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.03788490622648699,0.029782541397806516,221.72681441040513,221.72681441040513,,none,0,0,7884,876,1.0,0.6848092244103785,1.0,OK,DEMAND_UP,SCEN,2038,9425.893,23.867980000000003,41.54184,6.64146,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8728711991507875,0.18645893687470025,0.6864122622760874,0.0,58292.24083515006,2208.396077771456,75084.29566896742,2244.1658585011546,-0.962115093773513,0.13594498931842258,0.0,
+DE,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:DEMAND_UP,26b853185b2312a8cddc9e8160f38f071071424c2dbf1e27a4d8b4eeec646155,669.0405400000002,667.5604528690002,36.21157593655708,107.78770717776241,25.020567827489533,169.01985094180907,193.36380504655907,19.582011821916065,3.4586516,87.41028389522624,18.72717385129957,68.68311004392667,0.25319032937826974,138.01224761639503,141.27749947607012,136.2059380770003,133.2426212469037,132.93554865177921,0.9654405572558422,0.9632155909906888,133.2426212469037,132.93554865177921,0.9654405572558422,0.9632155909906888,0.596170912817878,0.5947969699486704,0,0,0,0,120,120,36.03065059095192,105.36334074876208,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.03731232076131376,0.02933369066090974,223.4973534973644,223.4973534973644,,none,0,0,7884,876,1.0,0.6854652211164473,1.0,OK,DEMAND_UP,SCEN,2039,9425.893,24.20654,41.93252,6.73913,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8741028389522624,0.18727173851299567,0.6868311004392668,0.0,59186.77886316764,2208.396077771456,76232.96096544023,2244.1658585011546,-0.9626876792386863,0.13474721418704586,0.0,
+ES,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:DEMAND_UP,851aaec216e7fc3f1110b64bf141e3ae2e35d13a9ecf0cc262f17cf536273f75,311.70418,310.34964160000004,34.14326258591588,49.16111634459749,0.0,83.30437893051337,126.58814733051338,16.919452248912282,6.671025300000001,65.8074082662819,26.97192691885288,38.83548134742902,0.2684210572985993,101.74927580060833,100.3509326276758,102.52877773956222,94.64926585663066,99.25744544011916,0.9302205358405586,0.9755100924219622,94.64926585663066,99.25744544011916,0.9302205358405586,0.9755100924219622,0.5496659166351732,0.576427447555175,0,0,0,0,194,194,45.81400744491809,90.09933159964561,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.06772470403753535,0.05451738936022113,172.1941692074237,172.1941692074237,,none,0,0,7905,879,1.0,0.721548297272147,1.0,OK,DEMAND_UP,SCEN,2036,6237.200000000001,14.91098,14.95024,2.36432,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.658074082662819,0.2697192691885288,0.3883548134742902,0.0,28159.56274081646,1907.0980524482022,35505.18463128069,1944.6687142945586,-0.9322752959624646,0.16096033615608987,0.0,
+ES,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:DEMAND_UP,1598ba6f96814070ed30ddd55e8dab24e03466f359556980c9dab22e111676d7,316.61291,315.26,34.584615281457644,49.59528007734066,0.0,84.1798953587983,127.3557561587983,16.879156992445363,6.6676834000000005,66.09822586568875,27.155910596089996,38.94231526959875,0.26701736775613244,102.50792534255716,98.90518406280906,104.51286238736367,95.37822302857117,100.03607914738348,0.9304473064871792,0.9758862918460854,95.37822302857117,100.03607914738348,0.9304473064871792,0.9758862918460854,0.5499123678342873,0.5767676876965604,0,0,0,0,195,195,46.4799906161691,90.85501187907529,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.06647035761069157,0.05354043326919167,173.44258577816314,173.44258577816314,,none,0,0,7884,876,1.0,0.722521395651613,1.0,OK,DEMAND_UP,SCEN,2037,6237.200000000001,15.12866,15.09353,2.40014,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6609822586568874,0.27155910596089994,0.3894231526959875,0.0,28692.138339815807,1907.1766960629911,36158.31599256546,1945.179478936571,-0.9335296423893085,0.15973035569456173,0.0,
+ES,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:DEMAND_UP,7fc0d0834385fa071cf21e6edb585b3ca905dfa55fd7aa213cb35e9be415ef50,321.52164,320.16873,35.082238934475676,50.066111465510446,0.0,85.14835039998611,128.32421119998614,16.879156992445363,6.6676834000000005,66.35408049949916,27.338752840492397,39.01532765900676,0.265948365413406,103.22768808105386,99.57862435546794,105.2584037151219,96.04229844994136,100.75322729248,0.9303928067683686,0.9760290980591281,96.04229844994136,100.75322729248,0.9303928067683686,0.9760290980591281,0.5500350587002708,0.5770145881811183,0,0,0,0,196,196,46.999171432953,91.52960784984795,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.06544509537133222,0.052719567561908265,174.61123055844598,174.61123055844598,,none,0,0,7884,876,1.0,0.7231054322979454,1.0,OK,DEMAND_UP,SCEN,2038,6237.200000000001,15.34634,15.23682,2.43596,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6635408049949916,0.273387528404924,0.3901532765900676,0.0,29141.629105157008,1907.1766960629911,36719.430450776,1945.179478936571,-0.9345549046286677,0.15873988357448626,0.0,
+ES,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:DEMAND_UP,1c682f84bdcfdabebd981ba381ddef36e271639380dc1f3816d8fcec1ca1cd07,326.43037,325.07746,35.57986258749369,50.536942853680216,0.0,86.11680544117391,129.29266624117392,16.879156992445363,6.6676834000000005,66.60610222124846,27.518855958253184,39.087246262995286,0.2649116473383726,103.94745195402385,100.38976423645937,105.91553452118717,96.70679271068542,101.4599267094672,0.9303430809776753,0.9760693966249708,96.70679271068542,101.4599267094672,0.9303430809776753,0.9760693966249708,0.5501602381611258,0.5772005862016681,0,0,0,0,196,196,47.33766119219423,92.20420382062059,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0644509807134542,0.051923492303789266,175.77932028298062,175.77932028298062,,none,0,0,7884,876,1.0,0.7236786889866496,1.0,OK,DEMAND_UP,SCEN,2039,6237.200000000001,15.56402,15.38011,2.47178,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6660610222124846,0.27518855958253186,0.39087246262995284,0.0,29591.119870498205,1907.1766960629911,37282.309930504605,1945.179478936571,-0.9355490192865458,0.157761619393282,0.0,
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:FLEX_UP,03f6358ad20b0a5f40421def3bba794d385757efeb418d334d14d73d3a1a1322,525.9034,524.1057758522501,31.697453747499996,98.74950692264126,21.756967075256217,152.20392774539746,176.5478818501475,22.6446,4.8190211,0.8621113215880268,0.17954026644400387,0.6825710551440229,0.2904068887580912,126.87562866427379,134.8857858302721,122.4179505825562,122.45418727107236,121.6822557604586,0.9651513735163352,0.959067214417062,122.45418727107236,121.6822557604586,0.9651513735163352,0.959067214417062,0.597791412501787,0.5940230315393383,0,0,0,0,121,121,32.46244925212925,95.4033539304072,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05077107901863202,0.04320616380000305,204.84433986529757,204.84433986529757,,none,0,0,7884,876,1.0,0.6729174044621066,1.0,OK,FLEX_UP,SCEN,2030,9425.893,21.1595,38.4164,5.8601,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+DE,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:FLEX_UP,5c538bf0b2662e4071ad6ea87a6fa3ee76b537b3467f56416646790ae069c283,617.3648,615.5633899977499,36.75064727891181,109.3064128317157,25.451076930673285,171.50813704130078,195.91705033430082,22.70664,4.8740938,0.8754120008883853,0.18758268979755854,0.687829311090827,0.2786197812087683,138.00269393782315,145.96435759007062,133.5908166273421,133.13539945763245,132.61294875607456,0.9647304386508305,0.9609446379055692,133.13539945763245,132.61294875607456,0.9647304386508305,0.9609446379055692,0.6000361592222314,0.5976814938693437,0,0,0,0,122,122,35.47685301428027,103.16471665160596,0.0,0.0,0.0,0.0,0.0,0.0,,,0.043313538462713214,0.036887573837168904,221.8789608116333,221.8789608116333,,none,0,0,7905,879,1.0,0.6808667111263013,1.0,OK,FLEX_UP,SCEN,2040,9425.893,24.5451,42.3232,6.8368,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:FLEX_UP,122858f11c51bd8db0d818b3df452676fde034f7afd7256c62c2352b394a8110,256.5926,254.955638,31.101249710331462,46.29946036015223,0.0,77.4007100704837,120.57657087048369,22.644600000000004,8.7176561,0.6419216395996451,0.2579377526313848,0.38398388696826025,0.3035850106224507,98.64545138178808,97.28700685315945,99.40143010667519,92.10420292763541,96.18188646279201,0.9336893048536417,0.9750260667421824,92.10420292763541,96.18188646279201,0.9336893048536417,0.9750260667421824,0.5702061902442622,0.5954506451083925,0,0,0,0,197,197,41.35050447623986,79.63159560325163,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09460179329127333,0.08881780445271034,161.5278902675193,161.5278902675193,,none,0,0,7884,876,1.0,0.7153709736484742,1.0,OK,FLEX_UP,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+ES,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:FLEX_UP,802762580d7d0d4956576acb8e70a0c9479817f5723f22ad0d31e2c6f3863d8c,301.2174,299.57876039999996,36.137043115351815,51.0458476562065,0.0,87.18289077155832,130.46665917155832,22.70664,8.720998,0.6682388537052703,0.27698297285157797,0.39125588085369223,0.2910182639622082,105.49805168000357,104.23534303346838,106.19776921024919,98.37607547031715,103.0011759228295,0.9324918697902708,0.9763324941322369,98.37607547031715,103.0011759228295,0.9324918697902708,0.9763324941322369,0.5700014292337403,0.5967997524609878,0,0,0,0,198,198,44.58258671337139,85.8316710461854,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0807263472501742,0.07579522650298008,172.5891733334165,172.5891733334165,,none,0,0,7905,879,1.0,0.7211496720486239,1.0,OK,FLEX_UP,SCEN,2040,6237.200000000001,15.7817,15.5234,2.5076,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,870a8fcdb99081d049a568fd628a69d2b7957ddd55698467ad75b678f6ae361c,480.17270000000013,480.17270000000013,31.697453747499996,93.72828455868506,19.943855546237707,145.36959385242278,169.71354795717278,22.6446,4.8190211,85.6558569437879,18.67703205138275,66.97882489240514,0.30274439561520833,121.26224202715035,125.28668552736826,119.0226263479246,116.70794685121577,116.19498788609418,0.9624425946626083,0.9582124323586099,116.70794685121577,116.19498788609418,0.9624425946626083,0.9582124323586099,0.5947668981791557,0.592152757318915,0,0,0,0,121,121,31.01223866591052,91.3878440192006,0.0,0.0,0.0,0.0,0.0,0.0,,,0.055270510106827694,0.047159282483156574,196.2246843402186,196.2246843402186,,none,0,0,7884,876,1.0,0.6702923995696501,1.0,OK,FLEX_UP,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.856558569437879,0.1867703205138275,0.6697882489240514,0.0,42620.312833719305,2355.646431232241,54781.97026983656,2586.265437959775,-0.9447294898931723,,,
+DE,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,ecae874ba6c9aa19a942c691aa798add3b55e6e715e1c85e7c0e3d1909cf0436,489.31884000000014,489.31884000000014,31.697453747499996,94.7325290314763,20.306477852041407,146.73646063101768,171.0804147357677,22.6446,4.8190211,85.77046113528012,18.52780974166824,67.2426513936119,0.2998790331290282,122.39580981383992,124.14454528419614,121.42263293161605,117.85113444878147,117.3004428347682,0.9628690281802068,0.9583697596607139,117.85113444878147,117.3004428347682,0.9628690281802068,0.9583697596607139,0.5953586668791305,0.5925766908997399,0,0,0,0,121,121,31.28214042155566,92.17062995545699,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05423741719892237,0.04627780119808997,197.94980908996754,197.94980908996754,,none,0,0,7884,876,1.0,0.6708233841731053,1.0,OK,FLEX_UP,SCEN,2026,9425.893,19.80526,36.85368,5.46942,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8577046113528012,0.18527809741668239,0.672426513936119,0.0,43432.12772453045,2355.646431232241,55825.435609627355,2586.265437959775,-0.9457625828010776,,,
+DE,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,e47154f1213e46d69a5f9c7b571ad9faf5a19de9c0ebe9c97653fa1a00c25b17,498.46498000000014,498.46498000000014,31.697453747499996,95.73677350426752,20.669100157845104,148.10332740961263,172.44728151436263,22.6446,4.8190211,85.88324855516933,18.380952989891007,67.50229556527833,0.2971188214859399,123.5293881311417,124.58234052474576,122.9434167564495,119.04392808091033,118.40581201771491,0.9636891259797264,0.9585234235274647,119.04392808091033,118.40581201771491,0.9636891259797264,0.9585234235274647,0.5961599405699679,0.5929643199243456,0,0,0,0,121,121,31.551548932613205,92.95341589171342,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0532422359307423,0.04542866782737675,199.68454768546937,199.68454768546937,,none,0,0,7884,876,1.0,0.6713228874727939,1.0,OK,FLEX_UP,SCEN,2027,9425.893,20.14382,37.24436,5.56709,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8588324855516933,0.18380952989891006,0.6750229556527833,0.0,44243.9426153416,2355.646431232241,56868.90094941815,2586.265437959775,-0.9467577640692577,,,
+DE,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,89929cc816aa1becbff5594ed807ed8dd97322530c6929f97596feead60ee156,507.61112,507.61112,31.72202261,97.19849206057513,21.087971354113154,150.0084860246883,174.41739931768828,22.70664,4.8740938,86.00545966830926,18.187418648652535,67.81804101965672,0.2955185182402787,124.61904946876905,127.11386896557539,123.24478449171473,120.15635965889147,119.45247632437783,0.964189344816051,0.958541064416592,120.15635965889147,119.45247632437783,0.964189344816051,0.958541064416592,0.5968244187977532,0.5933281846973266,0,0,0,0,120,120,31.51110942977977,93.68193207681173,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05242090399684957,0.04473235338106856,201.32614530239093,201.32614530239093,,none,0,0,7905,879,1.0,0.6720054159929238,1.0,OK,FLEX_UP,SCEN,2028,9425.893,20.482380000000003,37.63504,5.66476,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8600545966830926,0.18187418648652537,0.6781804101965672,0.0,44945.5406096182,2356.0858693832993,57752.532861835556,2586.504602787825,-0.9475790960031504,,,
+DE,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,1cc708f8725392def0a1c19297c19306097db537f989b07ed64172869d1bb5be,516.7572600000001,516.7572600000001,31.697453747499996,97.74526244985003,21.394344769452513,150.83706096680254,175.18101507155257,22.6446,4.8190211,86.10354318656805,18.094114670218797,68.00942851634925,0.29189151782173806,125.79657467555668,136.4886748817877,119.84638671430658,121.38408649738994,120.63374954154446,0.9649236222087363,0.9589589370988223,121.38408649738994,120.63374954154446,0.9649236222087363,0.9589589370988223,0.5975438901340415,0.5938501665460085,0,0,0,0,120,120,31.88094650291234,94.51898776422622,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05135755628933543,0.04382057448017275,203.13836105019996,203.13836105019996,,none,0,0,7884,876,1.0,0.6722364106138063,1.0,OK,FLEX_UP,SCEN,2029,9425.893,20.82094,38.02572000000001,5.76243,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8610354318656804,0.18094114670218797,0.6800942851634925,0.0,45867.57239696389,2355.646431232241,58955.83162899973,2586.265437959775,-0.9486424437106645,,,
+DE,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,8b3352a8a39436898b615c89015a8d8237d078b1ddac2dc6d499e16510d4eb68,535.0495400000001,535.0495400000001,32.15984738746886,99.7537513954325,22.11958938105992,154.03318816396126,178.37714226871128,22.6446,4.8190211,86.35253721686058,18.029130290148135,68.32340692671245,0.28788584355004065,128.0494943746868,132.6245371755476,125.50346842367472,123.67992919306752,122.83307972342288,0.9658759669223415,0.9592625126968475,123.67992919306752,122.83307972342288,0.9658759669223415,0.9592625126968475,0.5987315978164085,0.594632019660289,0,0,0,0,121,121,32.65547894773701,96.08452011730196,0.0,0.0,0.0,0.0,0.0,0.0,,,0.049601743547658686,0.042322436161705695,206.569904852411,206.569904852411,,none,0,0,7884,876,1.0,0.6735034503113816,1.0,OK,FLEX_UP,SCEN,2031,9425.893,21.49806,38.80708,5.95777,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8635253721686058,0.18029130290148135,0.6832340692671245,0.0,47491.20217858617,2355.646431232241,61042.76230858132,2586.265437959775,-0.9503982564523413,,,
+DE,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,5ca59ec13eba4fe6f850a51365e2fde081b4be69cfb355059978e2f3e9b0337f,544.19568,544.19568,32.69532083322664,101.23446565095534,22.542339879633197,156.4721263638152,180.88103965681518,22.70664,4.8740938,86.5055434559029,18.075593160709012,68.42995029519386,0.28752915929765405,129.12007778894366,131.23970393459197,127.93849895881631,124.72109613796125,123.87123281952974,0.965931079609688,0.9593491185933644,124.72109613796125,123.87123281952974,0.965931079609688,0.9593491185933644,0.5990924629155856,0.595010180732806,0,0,0,0,121,121,32.82858029696325,96.80906022090893,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0488968118770316,0.04172513828114181,208.1833837985288,208.1833837985288,,none,0,0,7905,879,1.0,0.674567845024401,1.0,OK,FLEX_UP,SCEN,2032,9425.893,21.83662,39.19776,6.05544,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8650554345590289,0.1807559316070901,0.6842995029519386,0.0,48184.85661822931,2356.0858693832993,61914.874702644316,2586.504602787825,-0.9511031881229683,,,
+DE,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,60926b4039f93494d9acae7dbc168d122e8eeda3cf232c5ecb99025668ec6cc0,553.3418200000001,553.3418200000001,33.17277952474091,101.76224034101499,22.84483399266732,157.77985385842322,182.12380796317325,22.6446,4.8190211,86.63329392405822,18.214411336846574,68.41888258721166,0.28513994091106865,130.28538255732897,132.90399645037522,128.83678763777147,125.83028877653732,125.04325957940837,0.9658051141782441,0.959764304521162,125.83028877653732,125.04325957940837,0.9658051141782441,0.959764304521162,0.5991929421864335,0.5954451772818181,0,0,0,0,121,121,33.2121541840314,97.65000541745653,0.0,0.0,0.0,0.0,0.0,0.0,,,0.047962017525392794,0.040923348247923846,209.99961768138843,209.99961768138843,,none,0,0,7884,876,1.0,0.6751932631088217,1.0,OK,FLEX_UP,SCEN,2033,9425.893,22.17518,39.588440000000006,6.15311,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8663329392405822,0.18214411336846573,0.6841888258721165,0.0,49114.831960208474,2355.646431232241,63129.692988162904,2586.265437959775,-0.9520379824746072,,,
+DE,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,03f5c4ddfec8e4f34ce7d2e2aa93b70fddbc185ab0031ccd0a15bf4e8f079efc,562.48796,562.48796,33.67924559337694,102.76648481380623,23.207456298471026,159.6531867056542,183.99714081040418,22.6446,4.8190211,86.76938456895118,18.304222253149565,68.4651623158016,0.28383396278500644,131.40333262713673,139.09357118854444,127.14915810380478,126.91115851266659,126.13700889230415,0.9658138494309204,0.9599224492290768,126.91115851266659,126.13700889230415,0.9658138494309204,0.9599224492290768,0.5994309173544415,0.5957744286536695,0,0,0,0,122,122,33.716966993169336,98.4327480675338,0.0,0.0,0.0,0.0,0.0,0.0,,,0.047182147806990836,0.04025792836525781,211.71940725510566,211.71940725510566,,none,0,0,7884,876,1.0,0.6760051592561089,1.0,OK,FLEX_UP,SCEN,2034,9425.893,22.51374,39.97912,6.25078,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8676938456895118,0.18304222253149566,0.6846516231580161,0.0,49926.646851019614,2355.646431232241,64173.1583279537,2586.265437959775,-0.9528178521930092,,,
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,733a2d13d82017a02d63d61c03c67c8a30de26106f87d76347dc2ac7c7338dde,571.6341,571.6341,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,185.87047365763516,22.6446,4.8190211,86.90273198012588,18.3922228147874,68.51050916533849,0.2825697759333902,132.52128607491684,144.02080926995404,126.12176463801985,127.9956494768802,127.23516333548923,0.9658497383169206,0.9601111421719885,127.9956494768802,127.23516333548923,0.9658497383169206,0.9601111421719885,0.5996655238082546,0.5961026111452854,0,0,0,0,121,121,33.773809686030425,99.21549071761106,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04642723390429778,0.03961380190579953,213.44506961818823,213.44506961818823,,none,0,0,7884,876,1.0,0.6767959000871794,1.0,OK,FLEX_UP,SCEN,2035,9425.893,22.8523,40.3698,6.34845,2.4375,0.35,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8690273198012588,0.18392222814787398,0.6851050916533848,0.0,50738.46174183076,2355.646431232241,65216.62366774449,2586.265437959775,-0.9535727660957022,,,
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,4f3f2824684aefa1e90cad4671c326809eaf2e190e08eec0174835d7abfd5cc8,234.2802,234.2802,28.613131445241326,43.94530341930337,0.0,72.5584348645447,115.73429566454469,22.644600000000004,8.7176561,62.69397886591454,24.723122287084507,37.97085657883004,0.30970792608399983,95.29191913310169,92.5993792683497,96.79032617937092,89.09658218346348,92.85001380188986,0.9349857049160203,0.9743744763099899,89.09658218346348,92.85001380188986,0.9349857049160203,0.9743744763099899,0.571299975376471,0.5953675135315121,0,0,0,0,195,195,39.25075237435021,76.30446300965609,0.0,0.0,0.0,0.0,0.0,0.0,,,0.10257314750653108,0.09665605544130491,155.95411521723113,155.95411521723113,,none,0,0,7884,876,1.0,0.7144035890581533,1.0,OK,FLEX_UP,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6269397886591453,0.24723122287084506,0.37970856578830037,0.0,21392.62454815791,2194.3088333300393,26877.445663145587,2648.9347173361994,-0.8974268524934689,,,
+ES,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,4b55055917cb9c5163dac8c87fb4dfb9c8830ee3d4778dd8eb435b520a9a1a45,238.74268,238.74268,29.110755098259354,44.416134807473135,0.0,73.52688990573249,116.7027507057325,22.644600000000004,8.7176561,63.00356200783261,24.944360713195614,38.059201294637,0.30797547345004456,95.98080592496514,92.96475677121533,97.65924692523957,89.73051353749331,93.52460558267047,0.9348797676031381,0.9744094632398185,89.73051353749331,93.52460558267047,0.9348797676031381,0.9744094632398185,0.5712733364877421,0.5954285935585077,0,0,0,0,195,195,39.56739910631013,76.93212901715596,0.0,0.0,0.0,0.0,0.0,0.0,,,0.10065589241295107,0.09484940019941136,157.07106879723707,157.07106879723707,,none,0,0,7884,876,1.0,0.715077804078102,1.0,OK,FLEX_UP,SCEN,2026,6237.200000000001,12.73418,13.51734,2.00612,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6300356200783261,0.24944360713195612,0.38059201294637,0.0,21800.103110979966,2194.3088333300393,27389.397009110267,2648.9347173361994,-0.899344107587049,,,
+ES,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,034d1d6d6db023e4f80cfa93b821cbc51069de95939db101b4b0b9448f2e2da6,243.20516,243.20516,29.608378751277378,44.88696619564292,0.0,74.49534494692031,117.6712057469203,22.644600000000004,8.7176561,63.30804930064211,25.161957475779744,38.14609182486235,0.30630659705953733,96.66969388195953,93.40495242807904,98.48653294264784,90.35659578878496,94.21140571435485,0.9346941338111269,0.9745702291081378,90.35659578878496,94.21140571435485,0.9346941338111269,0.9745702291081378,0.5711547469785856,0.5955214572167185,0,0,0,0,195,195,39.88413470877131,77.55979502465584,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09880899530445655,0.09310904423244969,158.19985085788443,158.19985085788443,,none,0,0,7884,876,1.0,0.7157342651122341,1.0,OK,FLEX_UP,SCEN,2027,6237.200000000001,12.95186,13.66063,2.04194,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6330804930064211,0.25161957475779745,0.3814609182486235,0.0,22207.581673802022,2194.3088333300393,27901.348355074944,2648.9347173361994,-0.9011910046955435,,,
+ES,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,c9efa7fc379dad14ed8caa79d4642a6fdc7664c6b692eeb3c693e55d1de20cd9,247.66764,247.66764,30.155701527044,45.391653721379456,0.0,75.54735524842346,118.83112364842346,22.70664,8.720998,63.57539416351867,25.3769388028875,38.198455360631165,0.3050352288592222,97.32936658820583,94.22146925473314,99.04134393291535,90.9511631187144,94.84316297042542,0.9344678415870393,0.9744557711106929,90.9511631187144,94.84316297042542,0.9344678415870393,0.9744557711106929,0.5711181587620962,0.5955575580286041,0,0,0,0,196,196,40.25784486578604,78.1239308548588,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09729618681509154,0.09168190079252986,159.25104415494664,159.25104415494664,,none,0,0,7905,879,1.0,0.7160408088825325,1.0,OK,FLEX_UP,SCEN,2028,6237.200000000001,13.16954,13.80392,2.07776,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6357539416351867,0.253769388028875,0.3819845536063116,0.0,22551.292773837155,2194.1547946450837,28341.20687562576,2649.646301748664,-0.9027038131849084,,,
+ES,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,dbd035b109e5bc09b5085e8ee98adafd5c609e85a7b601c57213c6f980ca7642,252.13012,252.13012,30.60362605731343,45.82862897198248,0.0,76.4322550292959,119.6081158292959,22.644600000000004,8.7176561,63.90223146594805,25.586579844624236,38.315651621323816,0.30314607008990396,98.04748250006956,98.28164719258,97.91716909975993,91.61806125341008,95.59834845114803,0.9344254326300022,0.9750209389729124,91.61806125341008,95.59834845114803,0.9344254326300022,0.9750209389729124,0.5711164400944623,0.5959282230969218,0,0,0,0,196,196,40.6924265395121,78.8151270396556,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09531133175385631,0.08981314886138952,160.41923296457114,160.41923296457114,,none,0,0,7884,876,1.0,0.7170107499692413,1.0,OK,FLEX_UP,SCEN,2029,6237.200000000001,13.38722,13.94721,2.11358,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6390223146594805,0.25586579844624235,0.38315651621323815,0.0,23022.538799446134,2194.3088333300393,28925.251047004298,2648.9347173361994,-0.9046886682461437,,,
+ES,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,dff7289be54a736a66b984e6753d51b4bf9809ab8e17dd953b339b37275409a6,261.0550799999999,261.0550799999999,31.59887336334949,46.77029174832202,0.0,78.3691651116715,121.5450259116715,22.644600000000004,8.7176561,64.47747616477822,25.997668869076417,38.479807295701804,0.3002016475284508,99.4252921187118,96.49023980760865,101.05865811700161,92.88073611340049,96.98198858017412,0.9341761450648066,0.9754257343732978,92.88073611340049,96.98198858017412,0.9341761450648066,0.9754257343732978,0.5711131173053249,0.5963312538013092,0,0,0,0,196,196,41.32745380080086,80.07045905465534,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09205282468534842,0.08674261385758136,162.63106782004655,162.63106782004655,,none,0,0,7884,876,1.0,0.7182487146953734,1.0,OK,FLEX_UP,SCEN,2031,6237.200000000001,13.82258,14.23379,2.18522,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6447747616477822,0.2599766886907642,0.38479807295701807,0.0,23837.49592509024,2194.3088333300393,29949.15373893365,2648.9347173361994,-0.9079471753146515,,,
+ES,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,4dd4f55b8c1320af6c156120a352909d05e6c310ae04714b44e136917a23aff6,265.51756,265.51756,32.14948205647994,47.27638503298847,0.0,79.42586708946843,122.70963548946841,22.70664,8.720998,64.72667510799116,26.199639440082258,38.52703566790888,0.2991360235815229,100.0824712608046,96.87472822727685,101.87061737736686,93.46044142233556,97.60528680417745,0.9338342693276158,0.9752485682515587,93.46044142233556,97.60528680417745,0.9338342693276158,0.9752485682515587,0.570980451970997,0.5963026701571867,0,0,0,0,196,196,41.52485298456148,80.62998155896838,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09075526669306859,0.08551841166362029,163.6841350692736,163.6841350692736,,none,0,0,7905,879,1.0,0.7185131946887806,1.0,OK,FLEX_UP,SCEN,2032,6237.200000000001,14.04026,14.37708,2.22104,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6472667510799115,0.26199639440082256,0.3852703566790888,0.0,24176.611171951543,2194.1547946450837,30383.816380175365,2649.646301748664,-0.9092447333069315,,,
+ES,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,dc1c5efca1704d92337b59d8731930bbca5ddcb44edd57424008dc932db0fd22,269.98004,269.98004,32.59412066938554,47.71195452466156,0.0,80.3060751940471,123.48193599404709,22.644600000000004,8.7176561,65.03467454374747,26.395861392193314,38.63881315155416,0.29745189753304396,100.80311882796155,97.47948924885736,102.64172242491281,94.1401257593172,98.36430922447758,0.9339009234424984,0.9758062088570272,94.1401257593172,98.36430922447758,0.9339009234424984,0.9758062088570272,0.5710053304808557,0.5966270433910591,0,0,0,0,196,196,41.96471096523827,81.32579106965508,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08900975610070878,0.08387508943253733,164.8673326395041,164.8673326395041,,none,0,0,7884,876,1.0,0.7194474506143496,1.0,OK,FLEX_UP,SCEN,2033,6237.200000000001,14.25794,14.52037,2.25686,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6503467454374747,0.26395861392193315,0.3863881315155416,0.0,24652.45305073436,2194.3088333300393,30973.056430863016,2648.9347173361994,-0.9109902438992912,,,
+ES,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,971c24b4e52b92706db7bfb5f769ec5cb8e085f409f2071dcdcd7357a070fcaa,274.44252,274.44252,33.091744322403564,48.182785912831335,0.0,81.2745302352349,124.4503910352349,22.644600000000004,8.7176561,65.3067696767816,26.590309638347776,38.71646003843381,0.2961440896083993,101.49203686441277,100.27917210882153,102.1629833249526,94.77403611547187,99.05229209584058,0.9338076074094784,0.975961219776961,94.77403611547187,99.05229209584058,0.9338076074094784,0.975961219776961,0.5710124995602142,0.5967889436290551,0,0,0,0,196,196,42.282902885806344,81.95345707715494,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08756244299338019,0.08251126684013835,165.97541417826318,165.97541417826318,,none,0,0,7884,876,1.0,0.7200312379091495,1.0,OK,FLEX_UP,SCEN,2034,6237.200000000001,14.47562,14.66366,2.29268,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.653067696767816,0.26590309638347776,0.3871646003843381,0.0,25059.93161355641,2194.3088333300393,31485.00777682769,2648.9347173361994,-0.9124375570066198,,,
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,cb1f52ff15add754c6e6e1690f1c0ae5914ac5d49684ebda1d36e7a2ca8bf30c,278.905,278.905,33.5893679754216,48.65361730100112,0.0,82.24298527642273,125.41884607642272,22.644600000000004,8.7176561,65.57466269966221,26.781754916605,38.7929077830572,0.2948781315373433,102.18095820676898,102.37194419919388,102.07467389115513,95.40682213699847,99.73814506791585,0.9337045160991477,0.9760932645208713,95.40682213699847,99.73814506791585,0.9337045160991477,0.9760932645208713,0.5709691825648695,0.5968903049531534,0,0,0,0,195,195,42.421549424273515,82.58112308465482,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08616144390548612,0.08119108657069612,167.09627253158976,167.09627253158976,,none,0,0,7884,876,1.0,0.7206055615416163,1.0,OK,FLEX_UP,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6557466269966221,0.26781754916605,0.387929077830572,0.0,25467.410176378464,2194.3088333300393,31996.959122792367,2648.9347173361994,-0.9138385560945139,,,
+DE,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:FLEX_UP,2c196ff309d4beaea11215f86e5658b9b72d039bed02f495df18c13cf6e0162f,580.7802399999999,578.9788299977498,34.72298405606922,105.27043924133554,23.996708405153246,163.990131702558,188.399044995558,19.625559437326835,4.8740938,87.04403555040552,18.430552053428883,68.61348349697664,0.28324028998296075,132.6019269758499,141.10147388838112,127.86388167567287,127.8752034633546,127.29078959671901,0.96435403602124,0.9599467556749898,127.8752034633546,127.29078959671901,0.96435403602124,0.9599467556749898,0.5967960665544652,0.5940685956500067,0,0,0,0,122,122,34.41319571147475,100.38902158201084,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04315668186305333,0.033896851526338374,214.26951454560967,214.26951454560967,,none,0,0,7905,879,1.0,0.6786662318160723,1.0,OK,FLEX_UP,SCEN,2036,9425.893,23.19086,40.76048,6.4461200000000005,2.4375,0.35,0.9,-43.87,-0.03,-9.362650296574857,0.8704403555040552,0.18430552053428884,0.6861348349697663,0.0,51157.020765544985,2207.767270240238,65954.87493184983,2243.198428039677,-0.9568433181369467,0.13770108176474044,0.0,
+DE,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:FLEX_UP,06ac7adaabf2414dd1cbc172e9b2e5a6a776b05b882445fd66ea4e2884a4b02b,589.92638,588.1287558522502,35.19864379928503,105.77921823217994,24.29532321588214,165.27318524734713,189.6171393520971,19.582011821916065,4.8190211,87.16152232444237,18.563007500036807,68.59851482440556,0.28101531102292693,133.7710285650412,136.06246873463664,132.49583478196143,128.9760836423213,128.45542125373166,0.9641555800672599,0.9602633891035305,128.9760836423213,128.45542125373166,0.9641555800672599,0.9602633891035305,0.5968415452678502,0.59443216101774,0,0,0,0,121,121,34.574332834141096,101.23820231962449,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.042393746253955374,0.033295450404461205,216.09769739544438,216.09769739544438,,none,0,0,7884,876,1.0,0.679193770684987,1.0,OK,FLEX_UP,SCEN,2037,9425.893,23.52942,41.15116,6.54379,2.4375,0.35,0.9,-43.87,-0.03,-9.362650296574857,0.8716152232444238,0.18563007500036807,0.6859851482440555,0.0,52092.49648621018,2208.396077771456,67177.19976280173,2244.1658585011546,-0.9576062537460446,0.13669818949455512,0.0,
+DE,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:FLEX_UP,be035eaaab7bc584b6496e52e680207adae862e66c63d90f44e578e59b6a3092,599.0725200000002,597.2748958522501,35.70510986792107,106.78346270497123,24.657945521685832,167.14651809457808,191.49047219932814,19.582011821916065,4.8190211,87.28711991507875,18.645893687470025,68.64122622760874,0.27984855759939004,134.8897155333773,136.42654365123855,134.034465770559,130.05546372082335,129.53956562523123,0.9641614500153811,0.9603368582475642,130.05546372082335,129.53956562523123,0.9641614500153811,0.9603368582475642,0.597098710301474,0.5947301663071495,0,0,0,0,121,121,34.941974070589694,102.02493357138938,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0417417650485983,0.03278559329699357,217.81233400279595,217.81233400279595,,none,0,0,7884,876,1.0,0.679905300713669,1.0,OK,FLEX_UP,SCEN,2038,9425.893,23.867980000000003,41.54184,6.64146,2.4375,0.35,0.9,-43.87,-0.03,-9.362650296574857,0.8728711991507875,0.18645893687470025,0.6864122622760874,0.0,52906.149876515934,2208.396077771456,68219.04405960815,2244.1658585011546,-0.9582582349514017,0.13548042339030614,0.0,
+DE,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:FLEX_UP,d3663006f445d8ad44c155e2aa7b03e37afe38c80a764d19894a508c4913793d,608.21866,606.42103585225,36.21157593655708,107.78770717776241,25.020567827489533,169.01985094180907,193.36380504655907,19.582011821916065,4.8190211,87.41028389522624,18.72717385129957,68.68311004392667,0.27871699850298315,136.00840510564385,138.94844191602192,134.38200176373255,131.116804870625,130.64746059022664,0.9640345739572542,0.9605837263421101,131.116804870625,130.64746059022664,0.9640345739572542,0.9605837263421101,0.5972416943615565,0.5951038145257824,0,0,0,0,121,121,35.22544240302715,102.81166482315427,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04110953397953712,0.03229111568399991,219.53725955249516,219.53725955249516,,none,0,0,7884,876,1.0,0.6805995614127434,1.0,OK,FLEX_UP,SCEN,2039,9425.893,24.20654,41.93252,6.73913,2.4375,0.35,0.9,-43.87,-0.03,-9.362650296574857,0.8741028389522624,0.18727173851299567,0.6868311004392668,0.0,53719.8032668217,2208.396077771456,69260.8883564146,2244.1658585011546,-0.9588904660204629,0.13428416247417294,0.0,
+ES,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:FLEX_UP,8cba4c7bac297315595cbb62472cabe3af1855a379e1763dbc0fd12995a286e3,283.36748,281.72884039999997,34.14326258591588,49.16111634459749,0.0,83.30437893051337,126.58814733051338,16.919452248912282,8.720998,65.8074082662819,26.97192691885288,38.83548134742902,0.2956899223105359,99.99762066720693,98.53586073639552,100.81247407544649,92.76819848330074,97.38263678232656,0.927704057999882,0.9738495389447008,92.76819848330074,97.38263678232656,0.927704057999882,0.9738495389447008,0.5495488608511092,0.57688429855667,0,0,0,0,196,196,45.08001554590742,87.3905596790094,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0746043165621029,0.060055804811782715,168.8079169878121,168.8079169878121,,none,0,0,7905,879,1.0,0.7156557600804088,1.0,OK,FLEX_UP,SCEN,2036,6237.200000000001,14.91098,14.95024,2.36432,2.4375,0.35,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.658074082662819,0.2697192691885288,0.3883548134742902,0.0,25562.83792052,1907.0980524482022,32202.11827678517,1944.6687142945586,-0.9253956834378971,0.16031304073685756,0.0,
+ES,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:FLEX_UP,d95b0316672cd5ed75b58b15398efab3a2a8cb579326f10ed5793fa7113e4ffc,287.82996,286.192998,34.584615281457644,49.59528007734066,0.0,84.1798953587983,127.3557561587983,16.879156992445363,8.7176561,66.09822586568875,27.155910596089996,38.94231526959875,0.2941368095902832,100.72403045799639,97.03683804084564,102.77596483086707,93.44859250143472,98.14954179085582,0.9277685977866458,0.9744401742520205,93.44859250143472,98.14954179085582,0.9277685977866458,0.9744401742520205,0.5496850401063555,0.5773370510090742,0,0,0,0,196,196,45.53013275914591,88.09386912975644,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07323875169875162,0.05897823185892676,170.00388528556982,170.00388528556982,,none,0,0,7884,876,1.0,0.7166555877754945,1.0,OK,FLEX_UP,SCEN,2037,6237.200000000001,15.12866,15.09353,2.40014,2.4375,0.35,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6609822586568874,0.27155910596089994,0.3894231526959875,0.0,26040.540722316815,1907.1766960629911,32799.437553674186,1945.179478936571,-0.9267612483012484,0.15909547685850833,0.0,
+ES,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:FLEX_UP,6d19aba72439044b19e0c816f551c3e2c706eaa44eb3cc6b7a7692e4a97c9474,292.29244,290.655478,35.082238934475676,50.066111465510446,0.0,85.14835039998611,128.32421119998614,16.879156992445363,8.7176561,66.35408049949916,27.338752840492397,39.01532765900676,0.2929528491459779,101.4163556758228,97.5149190334231,103.58751764526056,94.0836814935961,98.84405578632943,0.9276973212716736,0.9746362421292704,94.0836814935961,98.84405578632943,0.9276973212716736,0.9746362421292704,0.5497976754923263,0.577615918561358,0,0,0,0,196,196,45.83481657251403,88.72405592705451,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07211511489733959,0.05807272964057249,171.12418929262873,171.12418929262873,,none,0,0,7884,876,1.0,0.7172660924741594,1.0,OK,FLEX_UP,SCEN,2038,6237.200000000001,15.34634,15.23682,2.43596,2.4375,0.35,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6635408049949916,0.273387528404924,0.3901532765900676,0.0,26446.28243022253,1907.1766960629911,33312.87794729913,1945.179478936571,-0.9278848851026604,0.15810139921640579,0.0,
+ES,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:FLEX_UP,e2f5c2c61fd8bf343c9b9b99c680df5335936fcd56dd4995729e5a0572d3fc39,296.75492,295.117958,35.57986258749369,50.536942853680216,0.0,86.11680544117391,129.29266624117392,16.879156992445363,8.7176561,66.60610222124846,27.518855958253184,39.087246262995286,0.2918046940443181,102.10868196898564,98.44817645251173,104.13364246746058,94.72041242686609,99.52312505896975,0.9276430818648345,0.9746783832661633,94.72041242686609,99.52312505896975,0.9276430818648345,0.9746783832661633,0.5499449845334915,0.5778294463565473,0,0,0,0,196,196,46.15450913203672,89.35514168020595,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07102321890728502,0.05719461162863347,172.2361601446656,172.2361601446656,,none,0,0,7884,876,1.0,0.7178650020403275,1.0,OK,FLEX_UP,SCEN,2039,6237.200000000001,15.56402,15.38011,2.47178,2.4375,0.35,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6660610222124846,0.27518855958253186,0.39087246262995284,0.0,26852.861999294255,1907.1766960629911,33826.68331037538,1945.179478936571,-0.928976781092715,0.1571434328998704,0.0,
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:HIGH_CO2,795ee0abfe8a551ee309b48f5ae25dfab04b30a852354c5a00d6723b03bfdba1,525.9034,524.423312869,31.697453747499996,98.74950692264126,21.756967075256217,152.20392774539746,176.5478818501475,22.6446,3.4586516,0.8621113215880268,0.17954026644400387,0.6825710551440229,0.2902310481063944,137.3843587795631,145.73640104789126,132.73642054494977,132.7682232005389,131.99277182212148,0.9663998462413694,0.9607554527652413,132.7682232005389,131.99277182212148,0.9663998462413694,0.9607554527652413,0.6063087998823109,0.6027675685297967,0,0,0,0,121,121,33.778137821839884,99.4180519494858,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05069604702394818,0.04318000257485993,218.97789249687654,218.97789249687654,,none,0,0,7884,876,1.0,0.6697974141701357,1.0,OK,HIGH_CO2,SCEN,2030,9425.893,21.1595,38.4164,5.8601,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+DE,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:HIGH_CO2,f3555e16470f1919c1e88006de1810dc781f1aadff65fcca7d16fb7236d44422,617.3648,615.8812870144999,36.75064727891181,109.3064128317157,25.451076930673285,171.50813704130078,195.91705033430082,22.70664,3.4966016,0.8754120008883853,0.18758268979755854,0.687829311090827,0.2784759671343333,150.84490121681358,159.1747175891058,146.22901571114846,145.73395548404667,145.2226148422671,0.966117875436699,0.9627280317120867,145.73395548404667,145.2226148422671,0.966117875436699,0.9627280317120867,0.6093746300241895,0.6072365009013929,0,0,0,0,122,122,37.09867443594519,108.07678309173713,0.0,0.0,0.0,0.0,0.0,0.0,,,0.043264048243779316,0.036868533723554114,239.15330291689645,239.15330291689645,,none,0,0,7905,879,1.0,0.6771769965967225,1.0,OK,HIGH_CO2,SCEN,2040,9425.893,24.5451,42.3232,6.8368,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:HIGH_CO2,2bc97d936b7e2eaec1b5d32a43d6bb4b84f719970bf3c551c6121e161483136b,256.5926,255.23969,31.101249710331462,46.29946036015223,0.0,77.4007100704837,120.57657087048369,22.644600000000004,6.6676834000000005,0.6419216395996451,0.2579377526313848,0.38398388696826025,0.30324715592031826,102.9582477964049,101.58441156367076,103.72279205385395,96.30062690358723,100.4440585703068,0.9353366919570852,0.9755804971441453,96.30062690358723,100.4440585703068,0.9353366919570852,0.9755804971441453,0.5755736355638228,0.6003382721482935,0,0,0,0,197,197,42.202629619738346,81.24075305534133,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0944955713769326,0.08871896059738986,167.31243572206478,167.31243572206478,,none,0,0,7884,876,1.0,0.71470883497246,1.0,OK,HIGH_CO2,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+ES,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:HIGH_CO2,c000c326671768c97f3f39256ca409002ede415a32987fee83d7f31dae43d91d,301.2174,299.86286160000003,36.137043115351815,51.0458476562065,0.0,87.18289077155832,130.46665917155832,22.70664,6.671025300000001,0.6682388537052703,0.27698297285157797,0.39125588085369223,0.290742542462145,110.76585496399444,109.48331629407676,111.47656110592337,103.49761706397925,108.21021537791208,0.9343819636260848,0.9769275505803381,103.49761706397925,108.21021537791208,0.9343819636260848,0.9769275505803381,0.576077553646011,0.6023083228658329,0,0,0,0,198,198,45.6352385985259,87.80810122554783,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08064739954379686,0.07572341529338623,179.65917333341653,179.65917333341653,,none,0,0,7905,879,1.0,0.7199931117432893,1.0,OK,HIGH_CO2,SCEN,2040,6237.200000000001,15.7817,15.5234,2.5076,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,ca569eaae381bd1b4805df6fd9d768f31ba7f45090315d44569615013810c827,480.17270000000013,480.17270000000013,31.697453747499996,93.72828455868506,19.943855546237707,145.36959385242278,169.71354795717278,22.6446,3.4586516,85.6558569437879,18.67703205138275,66.97882489240514,0.30274439561520833,130.59487360609774,134.78526723066867,128.26290615191218,125.85222730566767,125.34671798030065,0.9636842843101567,0.9598134637227289,125.85222730566767,125.34671798030065,0.9636842843101567,0.9598134637227289,0.6027756499539961,0.6003544873041223,0,0,0,0,121,121,32.19892258883258,94.97731770341112,0.0,0.0,0.0,0.0,0.0,0.0,,,0.055270510106827694,0.047159282483156574,208.78784223495543,208.78784223495543,,none,0,0,7884,876,1.0,0.6674728580464783,1.0,OK,HIGH_CO2,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.856558569437879,0.1867703205138275,0.6697882489240514,0.0,42620.312833719305,2355.646431232241,54781.97026983656,2586.265437959775,-0.9447294898931723,,,
+DE,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,de4340376b82dab7837a5d0dbf0e479e503ad2c359ea32dfc5d5967a7cc8cd7c,489.31884000000014,489.31884000000014,31.697453747499996,94.7325290314763,20.306477852041407,146.73646063101768,171.0804147357677,22.6446,3.4586516,85.77046113528012,18.52780974166824,67.2426513936119,0.2998790331290282,131.96175718226095,133.7854395337088,130.94687212100743,127.22469763629842,126.68163407686907,0.9641027851772247,0.9599874750220311,127.22469763629842,126.68163407686907,0.9641027851772247,0.9599874750220311,0.6034552970840821,0.6008794247284817,0,0,0,0,121,121,32.498491442550765,95.8498404817728,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05423741719892237,0.04627780119808997,210.8270459320728,210.8270459320728,,none,0,0,7884,876,1.0,0.6679414400040705,1.0,OK,HIGH_CO2,SCEN,2026,9425.893,19.80526,36.85368,5.46942,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8577046113528012,0.18527809741668239,0.672426513936119,0.0,43432.12772453045,2355.646431232241,55825.435609627355,2586.265437959775,-0.9457625828010776,,,
+DE,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,7aa57d7fa0a3c1ad6bba226e7af4298b90299eb179a2ff0ba03fcc48d68a00e6,498.46498000000014,498.46498000000014,31.697453747499996,95.73677350426752,20.669100157845104,148.10332740961263,172.44728151436263,22.6446,3.4586516,85.88324855516933,18.380952989891007,67.50229556527833,0.2971188214859399,133.32865128903646,134.42468424323738,132.71870544458778,128.6491919416819,128.01648290556065,0.9649028224457907,0.9601573380356198,128.6491919416819,128.01648290556065,0.9649028224457907,0.9601573380356198,0.6043390257666519,0.6013668286100883,0,0,0,0,121,121,32.79756705168137,96.7223632601345,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0532422359307423,0.04542866782737675,212.8758634749431,212.8758634749431,,none,0,0,7884,876,1.0,0.6683787420170815,1.0,OK,HIGH_CO2,SCEN,2027,9425.893,20.14382,37.24436,5.56709,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8588324855516933,0.18380952989891006,0.6750229556527833,0.0,44243.9426153416,2355.646431232241,56868.90094941815,2586.265437959775,-0.9467577640692577,,,
+DE,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,8c6bb622f9a6b6b9ab638e41598c9cdceb9ebbbd39605ddea0d70e61411c68fa,507.61112,507.61112,31.72202261,97.19849206057513,21.087971354113154,150.0084860246883,174.41739931768828,22.70664,3.4966016,86.00545966830926,18.187418648652535,67.81804101965672,0.2955185182402787,134.65189198746333,137.25033556476566,133.22054594911882,129.9916613666392,129.2921189800677,0.965390529965535,0.9601953383031956,129.9916613666392,129.2921189800677,0.965390529965535,0.9601953383031956,0.6050864847075053,0.6018302478139665,0,0,0,0,120,120,32.77280453948865,97.54061628733805,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05242090399684957,0.04473235338106856,214.83154003923303,214.83154003923303,,none,0,0,7905,879,1.0,0.6690032505484165,1.0,OK,HIGH_CO2,SCEN,2028,9425.893,20.482380000000003,37.63504,5.66476,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8600545966830926,0.18187418648652537,0.6781804101965672,0.0,44945.5406096182,2356.0858693832993,57752.532861835556,2586.504602787825,-0.9475790960031504,,,
+DE,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,e56b9f1d704eb53ea840ae945cb76a59f817a7413a44232ab64fb5a53221eed4,516.7572600000001,516.7572600000001,31.697453747499996,97.74526244985003,21.394344769452513,150.83706096680254,175.18101507155257,22.6446,3.4586516,86.10354318656805,18.094114670218797,68.00942851634925,0.29189151782173806,136.0624694123988,147.1917702639212,129.86897789374774,131.4507859062475,130.7043025167417,0.966106131058275,0.9606198026627258,131.4507859062475,130.7043025167417,0.966106131058275,0.9606198026627258,0.6058817192159173,0.602441035036802,0,0,0,0,120,120,33.17551078246368,98.46740881685783,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05135755628933543,0.04382057448017275,216.9578347344105,216.9578347344105,,none,0,0,7884,876,1.0,0.6691684992186994,1.0,OK,HIGH_CO2,SCEN,2029,9425.893,20.82094,38.02572000000001,5.76243,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8610354318656804,0.18094114670218797,0.6800942851634925,0.0,45867.57239696389,2355.646431232241,58955.83162899973,2586.265437959775,-0.9486424437106645,,,
+DE,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,41cbde6c15a90ac95953a152872dcc385a683abfe019262c25a61ae483711bde,535.0495400000001,535.0495400000001,32.15984738746886,99.7537513954325,22.11958938105992,154.03318816396126,178.37714226871128,22.6446,3.4586516,86.35253721686058,18.029130290148135,68.32340692671245,0.28788584355004065,138.78202069047626,143.56108587488214,136.12245563049774,134.20842282007183,133.36269590126486,0.9670447378727475,0.9609508150821781,134.20842282007183,133.36269590126486,0.9670447378727475,0.9609508150821781,0.6072297474085414,0.6034032324067798,0,0,0,0,121,121,34.02016545909737,100.21241485414409,0.0,0.0,0.0,0.0,0.0,0.0,,,0.049601743547658686,0.042322436161705695,221.01753643135837,221.01753643135837,,none,0,0,7884,876,1.0,0.6703145684333242,1.0,OK,HIGH_CO2,SCEN,2031,9425.893,21.49806,38.80708,5.95777,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8635253721686058,0.18029130290148135,0.6832340692671245,0.0,47491.20217858617,2355.646431232241,61042.76230858132,2586.265437959775,-0.9503982564523413,,,
+DE,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,6a775e28490747307b2126d4f124e8f635b7702e36f402d40ce804d9f51dc446,544.19568,544.19568,32.69532083322664,101.23446565095534,22.542339879633197,156.4721263638152,180.88103965681518,22.70664,3.4966016,86.5055434559029,18.075593160709012,68.42995029519386,0.28752915929765405,140.08620798379553,142.3029379141018,138.8504989588163,135.47896451897958,134.63019531193729,0.9671113699833399,0.9610524636908626,135.47896451897958,134.63019531193729,0.9671113699833399,0.9610524636908626,0.6076786077274187,0.6038715304305952,0,0,0,0,121,121,34.2191345777606,101.02669179985628,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0488968118770316,0.04172513828114181,222.94509432484458,222.94509432484458,,none,0,0,7905,879,1.0,0.6713243263171953,1.0,OK,HIGH_CO2,SCEN,2032,9425.893,21.83662,39.19776,6.05544,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8650554345590289,0.1807559316070901,0.6842995029519386,0.0,48184.85661822931,2356.0858693832993,61914.874702644316,2586.504602787825,-0.9511031881229683,,,
+DE,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,4684b86b49ce2799d450ee3134932af6e4ce35a52877445e20a5d5d269dcd9f3,553.3418200000001,553.3418200000001,33.17277952474091,101.76224034101499,22.84483399266732,157.77985385842322,182.12380796317325,22.6446,3.4586516,86.63329392405822,18.214411336846574,68.41888258721166,0.28513994091106865,141.4845404520658,144.21774138964648,139.97255695468075,136.81605802907902,136.0332200600249,0.96700358634187,0.9614705580226428,136.81605802907902,136.0332200600249,0.96700358634187,0.9614705580226428,0.6078676464853195,0.604389532288175,0,0,0,0,121,121,34.636174891537856,101.95737383850916,0.0,0.0,0.0,0.0,0.0,0.0,,,0.047962017525392794,0.040923348247923846,225.07540715507258,225.07540715507258,,none,0,0,7884,876,1.0,0.6718870513983558,1.0,OK,HIGH_CO2,SCEN,2033,9425.893,22.17518,39.588440000000006,6.15311,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8663329392405822,0.18214411336846573,0.6841888258721165,0.0,49114.831960208474,2355.646431232241,63129.692988162904,2586.265437959775,-0.9520379824746072,,,
+DE,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,1bdab513229cf0a10d6bc88642e145806a83995c34abe8b5fcfac2b4ef934b2f,562.48796,562.48796,33.67924559337694,102.76648481380623,23.207456298471026,159.6531867056542,183.99714081040418,22.6446,3.4586516,86.76938456895118,18.304222253149565,68.4651623158016,0.28383396278500644,142.83580631134728,150.86005575332177,138.39685981153158,138.1258605399075,137.35658605106508,0.9670254546596444,0.9616397288482494,138.1258605399075,137.35658605106508,0.9670254546596444,0.9616397288482494,0.6081911895878052,0.6048039457750982,0,0,0,0,122,122,35.18266874755531,102.8298533306917,0.0,0.0,0.0,0.0,0.0,0.0,,,0.047182147806990836,0.04025792836525781,227.10927567615832,227.10927567615832,,none,0,0,7884,876,1.0,0.6726409928396306,1.0,OK,HIGH_CO2,SCEN,2034,9425.893,22.51374,39.97912,6.25078,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8676938456895118,0.18304222253149566,0.6846516231580161,0.0,49926.646851019614,2355.646431232241,64173.1583279537,2586.265437959775,-0.9528178521930092,,,
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,e3cb4be6ff2e7d38dbfb37df517255772b61fbc5c45c0de31711dffcbff79a49,571.6341,571.6341,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,185.87047365763516,22.6446,3.4586516,86.90273198012588,18.3922228147874,68.51050916533849,0.2825697759333902,144.1870755486011,156.19487830268915,137.50469491146464,139.43948267621957,138.6846144172122,0.9670733812006524,0.9618380419295336,139.43948267621957,138.6846144172122,0.9670733812006524,0.9618380419295336,0.6085100626216867,0.6052158383263607,0,0,0,0,121,121,35.257164589683,103.70233282287421,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04642723390429778,0.03961380190579953,229.14901698660927,229.14901698660927,,none,0,0,7884,876,1.0,0.6733742467577053,1.0,OK,HIGH_CO2,SCEN,2035,9425.893,22.8523,40.3698,6.34845,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8690273198012588,0.18392222814787398,0.6851050916533848,0.0,50738.46174183076,2355.646431232241,65216.62366774449,2586.265437959775,-0.9535727660957022,,,
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,728e8dc6ca57bb1a85a59ef83787aa63931e4e5ea14d49094b6e056f6049587f,234.2802,234.2802,28.613131445241326,43.94530341930337,0.0,72.5584348645447,115.73429566454469,22.644600000000004,6.6676834000000005,62.69397886591454,24.723122287084507,37.97085657883004,0.30970792608399983,99.11155549673803,96.37342315549701,100.63533490199156,92.80038065784048,96.6223062702947,0.9363225124732779,0.9748843692951095,92.80038065784048,96.6223062702947,0.9363225124732779,0.9748843692951095,0.5760566309763108,0.5997811628860453,0,0,0,0,195,195,40.03346474394781,77.77355391874698,0.0,0.0,0.0,0.0,0.0,0.0,,,0.10257314750653108,0.09665605544130491,161.0959333990493,161.0959333990493,,none,0,0,7884,876,1.0,0.71306865674011,1.0,OK,HIGH_CO2,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6269397886591453,0.24723122287084506,0.37970856578830037,0.0,21392.62454815791,2194.3088333300393,26877.445663145587,2648.9347173361994,-0.8974268524934689,,,
+ES,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,9d6caeaf2490bae121e5a43c91c0a0e3056cd8f1c64bbf33aba15a5e4df7603e,238.74268,238.74268,29.110755098259354,44.416134807473135,0.0,73.52688990573249,116.7027507057325,22.644600000000004,6.6676834000000005,63.00356200783261,24.944360713195614,38.059201294637,0.30797547345004456,99.89593319769241,96.82690155236011,101.6038591239861,93.52690697372972,97.39120536278543,0.9362433882933102,0.9749266285950783,93.52690697372972,97.39120536278543,0.9362433882933102,0.9749266285950783,0.5761123674449723,0.59991589271346,0,0,0,0,195,195,40.369679285147676,78.43794719897414,0.0,0.0,0.0,0.0,0.0,0.0,,,0.10065589241295107,0.09484940019941136,162.34143243360072,162.34143243360072,,none,0,0,7884,876,1.0,0.7137076098269469,1.0,OK,HIGH_CO2,SCEN,2026,6237.200000000001,12.73418,13.51734,2.00612,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6300356200783261,0.24944360713195612,0.38059201294637,0.0,21800.103110979966,2194.3088333300393,27389.397009110267,2648.9347173361994,-0.899344107587049,,,
+ES,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,3dc3b94e19baf52a74dd835d73f4813208969843d878b2562836815a646f9469,243.20516,243.20516,29.608378751277378,44.88696619564292,0.0,74.49534494692031,117.6712057469203,22.644600000000004,6.6676834000000005,63.30804930064211,25.161957475779744,38.14609182486235,0.30630659705953733,100.68031206377772,97.3568632605416,102.52982195214581,94.24539113398798,98.17261301967513,0.9360856080212244,0.9750924585681255,94.24539113398798,98.17261301967513,0.9360856080212244,0.9750924585681255,0.5760764394759887,0.6000816451811932,0,0,0,0,195,195,40.70598269684882,79.10234047920132,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09880899530445655,0.09310904423244969,163.59875994879354,163.59875994879354,,none,0,0,7884,876,1.0,0.7143288965586002,1.0,OK,HIGH_CO2,SCEN,2027,6237.200000000001,12.95186,13.66063,2.04194,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6330804930064211,0.25161957475779745,0.3814609182486235,0.0,22207.581673802022,2194.3088333300393,27901.348355074944,2648.9347173361994,-0.9011910046955435,,,
+ES,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,adf6a266880f4161dcbe442caa47d330c69632d2d001a73cf8cb0f6a7e04a21d,247.66764,247.66764,30.155701527044,45.391653721379456,0.0,75.54735524842346,118.83112364842346,22.70664,6.671025300000001,63.57539416351867,25.3769388028875,38.198455360631165,0.3050352288592222,101.43558355293509,98.27139268130655,103.17857005001859,94.93244637982818,98.89856907366351,0.935888995307912,0.9749889102974637,94.93244637982818,98.89856907366351,0.935888995307912,0.9749889102974637,0.5761215639695415,0.6001909827657795,0,0,0,0,196,196,41.101271172449415,79.70320358213154,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09729618681509154,0.09168190079252986,164.77849870040117,164.77849870040117,,none,0,0,7905,879,1.0,0.7145994226003062,1.0,OK,HIGH_CO2,SCEN,2028,6237.200000000001,13.16954,13.80392,2.07776,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6357539416351867,0.253769388028875,0.3819845536063116,0.0,22551.292773837155,2194.1547946450837,28341.20687562576,2649.646301748664,-0.9027038131849084,,,
+ES,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,f6964221edc41a07a0ade0749a3e673afccadd3a5fbce0603f17f4256c1cfb3e,252.13012,252.13012,30.60362605731343,45.82862897198248,0.0,76.4322550292959,119.6081158292959,22.644600000000004,6.6676834000000005,63.90223146594805,25.586579844624236,38.315651621323816,0.30314607008990396,102.24908250006956,102.48675574941268,102.11681657666112,95.69187673842896,99.74914192594663,0.9358702728541731,0.9755504840435001,95.69187673842896,99.74914192594663,0.9358702728541731,0.9755504840435001,0.5761959506559471,0.6006262351426365,0,0,0,0,196,196,41.55782544661594,80.4311270396556,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09531133175385631,0.08981314886138952,166.07523296457114,166.07523296457114,,none,0,0,7884,876,1.0,0.7155353978933144,1.0,OK,HIGH_CO2,SCEN,2029,6237.200000000001,13.38722,13.94721,2.11358,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6390223146594805,0.25586579844624235,0.38315651621323815,0.0,23022.538799446134,2194.3088333300393,28925.251047004298,2648.9347173361994,-0.9046886682461437,,,
+ES,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,f19762faf33e5c8e4b834894b07f55c6875c412bf0d1bfb4e20e30322af336c4,261.0550799999999,261.0550799999999,31.59887336334949,46.77029174832202,0.0,78.3691651116715,121.5450259116715,22.644600000000004,6.6676834000000005,64.47747616477822,25.997668869076417,38.479807295701804,0.3002016475284508,103.8178739368936,100.82823260918764,105.48161889751461,97.13959280862933,101.32234426824743,0.9356731083481471,0.9759624275280083,97.13959280862933,101.32234426824743,0.9356731083481471,0.9759624275280083,0.5763450572306076,0.6011620042619199,0,0,0,0,196,196,42.23218902186394,81.75991360010988,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09205282468534842,0.08674261385758136,168.54415872913745,168.54415872913745,,none,0,0,7884,876,1.0,0.7167039502910901,1.0,OK,HIGH_CO2,SCEN,2031,6237.200000000001,13.82258,14.23379,2.18522,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6447747616477822,0.2599766886907642,0.38479807295701807,0.0,23837.49592509024,2194.3088333300393,29949.15373893365,2648.9347173361994,-0.9079471753146515,,,
+ES,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,253e0ced17f44195084c8b3d7a672d2362898186ea75cf7308ad13080dddb598,265.51756,265.51756,32.14948205647994,47.27638503298847,0.0,79.42586708946843,122.70963548946841,22.70664,6.671025300000001,64.72667510799116,26.199639440082258,38.52703566790888,0.2991360235815229,104.57066189667145,101.30163789648805,106.39296889251837,97.8114466732415,102.03971259646833,0.9353622220531713,0.9757967554733085,97.8114466732415,102.03971259646833,0.9353622220531713,0.9757967554733085,0.5762910714587909,0.601203410271746,0,0,0,0,196,196,42.446737552309784,82.35616337715015,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09075526669306859,0.08551841166362029,169.72577143290994,169.72577143290994,,none,0,0,7905,879,1.0,0.7169328578364735,1.0,OK,HIGH_CO2,SCEN,2032,6237.200000000001,14.04026,14.37708,2.22104,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6472667510799115,0.26199639440082256,0.3852703566790888,0.0,24176.611171951543,2194.1547946450837,30383.816380175365,2649.646301748664,-0.9092447333069315,,,
+ES,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,42769870d7291943630a49a0231e940a946c51e9887e6cbc6cdd5479329ea469,269.98004,269.98004,32.59412066938554,47.71195452466156,0.0,80.3060751940471,123.48193599404709,22.644600000000004,6.6676834000000005,65.03467454374747,26.395861392193314,38.63881315155416,0.29745189753304396,105.3866824643252,101.99807386424197,107.26123190266912,98.58392606703919,102.89424665604447,0.9354495630926721,0.976349613157958,98.58392606703919,102.89424665604447,0.9354495630926721,0.976349613157958,0.5763877379744576,0.6015887624553861,0,0,0,0,196,196,42.908782500260614,83.08870016056417,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08900975610070878,0.08387508943253733,171.03751445768592,171.03751445768592,,none,0,0,7884,876,1.0,0.71783387287752,1.0,OK,HIGH_CO2,SCEN,2033,6237.200000000001,14.25794,14.52037,2.25686,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6503467454374747,0.26395861392193315,0.3863881315155416,0.0,24652.45305073436,2194.3088333300393,30973.056430863016,2648.9347173361994,-0.9109902438992912,,,
+ES,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,c007439a3212c2977b209909b1da36c839cf59cf8d729cda021d977639dd98fa,274.44252,274.44252,33.091744322403564,48.182785912831335,0.0,81.2745302352349,124.4503910352349,22.644600000000004,6.6676834000000005,65.3067696767816,26.590309638347776,38.71646003843381,0.2961440896083993,106.1710914098673,104.93284716709658,106.8560775867192,99.31041925852138,103.67695225046634,0.9353809774370624,0.9765083025305591,99.31041925852138,103.67695225046634,0.9353809774370624,0.9765083025305591,0.5764673584907912,0.60181377992797,0,0,0,0,196,196,43.24664257780834,83.7530934407913,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08756244299338019,0.08251126684013835,172.27414145099044,172.27414145099044,,none,0,0,7884,876,1.0,0.7183834803629522,1.0,OK,HIGH_CO2,SCEN,2034,6237.200000000001,14.47562,14.66366,2.29268,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.653067696767816,0.26590309638347776,0.3871646003843381,0.0,25059.93161355641,2194.3088333300393,31485.00777682769,2648.9347173361994,-0.9124375570066198,,,
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_CO2,a4ed91a32dbbb6242853a9a4cdc7f2cf91acdc8d6ed27838d57c89374911ea91,278.905,278.905,33.5893679754216,48.65361730100112,0.0,82.24298527642273,125.41884607642272,22.644600000000004,6.6676834000000005,65.57466269966221,26.781754916605,38.7929077830572,0.2948781315373433,106.95550366131444,107.14871768113976,106.84797944132634,100.0357568118577,104.45747844642531,0.9353025640329007,0.9766442573838988,100.0357568118577,104.45747844642531,0.9353025640329007,0.9766442573838988,0.5764967322597305,0.6019787014528524,0,0,0,0,195,195,43.39993988627053,84.41748672101846,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08616144390548612,0.08119108657069612,173.5235452588625,173.5235452588625,,none,0,0,7884,876,1.0,0.7189237842739841,1.0,OK,HIGH_CO2,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6557466269966221,0.26781754916605,0.387929077830572,0.0,25467.410176378464,2194.3088333300393,31996.959122792367,2648.9347173361994,-0.9138385560945139,,,
+DE,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_CO2,46e036fb805857e1a930f8a62063ef345b57db83264df9213fcc745071f742b7,580.7802399999999,579.2967270144998,34.72298405606922,105.27043924133554,23.996708405153246,163.990131702558,188.399044995558,19.625559437326835,3.4966016,87.04403555040552,18.430552053428883,68.61348349697664,0.2830848579927387,144.5108620469457,153.4015348865053,139.55478484702098,139.5595300337667,138.98103142675248,0.9657373020751165,0.9617341524238032,139.5595300337667,138.98103142675248,0.9657373020751165,0.9617341524238032,0.6060229290379282,0.603510858237874,0,0,0,0,122,122,35.91509558457446,104.94209910696384,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04310921290288491,0.033878250164592436,230.28754086139915,230.28754086139915,,none,0,0,7905,879,1.0,0.6751967880819224,1.0,OK,HIGH_CO2,SCEN,2036,9425.893,23.19086,40.76048,6.4461200000000005,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8704403555040552,0.18430552053428884,0.6861348349697663,0.0,51213.35142939926,2207.767270240238,65970.18921353607,2243.198428039677,-0.9568907870971151,0.13812859443186482,0.0,
+DE,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_CO2,2bfb2f486c76406dcabb7d670c64797502e890800f60a33903a630f85e68d572,589.92638,588.446292869,35.19864379928503,105.77921823217994,24.29532321588214,165.27318524734713,189.6171393520971,19.582011821916065,3.4586516,87.16152232444237,18.563007500036807,68.59851482440556,0.28086366971835147,145.9129821610368,148.3172503475201,144.57499922570173,140.88754145288053,140.3762476118448,0.9655586457508629,0.9620545446526383,140.88754145288053,140.3762476118448,0.9655586457508629,0.9620545446526383,0.6061158080276942,0.6039161580344931,0,0,0,0,121,121,36.097488066448015,105.88101668668276,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04234195201024247,0.03327748353455159,232.4432717096255,232.4432717096255,,none,0,0,7884,876,1.0,0.6756639037725412,1.0,OK,HIGH_CO2,SCEN,2037,9425.893,23.52942,41.15116,6.54379,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8716152232444238,0.18563007500036807,0.6859851482440555,0.0,52156.217957009816,2208.396077771456,67190.98159951149,2244.1658585011546,-0.9576580479897575,0.13709475587655023,0.0,
+DE,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_CO2,6250a1c0d2b9eb37d3c8dbccda45a4cc634c4dbe1ad4b00205578ddac141af1e,599.0725200000002,597.592432869,35.70510986792107,106.78346270497123,24.657945521685832,167.14651809457808,191.49047219932814,19.582011821916065,3.4586516,87.28711991507875,18.645893687470025,68.64122622760874,0.27969985712857703,147.26498491884658,148.87256932683687,146.37035905427203,142.19565380672896,141.6895277930333,0.9655768062251106,0.9621399674275203,142.19565380672896,141.6895277930333,0.9655768062251106,0.9621399674275203,0.6064519613304842,0.6042933783817866,0,0,0,0,121,121,36.495305716290716,106.75748478055289,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04169184916141986,0.03276817232759152,234.47142209709148,234.47142209709148,,none,0,0,7884,876,1.0,0.6763194036170278,1.0,OK,HIGH_CO2,SCEN,2038,9425.893,23.867980000000003,41.54184,6.64146,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8728711991507875,0.18645893687470025,0.6864122622760874,0.0,52969.49217150643,2208.396077771456,68234.10555208597,2244.1658585011546,-0.9583081508385801,0.135886975606372,0.0,
+DE,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_CO2,b3f42976b4989c1304622670908b3bdbbd3f889028d2c53ce09d5ba4f8dd87d7,608.21866,606.7385728690001,36.21157593655708,107.78770717776241,25.020567827489533,169.01985094180907,193.36380504655907,19.582011821916065,3.4586516,87.41028389522624,18.72717385129957,68.68311004392667,0.27857113178512527,148.6169902805868,151.69493642730197,146.91429666751034,143.48469769044223,143.02791628159997,0.9654663132360918,0.9623927655348508,143.48469769044223,143.02791628159997,0.9654663132360918,0.9623927655348508,0.6067037118932339,0.604772279616976,0,0,0,0,121,121,36.80842363851601,107.63395287442302,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04106140732742583,0.0322742161081359,236.49879649276366,236.49879649276366,,none,0,0,7884,876,1.0,0.676958071769296,1.0,OK,HIGH_CO2,SCEN,2039,9425.893,24.20654,41.93252,6.73913,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8741028389522624,0.18727173851299567,0.6868311004392668,0.0,53782.76638600302,2208.396077771456,69279.05267711743,2244.1658585011546,-0.9589385926725742,0.13468935133981075,0.0,
+ES,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_CO2,a93712157fc73bb8b4320ecb4660d0ff0eea6c35a8165ac0dc150643d3f08540,283.36748,282.01294160000003,34.14326258591588,49.16111634459749,0.0,83.30437893051337,126.58814733051338,16.919452248912282,6.671025300000001,65.8074082662819,26.97192691885288,38.83548134742902,0.29539204285408355,104.88373072266647,103.4046133778306,105.70825996595795,97.51984487738248,102.21312581216263,0.9297900084737111,0.9745374721884612,97.51984487738248,102.21312581216263,0.9297900084737111,0.9745374721884612,0.5561004091470282,0.5828635305543152,0,0,0,0,196,196,46.04233300805899,89.21930031953481,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07452679803015333,0.05999530430383724,175.36373516963027,175.36373516963027,,none,0,0,7905,879,1.0,0.7147924151995146,1.0,OK,HIGH_CO2,SCEN,2036,6237.200000000001,14.91098,14.95024,2.36432,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.658074082662819,0.2697192691885288,0.3883548134742902,0.0,25589.426929043642,1907.0980524482022,32256.28747943177,1944.6687142945586,-0.9254732019698466,0.16075923054449331,0.0,
+ES,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_CO2,6159244f9981fbd737fad5df3acaa46090976dc71771dd063007dd16d9002784,287.82996,286.47705,34.584615281457644,49.59528007734066,0.0,84.1798953587983,127.3557561587983,16.879156992445363,6.6676834000000005,66.09822586568875,27.155910596089996,38.94231526959875,0.29384516267113997,105.70554439848803,101.95608138045465,107.79213255990958,98.29293262496444,103.07560156319597,0.9298749009268654,0.9751201050970636,98.29293262496444,103.07560156319597,0.9298749009268654,0.9751201050970636,0.5563071297876375,0.5833755339821047,0,0,0,0,196,196,46.51479428792683,89.95933704300909,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0731564439910304,0.05891975288228277,176.68824892193345,176.68824892193345,,none,0,0,7884,876,1.0,0.7157437611356757,1.0,OK,HIGH_CO2,SCEN,2037,6237.200000000001,15.12866,15.09353,2.40014,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6609822586568874,0.27155910596089994,0.3894231526959875,0.0,26069.83871847061,1907.1766960629911,32853.60285113707,1945.179478936571,-0.9268435560089696,0.15958560218707285,0.0,
+ES,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_CO2,5deec81c70cafb26c2e129be0eea6339208ae2037c6f5456fe2167a90eec5f10,292.29244,290.93953,35.082238934475676,50.066111465510446,0.0,85.14835039998611,128.32421119998614,16.879156992445363,6.6676834000000005,66.35408049949916,27.338752840492397,39.01532765900676,0.2926668314889562,106.49336052540534,102.52498663035104,108.70177329003043,99.02054920105925,103.86494541850152,0.9298283828449253,0.9753185072389863,99.02054920105925,103.86494541850152,0.9298283828449253,0.9753185072389863,0.5564918732552533,0.5837172032255123,0,0,0,0,196,196,46.839280381716,90.62625111303441,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07203837215261978,0.058016031690315044,177.9370983835378,177.9370983835378,,none,0,0,7884,876,1.0,0.7163080494950306,1.0,OK,HIGH_CO2,SCEN,2038,6237.200000000001,15.34634,15.23682,2.43596,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6635408049949916,0.273387528404924,0.3901532765900676,0.0,26474.455752865506,1907.1766960629911,33366.69181210006,1945.179478936571,-0.9279616278473802,0.15859889130220894,0.0,
+ES,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_CO2,69008ff85ddfc230a8909d930523e2c888edeefea853707ee3148f2485d2ef50,296.75492,295.40201,35.57986258749369,50.536942853680216,0.0,86.11680544117391,129.29266624117392,16.879156992445363,6.6676834000000005,66.60610222124846,27.518855958253184,39.087246262995286,0.2915241011432993,107.2811777276591,103.55870727114132,109.34041670360511,99.74985241266062,104.63842407743628,0.9297982602864662,0.9753661014336398,99.74985241266062,104.63842407743628,0.9297982602864662,0.9753661014336398,0.5567093444411214,0.5839927284354347,0,0,0,0,196,196,47.17865243038795,91.29406413891311,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07095393965417314,0.057139614562694965,179.17761469012012,179.17761469012012,,none,0,0,7884,876,1.0,0.7168612767359195,1.0,OK,HIGH_CO2,SCEN,2039,6237.200000000001,15.56402,15.38011,2.47178,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6660610222124846,0.27518855958253186,0.39087246262995284,0.0,26879.0810680633,1907.1766960629911,33880.68710694128,1945.179478936571,-0.9290460603458268,0.1576197599255486,0.0,
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:HIGH_GAS,db7553debe836954275fe59471b10bde27aad0964d52317289a3eae8f0d7bcd3,525.9034,524.423312869,31.697453747499996,98.74950692264126,21.756967075256217,152.20392774539746,176.5478818501475,22.6446,3.4586516,0.8621113215880268,0.17954026644400387,0.6825710551440229,0.2902310481063944,141.25356930587887,149.73143028765733,136.5356125548252,136.56279783465166,135.78863613929045,0.9667918375848646,0.9613111853141613,136.56279783465166,135.78863613929045,0.9667918375848646,0.9613111853141613,0.6091483263245608,0.6056951215827772,0,0,0,0,121,121,34.27012444824196,100.90620984422264,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05069604702394818,0.04318000257485993,224.1864451284555,224.1864451284555,,none,0,0,7884,876,1.0,0.6687040869626171,1.0,OK,HIGH_GAS,SCEN,2030,9425.893,21.1595,38.4164,5.8601,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+DE,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:HIGH_GAS,95128d6b65057fd35d18eaee73a65115cc09772f185c9617933f9dcbc3487cbd,617.3648,615.8812870144999,36.75064727891181,109.3064128317157,25.451076930673285,171.50813704130078,195.91705033430082,22.70664,3.4966016,0.8754120008883853,0.18758268979755854,0.687829311090827,0.2784759671343333,154.43367970761022,162.86643676972017,149.76075063497606,149.25240313522823,148.74613898918716,0.966449827639983,0.9631716298595533,149.25240313522823,148.74613898918716,0.966449827639983,0.9631716298595533,0.6117297286970032,0.6096547414793693,0,0,0,0,122,122,37.557508510231735,109.4570462496319,0.0,0.0,0.0,0.0,0.0,0.0,,,0.043264048243779316,0.036868533723554114,243.98422396952805,243.98422396952805,,none,0,0,7905,879,1.0,0.6762004267817918,1.0,OK,HIGH_GAS,SCEN,2040,9425.893,24.5451,42.3232,6.8368,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:HIGH_GAS,407ed2414a631aa7b9dd4021f1b71fc6876b06d6526a85a66394908884f40494,256.5926,255.23969,31.101249710331462,46.29946036015223,0.0,77.4007100704837,120.57657087048369,22.644600000000004,6.6676834000000005,0.6419216395996451,0.2579377526313848,0.38398388696826025,0.30324715592031826,108.58842961458673,107.18403364656872,109.36998046246029,101.75960514860247,106.00635924526304,0.937112779969083,0.9762214963556592,101.75960514860247,106.00635924526304,0.937112779969083,0.9762214963556592,0.5818441127980567,0.6061263303443472,0,0,0,0,197,197,43.3681884871005,83.40620760079588,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0944955713769326,0.08871896059738986,174.89152663115567,174.89152663115567,,none,0,0,7884,876,1.0,0.7127880822625251,1.0,OK,HIGH_GAS,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+ES,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:HIGH_GAS,f5fccdb8f7b1bda1be059ff1827cdf7f83365eaed9bccad359e6374ac554b4e6,301.2174,299.86286160000003,36.137043115351815,51.0458476562065,0.0,87.18289077155832,130.46665917155832,22.70664,6.671025300000001,0.6682388537052703,0.27698297285157797,0.39125588085369223,0.290742542462145,116.85946959390007,115.54594139566737,117.58734827699716,109.40495630431789,114.23423950464145,0.9362095916104406,0.9775351531340883,109.40495630431789,114.23423950464145,0.9362095916104406,0.9775351531340883,0.5823690484942318,0.6080756083913779,0,0,0,0,198,198,46.89965276746321,90.15173758918418,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08064739954379686,0.07572341529338623,187.8619006061438,187.8619006061438,,none,0,0,7905,879,1.0,0.7179210078489119,1.0,OK,HIGH_GAS,SCEN,2040,6237.200000000001,15.7817,15.5234,2.5076,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,743bde6e38e7854101a409345c68d57065029fc14b2e0f46a85d341860a81fe3,480.17270000000013,480.17270000000013,31.697453747499996,93.72828455868506,19.943855546237707,145.36959385242278,169.71354795717278,22.6446,3.4586516,85.6558569437879,18.67703205138275,66.97882489240514,0.30274439561520833,134.60434729030825,138.8660362029077,132.23270378031157,129.7807818117592,129.27847299144798,0.9641648611233498,0.9604331182010513,129.7807818117592,129.27847299144798,0.9641648611233498,0.9604331182010513,0.6059278388748954,0.6035826311046075,0,0,0,0,121,121,32.70874427419353,96.51942296656902,0.0,0.0,0.0,0.0,0.0,0.0,,,0.055270510106827694,0.047159282483156574,214.18521065600808,214.18521065600808,,none,0,0,7884,876,1.0,0.6663280499703254,1.0,OK,HIGH_GAS,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.856558569437879,0.1867703205138275,0.6697882489240514,0.0,42620.312833719305,2355.646431232241,54781.97026983656,2586.265437959775,-0.9447294898931723,,,
+DE,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,ce1fd5ce852911b1248536fe8a9659b8975a938976520ec64ddbec6b9245b9f0,489.31884000000014,489.31884000000014,31.697453747499996,94.7325290314763,20.306477852041407,146.73646063101768,171.0804147357677,22.6446,3.4586516,85.77046113528012,18.52780974166824,67.2426513936119,0.2998790331290282,135.9431782348925,137.79805405612595,134.91093390793745,131.12604690946634,130.58615820517068,0.9645651117770486,0.9605936826012292,131.12604690946634,130.58615820517068,0.9645651117770486,0.9605936826012292,0.6065409042811387,0.6040435775437533,0,0,0,0,121,121,33.00474611611994,97.3811562712465,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05423741719892237,0.04627780119808997,216.1866511952307,216.1866511952307,,none,0,0,7884,876,1.0,0.6668082484065723,1.0,OK,HIGH_GAS,SCEN,2026,9425.893,19.80526,36.85368,5.46942,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8577046113528012,0.18527809741668239,0.672426513936119,0.0,43432.12772453045,2355.646431232241,55825.435609627355,2586.265437959775,-0.9457625828010776,,,
+DE,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,fb0b0be193994b5a68c566e56dbe898b646cf863b856d6558ae68fe379256a9a,498.46498000000014,498.46498000000014,31.697453747499996,95.73677350426752,20.669100157845104,148.10332740961263,172.44728151436263,22.6446,3.4586516,85.88324855516933,18.380952989891007,67.50229556527833,0.2971188214859399,137.2820197100891,138.39543288207588,136.6624017188555,132.52429420306558,131.8937665523958,0.9653434184821084,0.9607504816066069,132.52429420306558,131.8937665523958,0.9653434184821084,0.9607504816066069,0.6073587889050998,0.6044690809267635,0,0,0,0,121,121,33.30025471345876,98.24288957592393,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0532422359307423,0.04542866782737675,218.19770558020622,218.19770558020622,,none,0,0,7884,876,1.0,0.6672570323207523,1.0,OK,HIGH_GAS,SCEN,2027,9425.893,20.14382,37.24436,5.56709,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8588324855516933,0.18380952989891006,0.6750229556527833,0.0,44243.9426153416,2355.646431232241,56868.90094941815,2586.265437959775,-0.9467577640692577,,,
+DE,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,b771965f6a087a27aef70dde1004c9308b710387ee29c1461a6e50b904d00740,507.61112,507.61112,31.72202261,97.19849206057513,21.087971354113154,150.0084860246883,174.41739931768828,22.70664,3.4966016,86.00545966830926,18.187418648652535,67.81804101965672,0.2955185182402787,138.57731090103826,141.21629811537298,137.12363150331151,133.8397910738852,133.14194711317094,0.9658131638119588,0.960777390234186,133.8397910738852,133.14194711317094,0.9658131638119588,0.960777390234186,0.608043135194473,0.6048727833406287,0,0,0,0,120,120,33.26645146333778,99.05035312944331,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05242090399684957,0.04473235338106856,220.11561898660145,220.11561898660145,,none,0,0,7905,879,1.0,0.6678944071889127,1.0,OK,HIGH_GAS,SCEN,2028,9425.893,20.482380000000003,37.63504,5.66476,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8600545966830926,0.18187418648652537,0.6781804101965672,0.0,44945.5406096182,2356.0858693832993,57752.532861835556,2586.504602787825,-0.9475790960031504,,,
+DE,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,7eb3edf5ab25d14a396c6eb3e34b7f38194f9e9c021e4adab4cc481e71c4dca1,516.7572600000001,516.7572600000001,31.697453747499996,97.74526244985003,21.394344769452513,150.83706096680254,175.18101507155257,22.6446,3.4586516,86.10354318656805,18.094114670218797,68.00942851634925,0.29189151782173806,139.9597325702935,151.25500882008168,133.67387521166938,135.27242812384628,134.52740767181524,0.9665096213005904,0.9611865155876178,135.27242812384628,134.52740767181524,0.9665096213005904,0.9611865155876178,0.6087754337842856,0.6054225690863286,0,0,0,0,120,120,33.666968936044356,99.96635618527887,0.0,0.0,0.0,0.0,0.0,0.0,,,0.05135755628933543,0.04382057448017275,222.20415052388418,222.20415052388418,,none,0,0,7884,876,1.0,0.6680693895321933,1.0,OK,HIGH_GAS,SCEN,2029,9425.893,20.82094,38.02572000000001,5.76243,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8610354318656804,0.18094114670218797,0.6800942851634925,0.0,45867.57239696389,2355.646431232241,58955.83162899973,2586.265437959775,-0.9486424437106645,,,
+DE,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,2d765552b5751ba25f21483a82a71f55f66225d60aa0f48e93633234f416246b,535.0495400000001,535.0495400000001,32.15984738746886,99.7537513954325,22.11958938105992,154.03318816396126,178.37714226871128,22.6446,3.4586516,86.35253721686058,18.029130290148135,68.32340692671245,0.28788584355004065,142.6231785852131,147.47526312836067,139.92297801855744,137.97655766783433,137.1312325085838,0.9674202961715471,0.9614933131409069,137.97655766783433,137.1312325085838,0.9674202961715471,0.9614933131409069,0.6100074224244405,0.6062701598762159,0,0,0,0,121,121,34.50858507370767,101.68978327519669,0.0,0.0,0.0,0.0,0.0,0.0,,,0.049601743547658686,0.042322436161705695,226.18832590504257,226.18832590504257,,none,0,0,7884,876,1.0,0.6692382643660689,1.0,OK,HIGH_GAS,SCEN,2031,9425.893,21.49806,38.80708,5.95777,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8635253721686058,0.18029130290148135,0.6832340692671245,0.0,47491.20217858617,2355.646431232241,61042.76230858132,2586.265437959775,-0.9503982564523413,,,
+DE,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,cad14c2fc68ba90a90adbcbc1b0e62843da317ea19e09b786f4bd5f688933d85,544.19568,544.19568,32.69532083322664,101.23446565095534,22.542339879633197,156.4721263638152,180.88103965681518,22.70664,3.4966016,86.5055434559029,18.075593160709012,68.42995029519386,0.28752915929765405,143.89941342311104,146.14990883615886,142.64488193753968,139.21975197061838,138.37136321423884,0.9674796349674273,0.9615839281247246,139.21975197061838,138.37136321423884,0.9674796349674273,0.9615839281247246,0.6104038019060001,0.6066840730955533,0,0,0,0,121,121,34.702666056320766,102.4932707472247,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0488968118770316,0.04172513828114181,228.07812064063404,228.07812064063404,,none,0,0,7905,879,1.0,0.670261095400176,1.0,OK,HIGH_GAS,SCEN,2032,9425.893,21.83662,39.19776,6.05544,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8650554345590289,0.1807559316070901,0.6842995029519386,0.0,48184.85661822931,2356.0858693832993,61914.874702644316,2586.504602787825,-0.9511031881229683,,,
+DE,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,9dddc0533bc3c5ddafd401e42b724b96231efff7f242e7bc058baa9614fed053,553.3418200000001,553.3418200000001,33.17277952474091,101.76224034101499,22.84483399266732,157.77985385842322,182.12380796317325,22.6446,3.4586516,86.63329392405822,18.214411336846574,68.41888258721166,0.28513994091106865,145.26959308364474,148.04152175401896,143.73618573407606,140.52899030578115,139.74756887348835,0.9673668613146456,0.9619877491707651,140.52899030578115,139.74756887348835,0.9673668613146456,0.9619877491707651,0.6105425600694532,0.607147594797682,0,0,0,0,121,121,35.11746048256461,103.41316331219338,0.0,0.0,0.0,0.0,0.0,0.0,,,0.047962017525392794,0.040923348247923846,230.17067031296733,230.17067031296733,,none,0,0,7884,876,1.0,0.6708339572102288,1.0,OK,HIGH_GAS,SCEN,2033,9425.893,22.17518,39.588440000000006,6.15311,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8663329392405822,0.18214411336846573,0.6841888258721165,0.0,49114.831960208474,2355.646431232241,63129.692988162904,2586.265437959775,-0.9520379824746072,,,
+DE,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,7b4446e1157102f4f84d171b79e136c9527b88aa489a810eba58d7fae9e08d6d,562.48796,562.48796,33.67924559337694,102.76648481380623,23.207456298471026,159.6531867056542,183.99714081040418,22.6446,3.4586516,86.76938456895118,18.304222253149565,68.4651623158016,0.28383396278500644,146.59280631134723,154.72682017639866,142.0931390668507,141.81129526559903,141.04362286827475,0.9673823622996016,0.9621455951168121,141.81129526559903,141.04362286827475,0.9673823622996016,0.9621455951168121,0.6108164910874538,0.6075099352932903,0,0,0,0,122,122,35.664335414221966,104.27485333069168,0.0,0.0,0.0,0.0,0.0,0.0,,,0.047182147806990836,0.04025792836525781,232.16677567615827,232.16677567615827,,none,0,0,7884,876,1.0,0.6715994217425832,1.0,OK,HIGH_GAS,SCEN,2034,9425.893,22.51374,39.97912,6.25078,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8676938456895118,0.18304222253149566,0.6846516231580161,0.0,49926.646851019614,2355.646431232241,64173.1583279537,2586.265437959775,-0.9528178521930092,,,
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,633edf87b9b8ea0fe23bea5f37d047422f84a550770a5338a837ff9c7378042b,571.6341,571.6341,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,185.87047365763516,22.6446,3.4586516,86.90273198012588,18.3922228147874,68.51050916533849,0.2825697759333902,147.91602291702213,160.0862962632995,141.14322687570362,143.09748214463005,142.34440963101807,0.9674238079325916,0.9623325913168337,143.09748214463005,142.34440963101807,0.9674238079325916,0.9623325913168337,0.61108700373108,0.6078710643655624,0,0,0,0,121,121,35.731316157126194,105.13654334919002,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04642723390429778,0.03961380190579953,234.16875382871453,234.16875382871453,,none,0,0,7884,876,1.0,0.6723441419940906,1.0,OK,HIGH_GAS,SCEN,2035,9425.893,22.8523,40.3698,6.34845,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8690273198012588,0.18392222814787398,0.6851050916533848,0.0,50738.46174183076,2355.646431232241,65216.62366774449,2586.265437959775,-0.9535727660957022,,,
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,df7e87fd47a01b8b45ae1fa3f304ce37abe343678de7c14de563ae8b31e0b619,234.2802,234.2802,28.613131445241326,43.94530341930337,0.0,72.5584348645447,115.73429566454469,22.644600000000004,6.6676834000000005,62.69397886591454,24.723122287084507,37.97085657883004,0.30970792608399983,104.5101009512835,101.70752973856914,106.06974079460645,98.03520473920007,101.95393745707482,0.9380452592319124,0.9755414694757569,98.03520473920007,101.95393745707482,0.9380452592319124,0.9755414694757569,0.5822840215197894,0.6055594913093975,0,0,0,0,195,195,41.13972405840385,79.84991755511066,0.0,0.0,0.0,0.0,0.0,0.0,,,0.10257314750653108,0.09665605544130491,168.36320612632207,168.36320612632207,,none,0,0,7884,876,1.0,0.7112702834386109,1.0,OK,HIGH_GAS,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6269397886591453,0.24723122287084506,0.37970856578830037,0.0,21392.62454815791,2194.3088333300393,26877.445663145587,2648.9347173361994,-0.8974268524934689,,,
+ES,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,7283c5105411e369c96ddc9cb3d8b192bde9d3678616b5f999079ed4cfcb6cf3,238.74268,238.74268,29.110755098259354,44.416134807473135,0.0,73.52688990573249,116.7027507057325,22.644600000000004,6.6676834000000005,63.00356200783261,24.944360713195614,38.059201294637,0.30797547345004456,105.34080592496515,102.19809010454864,107.08973733035683,98.80665336331813,102.76858960178134,0.9379713065200836,0.9755819570526543,98.80665336331813,102.76858960178134,0.9379713065200836,0.9755819570526543,0.582342376126572,0.6056930644115494,0,0,0,0,195,195,41.48543189319537,80.53212901715598,0.0,0.0,0.0,0.0,0.0,0.0,,,0.10065589241295107,0.09484940019941136,169.6710687972371,169.6710687972371,,none,0,0,7884,876,1.0,0.7118919363949164,1.0,OK,HIGH_GAS,SCEN,2026,6237.200000000001,12.73418,13.51734,2.00612,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6300356200783261,0.24944360713195612,0.38059201294637,0.0,21800.103110979966,2194.3088333300393,27389.397009110267,2648.9347173361994,-0.899344107587049,,,
+ES,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,a46146253e56d44f04fa42fa7ab7e7fb4ceb727a911bd9fcca87793d67171c29,243.20516,243.20516,29.608378751277378,44.88696619564292,0.0,74.49534494692031,117.6712057469203,22.644600000000004,6.6676834000000005,63.30804930064211,25.161957475779744,38.14609182486235,0.30630659705953733,106.17151206377771,102.76768318391325,108.06575372186862,99.56979551044704,103.5961613528435,0.9378202643533513,0.9757434865447975,99.56979551044704,103.5961613528435,0.9378202643533513,0.9757434865447975,0.5823109713078364,0.6058582427721086,0,0,0,0,195,195,41.831228598488146,81.21434047920128,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09880899530445655,0.09310904423244969,170.9907599487935,170.9907599487935,,none,0,0,7884,876,1.0,0.7124961165748274,1.0,OK,HIGH_GAS,SCEN,2027,6237.200000000001,12.95186,13.66063,2.04194,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6330804930064211,0.25161957475779745,0.3814609182486235,0.0,22207.581673802022,2194.3088333300393,27901.348355074944,2648.9347173361994,-0.9011910046955435,,,
+ES,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,3951062c3ec55961f44b3d9893cfa1cc6900ab35d5979c1156cfad9a34892633,247.66764,247.66764,30.155701527044,45.391653721379456,0.0,75.54735524842346,118.83112364842346,22.70664,6.671025300000001,63.57539416351867,25.3769388028875,38.198455360631165,0.3050352288592222,106.97325630504638,103.73314757641145,108.75806196065034,100.30163267048978,104.3677179446433,0.937632789119444,0.97564308640869,100.30163267048978,104.3677179446433,0.937632789119444,0.97564308640869,0.582360597795624,0.6059686666565081,0,0,0,0,196,196,42.238721754564835,81.83302176394972,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09729618681509154,0.09168190079252986,172.23286233676484,172.23286233676484,,none,0,0,7905,879,1.0,0.7127485800079623,1.0,OK,HIGH_GAS,SCEN,2028,6237.200000000001,13.16954,13.80392,2.07776,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6357539416351867,0.253769388028875,0.3819845536063116,0.0,22551.292773837155,2194.1547946450837,28341.20687562576,2649.646301748664,-0.9027038131849084,,,
+ES,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,698c18c7ff74fc4a7f0916a32882a061730f2c2ae1589ae9f8cc36897c45c590,252.13012,252.13012,30.60362605731343,45.82862897198248,0.0,76.4322550292959,119.6081158292959,22.644600000000004,6.6676834000000005,63.90223146594805,25.586579844624236,38.315651621323816,0.30314607008990396,107.8329370455241,108.07527310689557,107.69807625230887,101.10590784880732,105.265475468287,0.9376161924081061,0.9761903770074147,101.10590784880732,105.265475468287,0.9376161924081061,0.9761903770074147,0.5824342769711028,0.6063960296570774,0,0,0,0,196,196,42.70792579435561,82.57876340329194,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09531133175385631,0.08981314886138952,173.5919602372984,173.5919602372984,,none,0,0,7884,876,1.0,0.7136690722952116,1.0,OK,HIGH_GAS,SCEN,2029,6237.200000000001,13.38722,13.94721,2.11358,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6390223146594805,0.25586579844624235,0.38315651621323815,0.0,23022.538799446134,2194.3088333300393,28925.251047004298,2648.9347173361994,-0.9046886682461437,,,
+ES,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,1186f457643dc620feae1feedf432ba3a66d5c6b755de54bd98fc396c86865c1,261.0550799999999,261.0550799999999,31.59887336334949,46.77029174832202,0.0,78.3691651116715,121.5450259116715,22.644600000000004,6.6676834000000005,64.47747616477822,25.997668869076417,38.479807295701804,0.3002016475284508,109.4943830278027,106.4341966170827,111.19738655274497,102.64328966574382,106.93136182123756,0.9374297276937096,0.9765922128999591,102.64328966574382,106.93136182123756,0.9374297276937096,0.9765922128999591,0.5825861019978422,0.6069244805736832,0,0,0,0,196,196,43.40137332390069,83.94318632738259,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09205282468534842,0.08674261385758136,176.185613274592,176.185613274592,,none,0,0,7884,876,1.0,0.7148049993011487,1.0,OK,HIGH_GAS,SCEN,2031,6237.200000000001,13.82258,14.23379,2.18522,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6447747616477822,0.2599766886907642,0.38479807295701807,0.0,23837.49592509024,2194.3088333300393,29949.15373893365,2648.9347173361994,-0.9079471753146515,,,
+ES,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,5e70aac54ee2ced5bc6aaea1bc3ff4f02f8f73de59de3a789dd95185640e5e22,265.51756,265.51756,32.14948205647994,47.27638503298847,0.0,79.42586708946843,122.70963548946841,22.70664,6.671025300000001,64.72667510799116,26.199639440082258,38.52703566790888,0.2991360235815229,110.2936486080475,106.94648395246769,112.15951486286006,103.35950540164552,107.69414261979611,0.937130167567092,0.9764310454767046,103.35950540164552,107.69414261979611,0.937130167567092,0.9764310454767046,0.5825381528869062,0.6069683351781625,0,0,0,0,196,196,43.622252043268425,84.55725428624106,0.0,0.0,0.0,0.0,0.0,0.0,,,0.09075526669306859,0.08551841166362029,177.42958961472812,177.42958961472812,,none,0,0,7905,879,1.0,0.7150166665383437,1.0,OK,HIGH_GAS,SCEN,2032,6237.200000000001,14.04026,14.37708,2.22104,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6472667510799115,0.26199639440082256,0.3852703566790888,0.0,24176.611171951543,2194.1547946450837,30383.816380175365,2649.646301748664,-0.9092447333069315,,,
+ES,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,7a9ad5d374cdd2130883c0120dbadcbc6dbccfd8e92e1eca89dd877bda72486a,269.98004,269.98004,32.59412066938554,47.71195452466156,0.0,80.3060751940471,123.48193599404709,22.644600000000004,6.6676834000000005,65.03467454374747,26.395861392193314,38.63881315155416,0.29745189753304396,111.15584610068885,107.68545078731889,113.07563925276585,104.17717472168434,108.59591295295485,0.9372172348660548,0.9769698739424364,104.17717472168434,108.59591295295485,0.9372172348660548,0.9769698739424364,0.5826343464452453,0.6073471366352928,0,0,0,0,196,196,44.09705075659444,85.30760925147325,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08900975610070878,0.08387508943253733,178.80369627586774,178.80369627586774,,none,0,0,7884,876,1.0,0.7159031665472905,1.0,OK,HIGH_GAS,SCEN,2033,6237.200000000001,14.25794,14.52037,2.25686,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6503467454374747,0.26395861392193315,0.3863881315155416,0.0,24652.45305073436,2194.3088333300393,30973.056430863016,2648.9347173361994,-0.9109902438992912,,,
+ES,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,7db2ddf1927fed312e41d2fd93af9c8d3f05023f122ee1cf7fc9b1ee16745a32,274.44252,274.44252,33.091744322403564,48.182785912831335,0.0,81.2745302352349,124.4503910352349,22.644600000000004,6.6676834000000005,65.3067696767816,26.590309638347776,38.71646003843381,0.2961440896083993,111.98658231895821,110.7167944864439,112.68901814120017,104.94858711321882,109.4248376032857,0.9371532280028522,0.9771245388275517,104.94858711321882,109.4248376032857,0.9371532280028522,0.9771245388275517,0.5827152771366731,0.6075691567038041,0,0,0,0,196,196,44.44445281129071,85.98982071351858,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08756244299338019,0.08251126684013835,180.1026869055359,180.1026869055359,,none,0,0,7884,876,1.0,0.7164372021396732,1.0,OK,HIGH_GAS,SCEN,2034,6237.200000000001,14.47562,14.66366,2.29268,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.653067696767816,0.26590309638347776,0.3871646003843381,0.0,25059.93161355641,2194.3088333300393,31485.00777682769,2648.9347173361994,-0.9124375570066198,,,
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:HIGH_GAS,c2a7b49c957aaae208ceeba1ddd65aa070673c5489e7db33bb4e3bce2dfd792f,278.905,278.905,33.5893679754216,48.65361730100112,0.0,82.24298527642273,125.41884607642272,22.644600000000004,6.6676834000000005,65.57466269966221,26.781754916605,38.7929077830572,0.2948781315373433,112.8173218431326,113.01327126293474,112.70827536430885,105.71880532356603,110.2515115051894,0.9370795512285185,0.9772569469295607,105.71880532356603,110.2515115051894,0.9370795512285185,0.9772569469295607,0.5827474205541392,0.6077327845807796,0,0,0,0,195,195,44.601132136643116,86.67203217556391,0.0,0.0,0.0,0.0,0.0,0.0,,,0.08616144390548612,0.08119108657069612,181.41445434977157,181.41445434977157,,none,0,0,7884,876,1.0,0.7169621373584311,1.0,OK,HIGH_GAS,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6557466269966221,0.26781754916605,0.387929077830572,0.0,25467.410176378464,2194.3088333300393,31996.959122792367,2648.9347173361994,-0.9138385560945139,,,
+DE,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_GAS,7ca38e61064f7c28fb115d5bd81879cd042d0ca4362fc19c4abf5f6b00713932,580.7802399999999,579.2967270144998,34.72298405606922,105.27043924133554,23.996708405153246,163.990131702558,188.399044995558,19.625559437326835,3.4966016,87.04403555040552,18.430552053428883,68.61348349697664,0.2830848579927387,148.21185401200177,157.2240361420296,143.18804184590118,143.18822243219972,142.61375627808494,0.9661050621538325,0.9622290823413928,143.18822243219972,142.61375627808494,0.9661050621538325,0.9622290823413928,0.6086135839092789,0.6061718474385581,0,0,0,0,122,122,36.388276424958796,106.3655201595954,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04310921290288491,0.033878250164592436,235.26951454560967,235.26951454560967,,none,0,0,7905,879,1.0,0.6741728498419521,1.0,OK,HIGH_GAS,SCEN,2036,9425.893,23.19086,40.76048,6.4461200000000005,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8704403555040552,0.18430552053428884,0.6861348349697663,0.0,51213.35142939926,2207.767270240238,65970.18921353607,2243.198428039677,-0.9568907870971151,0.13812859443186482,0.0,
+DE,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_GAS,ea85651c0157dd0d749bb5499ce7c98a98aa70cdc021de5bb31b488020a79159,589.92638,588.446292869,35.19864379928503,105.77921823217994,24.29532321588214,165.27318524734713,189.6171393520971,19.582011821916065,3.4586516,87.16152232444237,18.563007500036807,68.59851482440556,0.28086366971835147,149.58582426629994,152.0238296309778,148.2290664833982,144.48823017446193,143.98190205986072,0.9659219440288471,0.9625370770664549,144.48823017446193,143.98190205986072,0.9659219440288471,0.9625370770664549,0.6086598535589756,0.6065269352187491,0,0,0,0,121,121,36.56450561030766,107.29364826563011,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04234195201024247,0.03327748353455159,237.38748223594126,237.38748223594126,,none,0,0,7884,876,1.0,0.6746501495024596,1.0,OK,HIGH_GAS,SCEN,2037,9425.893,23.52942,41.15116,6.54379,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8716152232444238,0.18563007500036807,0.6859851482440555,0.0,52156.217957009816,2208.396077771456,67190.98159951149,2244.1658585011546,-0.9576580479897575,0.13709475587655023,0.0,
+DE,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_GAS,59d35e6dbc23fb7d99bf373fe35f845ba44108202dff4012222cc0c0657fceeb,599.0725200000002,597.592432869,35.70510986792107,106.78346270497123,24.657945521685832,167.14651809457808,191.49047219932814,19.582011821916065,3.4586516,87.28711991507875,18.645893687470025,68.64122622760874,0.27969985712857703,150.9097743925308,152.53785827958268,150.0037405022951,145.76884099373785,145.26766893405124,0.965933728153215,0.9626127235217786,145.76884099373785,145.26766893405124,0.965933728153215,0.9626127235217786,0.6089486940426586,0.6068550499609997,0,0,0,0,121,121,36.9587562483586,108.15932688581603,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04169184916141986,0.03276817232759152,239.3778694655125,239.3778694655125,,none,0,0,7884,876,1.0,0.6753171337330469,1.0,OK,HIGH_GAS,SCEN,2038,9425.893,23.867980000000003,41.54184,6.64146,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8728711991507875,0.18645893687470025,0.6864122622760874,0.0,52969.49217150643,2208.396077771456,68234.10555208597,2244.1658585011546,-0.9583081508385801,0.135886975606372,0.0,
+DE,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_GAS,9436406844293b9c93d6c8e79a4dbf153f90087b3372bfe26a82b0aa0b0b31fd,608.21866,606.7385728690001,36.21157593655708,107.78770717776241,25.020567827489533,169.01985094180907,193.36380504655907,19.582011821916065,3.4586516,87.41028389522624,18.72717385129957,68.68311004392667,0.27857113178512527,152.23372712269204,155.35090808722097,150.50932914231433,147.03008779840042,146.5789324989638,0.9658180915448665,0.9628545215925064,147.03008779840042,146.5789324989638,0.9658180915448665,0.9628545215925064,0.6091545032080882,0.6072853396483491,0,0,0,0,121,121,37.26830715879212,109.025005506002,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.04106140732742583,0.0322742161081359,241.36748070329,241.36748070329,,none,0,0,7884,876,1.0,0.6759672221437387,1.0,OK,HIGH_GAS,SCEN,2039,9425.893,24.20654,41.93252,6.73913,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8741028389522624,0.18727173851299567,0.6868311004392668,0.0,53782.76638600302,2208.396077771456,69279.05267711743,2244.1658585011546,-0.9589385926725742,0.13468935133981075,0.0,
+ES,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_GAS,33f9e79eef91175ee4ac6818bd838b6e6ff50fd94b110993d7a4ebcd29e48d33,283.36748,282.01294160000003,34.14326258591588,49.16111634459749,0.0,83.30437893051337,126.58814733051338,16.919452248912282,6.671025300000001,65.8074082662819,26.97192691885288,38.83548134742902,0.29539204285408355,110.7920313933073,109.28211372481188,111.63373017872391,103.24737189047227,108.05244643808149,0.9319025077168972,0.9752727256574943,103.24737189047227,108.05244643808149,0.9319025077168972,0.9752727256574943,0.5632176363501324,0.5894294679894072,0,0,0,0,196,196,47.25591140786082,91.49166395589843,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07452679803015333,0.05999530430383724,183.317007896903,183.317007896903,,none,0,0,7905,879,1.0,0.7129030547501035,1.0,OK,HIGH_GAS,SCEN,2036,6237.200000000001,14.91098,14.95024,2.36432,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.658074082662819,0.2697192691885288,0.3883548134742902,0.0,25589.426929043642,1907.0980524482022,32256.28747943177,1944.6687142945586,-0.9254732019698466,0.16075923054449331,0.0,
+ES,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_GAS,353852459bb4c2c2013e55f3029b34128278b7a423688616b6a2b618c5335ab3,287.82996,286.47705,34.584615281457644,49.59528007734066,0.0,84.1798953587983,127.3557561587983,16.879156992445363,6.6676834000000005,66.09822586568875,27.155910596089996,38.94231526959875,0.29384516267113997,111.66001712576075,107.82485509460768,113.79429706207407,104.06546353694627,108.96213016783032,0.9319850221744023,0.9758383795079322,104.06546353694627,108.96213016783032,0.9319850221744023,0.9758383795079322,0.563417837020868,0.5899287391781959,0,0,0,0,196,196,47.74123045285479,92.24951886119091,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0731564439910304,0.05891975288228277,184.7038852855698,184.7038852855698,,none,0,0,7884,876,1.0,0.7138413350963974,1.0,OK,HIGH_GAS,SCEN,2037,6237.200000000001,15.12866,15.09353,2.40014,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6609822586568874,0.27155910596089994,0.3894231526959875,0.0,26069.83871847061,1907.1766960629911,32853.60285113707,1945.179478936571,-0.9268435560089696,0.15958560218707285,0.0,
+ES,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_GAS,496d2f6a97113487dd5d5f610155a38f2f5f15019f6636ff2aec7606182a310d,292.29244,290.93953,35.082238934475676,50.066111465510446,0.0,85.14835039998611,128.32421119998614,16.879156992445363,6.6676834000000005,66.35408049949916,27.338752840492397,39.01532765900676,0.2926668314889562,112.49416052540535,108.43499940174314,114.75309667311502,104.83793782055633,109.79778081266709,0.9319411543755646,0.9760309361824223,104.83793782055633,109.79778081266709,0.9319411543755646,0.9760309361824223,0.5635990773415327,0.5902627354811759,0,0,0,0,196,196,48.07525852379249,92.93425111303443,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07203837215261978,0.058016031690315044,186.0150983835378,186.0150983835378,,none,0,0,7884,876,1.0,0.7143911554706357,1.0,OK,HIGH_GAS,SCEN,2038,6237.200000000001,15.34634,15.23682,2.43596,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6635408049949916,0.273387528404924,0.3901532765900676,0.0,26474.455752865506,1907.1766960629911,33366.69181210006,1945.179478936571,-0.9279616278473802,0.15859889130220894,0.0,
+ES,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:HIGH_GAS,32c24054882b772019fed80c4417a3991f3d0e80b08504cea0a92e1d91152fd8,296.75492,295.40201,35.57986258749369,50.536942853680216,0.0,86.11680544117391,129.29266624117392,16.879156992445363,6.6676834000000005,66.60610222124846,27.518855958253184,39.087246262995286,0.2915241011432993,113.32830500038637,109.52159818023222,115.4341428157908,105.61215233550656,110.61706204515062,0.9319132791683994,0.9760762065996972,105.61215233550656,110.61706204515062,0.9319132791683994,0.9760762065996972,0.5638121512897766,0.5905309412017669,0,0,0,0,196,196,48.42417254961298,93.6198823207313,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.07095393965417314,0.057139614562694965,187.31797832648377,187.31797832648377,,none,0,0,7884,876,1.0,0.714930073609001,1.0,OK,HIGH_GAS,SCEN,2039,6237.200000000001,15.56402,15.38011,2.47178,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6660610222124846,0.27518855958253186,0.39087246262995284,0.0,26879.0810680633,1907.1766960629911,33880.68710694128,1945.179478936571,-0.9290460603458268,0.1576197599255486,0.0,
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:LOW_RIGIDITY,6822b3bcaa37e5fdfe6fe33a858fb86ff423e25f218903448d669bba4ef52b2b,525.9034,524.423312869,31.697453747499996,98.74950692264126,21.756967075256217,152.20392774539746,171.19552185014746,17.29224,3.4586516,0.8890648896682362,0.18515352156959877,0.7039113680986374,0.2902310481063944,127.05800620843969,135.0552260542705,122.60752778677266,122.6165086811288,121.86322563093229,0.9650435445994283,0.9591148898638837,122.6165086811288,121.86322563093229,0.9650435445994283,0.9591148898638837,0.5977187820637748,0.5940467526433022,0,0,0,0,122,122,32.72793668961861,95.55565577835456,0.0,0.0,0.0,0.0,0.0,0.0,,,0.03871334500010588,0.03297382014807486,205.14079925306075,205.14079925306075,,none,0,0,7884,876,1.0,0.6730077697988456,1.0,OK,LOW_RIGIDITY,SCEN,2030,9425.893,21.1595,38.4164,5.8601,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+DE,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:LOW_RIGIDITY,44075226f72526b300818ad8076af9efa828b4f9f9333f44a7d2ef4878afafc9,617.3648,615.8812870144999,36.75064727891181,109.3064128317157,25.451076930673285,171.50813704130078,190.5500263343008,17.339616,3.4966016,0.9000688183606286,0.1928661359218944,0.7072026824387344,0.2784759671343333,138.18507049247427,146.1588580248104,133.76647485353644,133.31322818131866,132.79007724104682,0.9647440762320201,0.9609582045860644,133.31322818131866,132.79007724104682,0.9647440762320201,0.9609582045860644,0.5999659874227242,0.5976115866274452,0,0,0,0,122,122,35.52503700469273,103.31705810147854,0.0,0.0,0.0,0.0,0.0,0.0,,,0.03303800047706785,0.028154153025259504,222.20130970089272,222.20130970089272,,none,0,0,7905,879,1.0,0.6809304253072952,1.0,OK,LOW_RIGIDITY,SCEN,2040,9425.893,24.5451,42.3232,6.8368,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,,,,,,,,,,,,
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:LOW_RIGIDITY,0a97a667845796f7f9d14e1303a8f2f68fde91570e85a6e1b8c8918b47c8eb24,256.5926,255.23969,31.101249710331462,46.29946036015223,0.0,77.4007100704837,115.2242108704837,17.29224,6.6676834000000005,0.6717399883734936,0.26991939866952464,0.40182058970396894,0.30324715592031826,98.98059642880098,97.6451187971206,99.72379400208153,92.44237525715238,96.53949978970414,0.933944415294045,0.9753376244721582,92.44237525715238,96.53949978970414,0.933944415294045,0.9753376244721582,0.570441195105838,0.5957236330391433,0,0,0,0,196,196,41.27425075912336,79.86783396069681,0.0,0.0,0.0,0.0,0.0,0.0,,,0.07216025450602126,0.0677490244561886,162.05417149089467,162.05417149089467,,none,0,0,7884,876,1.0,0.7158297461481474,1.0,OK,LOW_RIGIDITY,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+ES,2040,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:LOW_RIGIDITY,0a84191e7a1d1f5f2aafb74b583a46cff6215323bd67f93cf80faca90f1b5abf,301.2174,299.86286160000003,36.137043115351815,51.0458476562065,0.0,87.18289077155832,125.09963517155832,17.339616,6.671025300000001,0.6969076340790125,0.2888660951392419,0.4080415389397705,0.290742542462145,105.83318335371787,104.57387025083115,106.53101927697357,98.70838037659337,103.32908509984469,0.9326789315850792,0.9763391955668201,98.70838037659337,103.32908509984469,0.9326789315850792,0.9763391955668201,0.5702021567545948,0.5968942753859813,0,0,0,0,197,197,44.49741248034485,86.06799694489395,0.0,0.0,0.0,0.0,0.0,0.0,,,0.06158528692435397,0.05782515349676767,173.11120136480955,173.11120136480955,,none,0,0,7905,879,1.0,0.7214704573561171,1.0,OK,LOW_RIGIDITY,SCEN,2040,6237.200000000001,15.7817,15.5234,2.5076,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,634b1186bf0667f02c682f76be8098c9138f6149c3d0b80405805774ed1c8931,480.17270000000013,480.17270000000013,31.697453747499996,93.72828455868506,19.943855546237707,145.36959385242278,164.36118795717277,17.29224,3.4586516,88.44520756950321,19.285242545070513,69.15996502443271,0.30274439561520833,121.43509767058438,125.4658796583113,119.19195460278752,116.87040994372404,116.36130665128391,0.96241047428279,0.9582180842554754,116.87040994372404,116.36130665128391,0.96241047428279,0.9582180842554754,0.5946826176437238,0.5920920998321997,0,0,0,0,122,122,31.289476716679655,91.56360574280622,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04220657135430478,0.03601254298713775,196.52568694002332,196.52568694002332,,none,0,0,7884,876,1.0,0.6703658348982127,1.0,OK,LOW_RIGIDITY,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8844520756950321,0.19285242545070513,0.691599650244327,0.0,42620.312833719305,1798.8572747591656,54781.97026983656,1974.9663344420105,-0.9577934286456953,,,
+DE,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,e6047c98169a2d09e2c50f95a387befdb16cb8dc5aea953a76fdab58be6faccd,489.31884000000014,489.31884000000014,31.697453747499996,94.7325290314763,20.306477852041407,146.73646063101768,165.7280547357677,17.29224,3.4586516,88.5405074385084,19.126184639068835,69.41432279943959,0.2998790331290282,122.5686654455645,124.3204214097481,121.5938076488653,118.02227859601179,117.46489630400089,0.9629074296189357,0.9583599191276965,118.02227859601179,117.46489630400089,0.9629074296189357,0.9583599191276965,0.5952791790267674,0.592467861730242,0,0,0,0,121,121,31.348819323647188,92.3463916790626,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04141766404281344,0.03533941182399598,198.26374372604215,198.26374372604215,,none,0,0,7884,876,1.0,0.6708960743774656,1.0,OK,LOW_RIGIDITY,SCEN,2026,9425.893,19.80526,36.85368,5.46942,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.885405074385084,0.19126184639068836,0.6941432279943959,0.0,43432.12772453045,1798.8572747591656,55825.435609627355,1974.9663344420105,-0.9585823359571866,,,
+DE,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,d54bf295a30def5f68e6cda9532ee0ae7cfbc5519827cc23ed53c1271c27d4d0,498.46498000000014,498.46498000000014,31.697453747499996,95.73677350426752,20.669100157845104,148.10332740961263,167.09492151436262,17.29224,3.4586516,88.63424816707098,18.969728978133812,69.66451918893716,0.2971188214859399,123.70224338273847,124.73245108530386,123.12892950135348,119.19527227912843,118.57069664674542,0.9635659711549018,0.9585169468583048,119.19527227912843,118.57069664674542,0.9635659711549018,0.9585169468583048,0.5960221877315117,0.5928990694425165,0,0,0,0,121,121,31.618240855658495,93.12917761531901,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04065770743802139,0.034690982704542246,199.98462260740862,199.98462260740862,,none,0,0,7884,876,1.0,0.6713944675868438,1.0,OK,LOW_RIGIDITY,SCEN,2027,9425.893,20.14382,37.24436,5.56709,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8863424816707097,0.18969728978133812,0.6966451918893716,0.0,44243.9426153416,1798.8572747591656,56868.90094941815,1974.9663344420105,-0.9593422925619786,,,
+DE,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,69ce641e435d69b3ceab767fd12a4478f4d5c92dc1dff8efbe1d4c5de0176703,507.61112,507.61112,31.72202261,97.19849206057513,21.087971354113154,150.0084860246883,169.0503753176883,17.339616,3.4966016,88.7359674551355,18.764834180572695,69.97113327456279,0.2955185182402787,124.7919003168638,127.240890430881,123.44288033880349,120.29950153139153,119.62568800392175,0.9640008784699531,0.9586013811807952,120.29950153139153,119.62568800392175,0.9640008784699531,0.9586013811807952,0.596658158303193,0.5933161965059949,0,0,0,0,121,121,31.791736016579154,93.85773340234256,0.0,0.0,0.0,0.0,0.0,0.0,,,0.04003050850668513,0.03415925167281599,201.6221514066034,201.6221514066034,,none,0,0,7905,879,1.0,0.6720638945768935,1.0,OK,LOW_RIGIDITY,SCEN,2028,9425.893,20.482380000000003,37.63504,5.66476,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.887359674551355,0.18764834180572695,0.6997113327456279,0.0,44945.5406096182,1799.1928457108834,57752.532861835556,1975.148969401612,-0.9599694914933149,,,
+DE,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,fdec00c3b1a6c35a5329b9cb79354113fd889838e0a7da67284bd5e9f79d9f06,516.7572600000001,516.7572600000001,31.697453747499996,97.74526244985003,21.394344769452513,150.83706096680254,169.82865507155256,17.29224,3.4586516,88.81720278786378,18.664373061274706,70.15282972658906,0.29189151782173806,125.96942917879787,136.67826051576637,120.00993028978128,121.5381716683407,120.80054307646773,0.9648227547005269,0.9589671388048163,121.5381716683407,120.80054307646773,0.9648227547005269,0.9589671388048163,0.5974420341699456,0.5938160924568098,0,0,0,0,120,120,31.947085464012922,94.69474948783186,0.0,0.0,0.0,0.0,0.0,0.0,,,0.039218497530037956,0.03346298414849556,203.43090160570875,203.43090160570875,,none,0,0,7884,876,1.0,0.672305964371547,1.0,OK,LOW_RIGIDITY,SCEN,2029,9425.893,20.82094,38.02572000000001,5.76243,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8881720278786378,0.18664373061274706,0.7015282972658906,0.0,45867.57239696389,1798.8572747591656,58955.83162899973,1974.9663344420105,-0.9607815024699621,,,
+DE,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,23cf35c736cc6a682b78f13c04ef09b47eb421310aea84c9d9318dbca41f2d75,535.0495400000001,535.0495400000001,32.15984738746886,99.7537513954325,22.11958938105992,154.03318816396126,173.02478226871128,17.29224,3.4586516,89.02377228525815,18.586844592888383,70.43692769236978,0.28788584355004065,128.22234824022658,132.77847086502766,125.68685142770401,123.8272269516331,123.00146802787751,0.9657226579538291,0.9592826033526725,123.8272269516331,123.00146802787751,0.9657226579538291,0.9592826033526725,0.5985357949522176,0.5945443765377361,0,0,0,0,122,122,32.94181013075764,96.26028184090758,0.0,0.0,0.0,0.0,0.0,0.0,,,0.03787769507275754,0.03231895125075708,206.88357821860677,206.88357821860677,,none,0,0,7884,876,1.0,0.6735675873663717,1.0,OK,LOW_RIGIDITY,SCEN,2031,9425.893,21.49806,38.80708,5.95777,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8902377228525815,0.18586844592888382,0.7043692769236978,0.0,47491.20217858617,1798.8572747591656,61042.76230858132,1974.9663344420105,-0.9621223049272425,,,
+DE,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,21e6d8a01c76dfdb86aac6c0ede43f64fa18f9853d14fe21605c41155b3a564a,544.19568,544.19568,32.69532083322664,101.23446565095534,22.542339879633197,156.4721263638152,175.51401565681516,17.339616,3.4966016,89.15078706293586,18.628324758494628,70.52246230444122,0.28752915929765405,129.2929320241536,131.4159748829136,128.10944855820654,124.86861642179586,124.05129762946139,0.9657806847358739,0.9594592348349482,124.86861642179586,124.05129762946139,0.9657806847358739,0.9594592348349482,0.5989254075978604,0.5950051832463485,0,0,0,0,122,122,33.115641876614724,96.98486154643977,0.0,0.0,0.0,0.0,0.0,0.0,,,0.03733938361518777,0.031862832869235566,208.48775964040757,208.48775964040757,,none,0,0,7905,879,1.0,0.6746209240453853,1.0,OK,LOW_RIGIDITY,SCEN,2032,9425.893,21.83662,39.19776,6.05544,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8915078706293587,0.1862832475849463,0.7052246230444122,0.0,48184.85661822931,1799.1928457108834,61914.874702644316,1975.148969401612,-0.9626606163848123,,,
+DE,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,608acc4a64d0cc604f2bd187d0090880593320fe621740574b5534aa20e08f97,553.3418200000001,553.3418200000001,33.17277952474091,101.76224034101499,22.84483399266732,157.77985385842322,176.77144796317322,17.29224,3.4586516,89.25641311219756,18.765914918370637,70.49049819382692,0.28513994091106865,130.45823796270466,133.10753683709873,128.9926683726143,125.9642450246466,125.20569364698089,0.9655522486871024,0.9597377337165526,125.9642450246466,125.20569364698089,0.9655522486871024,0.9597377337165526,0.5989825325431257,0.5953754849625255,0,0,0,0,122,122,33.50164075578874,97.82576714106214,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0366255406557545,0.03125055684386912,210.29702567424602,210.29702567424602,,none,0,0,7884,876,1.0,0.6752506078881356,1.0,OK,LOW_RIGIDITY,SCEN,2033,9425.893,22.17518,39.588440000000006,6.15311,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8925641311219756,0.18765914918370638,0.7049049819382692,0.0,49114.831960208474,1798.8572747591656,63129.692988162904,1974.9663344420105,-0.9633744593442455,,,
+DE,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,85bb4639af0e340ec3c15d15bf9e39bf91e3901a3f7627e0686fc0cdb9ce1a2e,562.48796,562.48796,33.67924559337694,102.76648481380623,23.207456298471026,159.6531867056542,178.64478081040417,17.29224,3.4586516,89.36907419371755,18.852633388221257,70.51644080549629,0.28383396278500644,131.57618815221124,139.2783261794137,127.3154309456737,127.04500189386638,126.30399565282777,0.9655622622757315,0.9599304967454715,127.04500189386638,126.30399565282777,0.9655622622757315,0.9599304967454715,0.5991879994072362,0.5956931586775936,0,0,0,0,122,122,33.78400498432875,98.6085097911394,0.0,0.0,0.0,0.0,0.0,0.0,,,0.036030003779883905,0.03074241802437869,212.0286154254579,212.0286154254579,,none,0,0,7884,876,1.0,0.6760587094633617,1.0,OK,LOW_RIGIDITY,SCEN,2034,9425.893,22.51374,39.97912,6.25078,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8936907419371756,0.18852633388221257,0.7051644080549629,0.0,49926.646851019614,1798.8572747591656,64173.1583279537,1974.9663344420105,-0.9639699962201161,,,
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,81005a84d0b76b30d239d9d045ee50c1924581d69bda3b6bdefa53d3959a193b,571.6341,571.6341,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,180.51811365763515,17.29224,3.4586516,89.47939698684819,18.93755201034756,70.54184497650063,0.2825697759333902,132.694140557315,144.2107415005934,126.28511529890207,128.1293189989096,127.40218115245989,0.965598921405021,0.9601191176744588,128.1293189989096,127.40218115245989,0.965598921405021,0.9601191176744588,0.5994168077170399,0.5960150988022141,0,0,0,0,121,121,33.840505394471975,99.3912524412167,0.0,0.0,0.0,0.0,0.0,0.0,,,0.03545352407237285,0.030250539637156005,213.75663369685526,213.75663369685526,,none,0,0,7884,876,1.0,0.67684466501105,1.0,OK,LOW_RIGIDITY,SCEN,2035,9425.893,22.8523,40.3698,6.34845,1.6500000000000001,0.45,0.8914973010374386,-26.5825,0.10500000000000001,-21.08173750012614,0.8947939698684818,0.18937552010347558,0.7054184497650062,0.0,50738.46174183076,1798.8572747591656,65216.62366774449,1974.9663344420105,-0.9645464759276271,,,
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,65fb44c357c1b415e806c6c5aef57cc8823304fb6f9734930d75fcc05ff6b8ce,234.2802,234.2802,28.613131445241326,43.94530341930337,0.0,72.5584348645447,110.38193566454468,17.29224,6.6676834000000005,65.73397578844134,25.921933034584416,39.81204275385692,0.30970792608399983,95.61131131155467,92.88863945227857,97.12648690914759,89.38942082186934,93.16554639171856,0.9349251630969586,0.9744197115771538,89.38942082186934,93.16554639171856,0.9349251630969586,0.9744197115771538,0.5712235297837912,0.595354033786211,0,0,0,0,194,194,39.21575335668828,76.58427118773886,0.0,0.0,0.0,0.0,0.0,0.0,,,0.07832858536862373,0.07381007870063283,156.4876377828892,156.4876377828892,,none,0,0,7884,876,1.0,0.7139114336367945,1.0,OK,LOW_RIGIDITY,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6573397578844133,0.25921933034584416,0.39812042753856924,0.0,21392.62454815791,1675.6540181793027,26877.445663145587,2022.8228750567337,-0.9216714146313763,,,
+ES,2026,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,809c143b03b97337ca1c8f2e4d531e884e5f3496be98366be1dcd6d0948c60ae,238.74268,238.74268,29.110755098259354,44.416134807473135,0.0,73.52688990573249,111.3503907057325,17.29224,6.6676834000000005,66.03199992359544,26.143379393423793,39.88862053017163,0.30797547345004456,96.3002071553702,93.27301526495022,97.98484912423933,90.01874697599321,93.86314702986706,0.9347721010688739,0.9746930957108826,90.01874697599321,93.86314702986706,0.9347721010688739,0.9746930957108826,0.5711696161234624,0.5955623629318771,0,0,0,0,194,194,39.53137358706708,77.21193719523872,0.0,0.0,0.0,0.0,0.0,0.0,,,0.076864499660799,0.07243045106136867,157.60422899759956,157.60422899759956,,none,0,0,7884,876,1.0,0.714598659718297,1.0,OK,LOW_RIGIDITY,SCEN,2026,6237.200000000001,12.73418,13.51734,2.00612,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6603199992359543,0.26143379393423793,0.3988862053017163,0.0,21800.103110979966,1675.6540181793027,27389.397009110267,2022.8228750567337,-0.923135500339201,,,
+ES,2027,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,f71d753fba8953caa95e17fac975dbaaf2c3458526e1b70fc599e3e6dc4935dd,243.20516,243.20516,29.608378751277378,44.88696619564292,0.0,74.49534494692031,112.31884574692029,17.29224,6.6676834000000005,66.32488470792795,26.36100696582276,39.963877742105176,0.30630659705953733,96.98910843830562,93.7131676869916,98.81217994383432,90.64971678987361,94.54894326150284,0.934638107819452,0.9748408329956455,90.64971678987361,94.54894326150284,0.934638107819452,0.9748408329956455,0.5711509680438529,0.5957185789836152,0,0,0,0,194,194,39.84709706658821,77.83960320273862,0.0,0.0,0.0,0.0,0.0,0.0,,,0.07545414186885772,0.0711014519593252,158.71410863635887,158.71410863635887,,none,0,0,7884,876,1.0,0.7152739566518445,1.0,OK,LOW_RIGIDITY,SCEN,2027,6237.200000000001,12.95186,13.66063,2.04194,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6632488470792794,0.2636100696582276,0.39963877742105175,0.0,22207.581673802022,1675.6540181793027,27901.348355074944,2022.8228750567337,-0.9245458581311423,,,
+ES,2028,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,f718e0c5ec8c4b8807cffa1a7f8b6ccf3393c18a5eabb26d67d77f4134cb5593,247.66764,247.66764,30.155701527044,45.391653721379456,0.0,75.54735524842346,113.46409964842346,17.339616,6.671025300000001,66.58260672980467,26.577306496489705,40.00530023331495,0.3050352288592222,97.64879207805853,94.49045230510346,99.38855551231347,91.2418229351742,95.1772396790202,0.9343876252174965,0.9746893704833275,91.2418229351742,95.1772396790202,0.9343876252174965,0.9746893704833275,0.5711245932924305,0.5957581792397669,0,0,0,0,195,195,40.22063732900885,78.40366556099437,0.0,0.0,0.0,0.0,0.0,0.0,,,0.07429890629516081,0.07001163333247734,159.7581753732255,159.7581753732255,,none,0,0,7905,879,1.0,0.7155697869768995,1.0,OK,LOW_RIGIDITY,SCEN,2028,6237.200000000001,13.16954,13.80392,2.07776,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6658260672980466,0.26577306496489705,0.4000530023331495,0.0,22551.292773837155,1675.536388638064,28341.20687562576,2023.366266789889,-0.9257010937048392,,,
+ES,2029,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,1a574bc3f4b310dda7042cdfa98108024c7ae31d3692b1290ac025b91b0e17a1,252.13012,252.13012,30.60362605731343,45.82862897198248,0.0,76.4322550292959,114.25575582929591,17.29224,6.6676834000000005,66.89575897033117,26.785194177032846,40.110564793298344,0.30314607008990396,98.3669160971741,98.60110866174082,98.23658718597598,91.9181916973442,95.9086558235261,0.93444214116198,0.9750092778021063,91.9181916973442,95.9086558235261,0.93444214116198,0.9750092778021063,0.5711035304636988,0.5958969702449676,0,0,0,0,194,194,40.479858969378704,79.09493521773835,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0727831987938539,0.0685845864032429,160.94838640327197,160.94838640327197,,none,0,0,7884,876,1.0,0.7165763974922599,1.0,OK,LOW_RIGIDITY,SCEN,2029,6237.200000000001,13.38722,13.94721,2.11358,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6689575897033118,0.26785194177032845,0.4011056479329834,0.0,23022.538799446134,1675.6540181793027,28925.251047004298,2022.8228750567337,-0.9272168012061461,,,
+ES,2031,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,de0edc677418152624cf6f636ccca3a83c89d5be8bafe827dd956e7d099d4fa7,261.0550799999999,261.0550799999999,31.59887336334949,46.77029174832202,0.0,78.3691651116715,116.19266591167148,17.29224,6.6676834000000005,67.44760049764842,27.19523914475862,40.25236135288981,0.3002016475284508,99.74473988907319,96.7991245641874,101.38398423831667,93.18136981349788,97.30597967101014,0.9341983338382106,0.9755499866882683,93.18136981349788,97.30597967101014,0.9341983338382106,0.9755499866882683,0.5710434554944118,0.5963203050439977,0,0,0,0,196,196,41.46307060162426,80.3502672327381,0.0,0.0,0.0,0.0,0.0,0.0,,,0.07029488430517516,0.06623981421851666,163.17737103356006,163.17737103356006,,none,0,0,7884,876,1.0,0.7178329174526495,1.0,OK,LOW_RIGIDITY,SCEN,2031,6237.200000000001,13.82258,14.23379,2.18522,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6744760049764842,0.2719523914475862,0.4025236135288981,0.0,23837.49592509024,1675.6540181793027,29949.15373893365,2022.8228750567337,-0.9297051156948248,,,
+ES,2032,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,5461f5defcaafac78a641d07ae27f1774180d6f7422667ddd422708d5e04c094,265.51756,265.51756,32.14948205647994,47.27638503298847,0.0,79.42586708946843,117.34261148946842,17.339616,6.671025300000001,67.68714798596156,27.39796025365038,40.28918773231117,0.2991360235815229,100.40192467751957,97.1830867676125,102.19625559751033,93.76449044867448,97.93118486336503,0.9338913646310683,0.9753915094547211,93.76449044867448,97.93118486336503,0.9338913646310683,0.9753915094547211,0.570966917149647,0.5963394718692056,0,0,0,0,196,196,41.660177137303684,80.90971626510395,0.0,0.0,0.0,0.0,0.0,0.0,,,0.06930402183834329,0.06530496890676458,164.22053122930654,164.22053122930654,,none,0,0,7905,879,1.0,0.71808070158353,1.0,OK,LOW_RIGIDITY,SCEN,2032,6237.200000000001,14.04026,14.37708,2.22104,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6768714798596156,0.2739796025365038,0.4028918773231117,0.0,24176.611171951543,1675.536388638064,30383.816380175365,2023.366266789889,-0.9306959781616567,,,
+ES,2033,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,19474c3e608f11102659aeeb32082bddfe027fc58ef264a42902b913389a0006,269.98004,269.98004,32.59412066938554,47.71195452466156,0.0,80.3060751940471,118.1295759940471,17.29224,6.6676834000000005,67.98134549987208,27.59183751834346,40.38950798152861,0.29745189753304396,101.12257477610413,97.83066030227626,102.94363384673228,94.44972041927679,98.66295218318353,0.9340122186208002,0.9756768199547287,94.44972041927679,98.66295218318353,0.9340122186208002,0.9756768199547287,0.5710506161655081,0.5965241547228123,0,0,0,0,196,196,42.10033346132195,81.60559924773786,0.0,0.0,0.0,0.0,0.0,0.0,,,0.06797108647690489,0.06405006829393758,165.39640750847616,165.39640750847616,,none,0,0,7884,876,1.0,0.719042066044112,1.0,OK,LOW_RIGIDITY,SCEN,2033,6237.200000000001,14.25794,14.52037,2.25686,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6798134549987207,0.2759183751834346,0.4038950798152861,0.0,24652.45305073436,1675.6540181793027,30973.056430863016,2022.8228750567337,-0.9320289135230951,,,
+ES,2034,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,ded72da152295050264f0f39c60e9aa3700cb5229fe76f88113e9e1eb334bef9,274.44252,274.44252,33.091744322403564,48.182785912831335,0.0,81.2745302352349,119.0980310352349,17.29224,6.6676834000000005,68.24170771655328,27.78529924866133,40.45640846789193,0.2961440896083993,101.81149358894034,100.63688880430523,102.461274959164,95.08019783176626,99.35006316234096,0.9338847165492787,0.9758236487862824,95.08019783176626,99.35006316234096,0.9338847165492787,0.9758236487862824,0.5710076691266798,0.5966505043909719,0,0,0,0,196,196,42.418538540254765,82.23326525523773,0.0,0.0,0.0,0.0,0.0,0.0,,,0.06686586555858123,0.06300860376883291,166.51299618652305,166.51299618652305,,none,0,0,7884,876,1.0,0.7196269194556031,1.0,OK,LOW_RIGIDITY,SCEN,2034,6237.200000000001,14.47562,14.66366,2.29268,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6824170771655328,0.2778529924866133,0.40456408467891936,0.0,25059.93161355641,1675.6540181793027,31485.00777682769,2022.8228750567337,-0.9331341344414188,,,
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,36492204474733d2027d3036826878d678e20775a54b9e99287bf6ba6f48114a,278.905,278.905,33.5893679754216,48.65361730100112,0.0,82.24298527642273,120.06648607642272,17.29224,6.6676834000000005,68.49786977531332,27.975640058327233,40.52222971698608,0.2948781315373433,102.50041470982062,102.6701572834972,102.40595242468291,95.71270655649077,100.04662100946321,0.933778724968617,0.9760606461222219,95.71270655649077,100.04662100946321,0.933778724968617,0.9760606461222219,0.5709612709297966,0.5968146543853119,0,0,0,0,196,196,42.736799419320285,82.8609312627376,0.0,0.0,0.0,0.0,0.0,0.0,,,0.06579601170964394,0.06200046610853158,167.63432377930806,167.63432377930806,,none,0,0,7884,876,1.0,0.7202012060057617,1.0,OK,LOW_RIGIDITY,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,1.6500000000000001,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6849786977531331,0.27975640058327234,0.4052222971698608,0.0,25467.410176378464,1675.6540181793027,31996.959122792367,2022.8228750567337,-0.9342039882903561,,,
+DE,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:LOW_RIGIDITY,15a95ff5c80f878afdf032d56e43a754ce2da56a7dce87a10e2801aac857f88a,580.7802399999999,579.2967270144998,34.72298405606922,105.27043924133554,23.996708405153246,163.990131702558,183.032020995558,14.986790843049578,3.4966016,89.59641641422833,18.970988719461232,70.62542769476711,0.2830848579927387,132.76066876889809,141.27019525780824,128.01706038571834,128.03545385758912,127.44493216346883,0.9644080211773086,0.9599600043090882,128.03545385758912,127.44493216346883,0.9644080211773086,0.9599600043090882,0.5968423956233048,0.594089655097401,0,0,0,0,122,122,34.432414522177986,100.4789325438964,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.032919762580384836,0.025870663762052395,214.52137917226358,214.52137917226358,,none,0,0,7905,879,1.0,0.6786026879197393,1.0,OK,LOW_RIGIDITY,SCEN,2036,9425.893,23.19086,40.76048,6.4461200000000005,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8959641641422833,0.18970988719461232,0.7062542769476711,0.0,51213.35142939926,1685.9313700016362,65970.18921353607,1712.987890503026,-0.9670802374196151,0.10947307135991226,0.0,
+DE,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:LOW_RIGIDITY,89a07bf6037def0f348e046884c8824ef47bd599ad9f17f55437280a383ed790,589.92638,588.446292869,35.19864379928503,105.77921823217994,24.29532321588214,165.27318524734713,184.2647793520971,14.953536300372267,3.4586516,89.69331297520488,19.102209289832164,70.59110368537269,0.28086366971835147,133.9298525527874,136.22521759693714,132.65247456446528,129.136367433813,128.60968824321594,0.9642089868120696,0.960276486472838,129.136367433813,128.60968824321594,0.9642089868120696,0.960276486472838,0.5968577667792064,0.5944234984800771,0,0,0,0,121,121,34.593299470634044,101.32816219318633,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.03233385426236697,0.025411896517293937,216.36037029502873,216.36037029502873,,none,0,0,7884,876,1.0,0.6791266468585898,1.0,OK,LOW_RIGIDITY,SCEN,2037,9425.893,23.52942,41.15116,6.54379,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8969331297520488,0.19102209289832164,0.7059110368537269,0.0,52156.217957009816,1686.4115502982024,67190.98159951149,1713.7266555826995,-0.967666145737633,0.10862084920975323,0.0,
+DE,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:LOW_RIGIDITY,2e1784eb9414d986651276f32241d641ad8ae733da5fe27bb471c2e4ec789dbf,599.0725200000002,597.592432869,35.70510986792107,106.78346270497123,24.657945521685832,167.14651809457808,186.1381121993281,14.953536300372267,3.4586516,89.79704162658926,19.182052211685612,70.61498941490366,0.27969985712857703,135.04853952112353,136.58809509502936,134.19177192029315,130.21574751231503,129.69383410769996,0.9642144074571604,0.9603497717753103,130.21574751231503,129.69383410769996,0.9642144074571604,0.9603497717753103,0.5971089485828939,0.5947156960751543,0,0,0,0,121,121,34.96138590766702,102.11489344495122,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.03183741208690243,0.025022967959251706,218.0770323763416,218.0770323763416,,none,0,0,7884,876,1.0,0.6798384344699101,1.0,OK,LOW_RIGIDITY,SCEN,2038,9425.893,23.867980000000003,41.54184,6.64146,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8979704162658926,0.19182052211685613,0.7061498941490366,0.0,52969.49217150643,1686.4115502982024,68234.10555208597,1713.7266555826995,-0.9681625879130976,0.10762832548024176,0.0,
+DE,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:LOW_RIGIDITY,68ca7053861327cdb997463b9901917339aadf4dfec9179b572a8506fe15e6a0,608.21866,606.7385728690001,36.21157593655708,107.78770717776241,25.020567827489533,169.01985094180907,188.0114450465591,14.953536300372267,3.4586516,89.89870318796446,19.2603040349962,70.63839915296826,0.27857113178512527,136.16722909339006,139.11157336311075,134.53844290162968,131.27706455601268,130.80176228987415,0.964087067277961,0.9605964897777569,131.27706455601268,130.80176228987415,0.964087067277961,0.9605964897777569,0.5972916491318359,0.5951290925928233,0,0,0,0,121,121,35.24483673181926,102.90162469671614,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.03135598377730699,0.024645765028031046,219.78720905745803,219.78720905745803,,none,0,0,7884,876,1.0,0.6805329227686338,1.0,OK,LOW_RIGIDITY,SCEN,2039,9425.893,24.20654,41.93252,6.73913,1.6500000000000001,0.45,0.9,-43.87,-0.03,-9.362650296574857,0.8989870318796446,0.192603040349962,0.7063839915296827,0.0,53782.76638600302,1686.4115502982024,69279.05267711743,1713.7266555826995,-0.968644016222693,0.10664479204744362,0.0,
+ES,2036,8784,8784,8784,8784,8784,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:LOW_RIGIDITY,033df639e30ea4b7ef8c9c9f9bf6d2454c4ea21f2004f68fc17c907122275fa9,283.36748,282.01294160000003,34.14326258591588,49.16111634459749,0.0,83.30437893051337,121.22112333051336,12.920308990078468,6.671025300000001,68.72100888174518,28.16609980821837,40.55490907352681,0.29539204285408355,100.25500591513683,98.7991447949757,101.0665710502054,93.02630915652766,97.6362563576394,0.9278968995849637,0.9738791142288282,93.02630915652766,97.6362563576394,0.9278968995849637,0.9738791142288282,0.5497796492695646,0.577024147931915,0,0,0,0,196,196,45.133695616507964,87.51832068992826,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.056911373041208,0.04581459601383934,169.20653443633665,169.20653443633665,,none,0,0,7905,879,1.0,0.7162617762459538,1.0,OK,LOW_RIGIDITY,SCEN,2036,6237.200000000001,14.91098,14.95024,2.36432,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6872100888174518,0.2816609980821837,0.40554909073526807,0.0,25589.426929043642,1456.3294218695362,32256.28747943177,1485.0197454612994,-0.943088626958792,0.12917065955840357,0.0,
+ES,2037,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:LOW_RIGIDITY,a9044abdaaa78780bc41c82454722905bf196794230eaed627c5a6ae66cc8064,287.82996,286.47705,34.584615281457644,49.59528007734066,0.0,84.1798953587983,122.00339615879831,12.889538066958282,6.6676834000000005,68.99799350604196,28.34725619969028,40.65073730635168,0.29384516267113997,100.98154746462268,97.29690230540156,103.03206428030862,93.70681054581414,98.40333691229633,0.9279597401559218,0.974468498284505,93.70681054581414,98.40333691229633,0.9279597401559218,0.974468498284505,0.5499191558320337,0.5774807578090432,0,0,0,0,196,196,45.58403557405854,88.22167534547314,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.055864920865877764,0.04499326583737958,170.4010663240758,170.4010663240758,,none,0,0,7884,876,1.0,0.7172590117293605,1.0,OK,LOW_RIGIDITY,SCEN,2037,6237.200000000001,15.12866,15.09353,2.40014,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6899799350604197,0.2834725619969028,0.4065073730635168,0.0,26069.83871847061,1456.3894769935569,32853.60285113707,1485.4097839151996,-0.9441350791341222,0.12817528695671798,0.0,
+ES,2038,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:LOW_RIGIDITY,ed88a218068d7761317214aaa801e3fcca4d85178e71442f082b8dc9d0794c9f,292.29244,290.93953,35.082238934475676,50.066111465510446,0.0,85.14835039998611,122.97185119998612,12.889538066958282,6.6676834000000005,69.24214734436373,28.528674320290005,40.713473024073735,0.2926668314889562,101.67387268244907,97.77501219460646,103.84360101363656,94.3418955090944,99.09788881045962,0.9278873030020788,0.9746642494868387,94.3418955090944,99.09788881045962,0.9278873030020788,0.9746642494868387,0.5500255079760624,0.5777535668347271,0,0,0,0,196,196,45.888862458289786,88.85186214277115,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.05501112055290965,0.044303151472604226,171.52276420096544,171.52276420096544,,none,0,0,7884,876,1.0,0.7178552407197017,1.0,OK,LOW_RIGIDITY,SCEN,2038,6237.200000000001,15.34634,15.23682,2.43596,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6924214734436374,0.28528674320290004,0.4071347302407374,0.0,26474.455752865506,1456.3894769935569,33366.69181210006,1485.4097839151996,-0.9449888794470903,0.12734192605155503,0.0,
+ES,2039,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,net_of_psh_pump,floor_quantile,SCEN:LOW_RIGIDITY,dfedf399665b410e49253c72c3217bbf0d500aa8a570228572bea749233361d1,296.75492,295.40201,35.57986258749369,50.536942853680216,0.0,86.11680544117391,123.94030624117391,12.889538066958282,6.6676834000000005,69.48248560367463,28.707257280984344,40.77522832269028,0.2915241011432993,102.36619897561192,98.70921230637062,104.38921287774541,94.97862644236439,99.77695808309994,0.9278319151519187,0.9747060951913546,94.97862644236439,99.77695808309994,0.9278319151519187,0.9747060951913546,0.550170713100128,0.5779654037516753,0,0,0,0,196,196,46.208566470964946,89.48294789592262,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,0.054183008463186765,0.043633887484239804,172.63482802851195,172.63482802851195,,none,0,0,7884,876,1.0,0.7184403004089932,1.0,OK,LOW_RIGIDITY,SCEN,2039,6237.200000000001,15.56402,15.38011,2.47178,1.6500000000000001,0.45,0.8994620707752035,-0.36,3.32,-12.566520370530137,0.6948248560367463,0.28707257280984344,0.4077522832269028,0.0,26879.0810680633,1456.3894769935569,33880.68710694128,1485.4097839151996,-0.9458169915368132,0.12651558561981466,0.0,
+```
+
+### Validation findings historiques (DE/ES)
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\inputs\validation_findings_hist.csv`
+
+```csv
+severity,code,message,evidence,suggestion,country,year
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2018
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2021
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.338, neg_total=133","Review must-run perimeter, PSH handling, and price-zone mapping.",DE,2018
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.441, neg_total=211","Review must-run perimeter, PSH handling, and price-zone mapping.",DE,2019
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.369, neg_total=298","Review must-run perimeter, PSH handling, and price-zone mapping.",DE,2020
+WARN,RC_NEG_NOT_IN_SURPLUS,Negative prices are not mostly in surplus regimes A/B,"ratio=0.410, neg_total=139","Review must-run perimeter, PSH handling, and price-zone mapping.",DE,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2022
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2023
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,DE,2024
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2018
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2019
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2020
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2021
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2022
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2023
+PASS,ALL_CHECKS_PASS,No blocking issue detected,hard checks and reality checks passed,Proceed to interpretation.,ES,2024
+```
+
+## Q1
+
+### Q1 - contexte
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\question_context.json`
+
+```json
+{
+  "question_id": "Q1",
+  "objective": "Identifier la bascule Phase 1 vers Phase 2 (marche et physique), puis expliquer les drivers SR/FAR/IR.",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "run_id": "FULL_20260211_105525",
+  "source_summary_file": "outputs\\combined\\FULL_20260211_105525\\Q1\\summary.json",
+  "source_refs_in_ledger": [
+    "SPEC2-Q1",
+    "SPEC2-Q1/Slides 2-4",
+    "SPEC2-Q1/Slides 3-4",
+    "SPEC2-Q1/Slides 5",
+    "Slides 4-6"
+  ],
+  "scenarios": [
+    "BASE",
+    "DEMAND_UP",
+    "FLEX_UP",
+    "LOW_RIGIDITY"
+  ],
+  "country_filter_notes": {
+    "hist_unfilterable_tables": [
+      "Q1_rule_definition.csv"
+    ],
+    "scen_unfilterable_tables_by_scenario": {
+      "BASE": [
+        "Q1_rule_definition.csv"
+      ],
+      "DEMAND_UP": [
+        "Q1_rule_definition.csv"
+      ],
+      "FLEX_UP": [
+        "Q1_rule_definition.csv"
+      ],
+      "LOW_RIGIDITY": [
+        "Q1_rule_definition.csv"
+      ]
+    }
+  }
+}
+```
+
+### Q1 - test ledger
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\test_ledger.csv`
+
+```csv
+test_id,question_id,source_ref,mode,scenario_group,title,what_is_tested,metric_rule,severity_if_fail,scenario_id,status,value,threshold,interpretation
+Q1-H-01,Q1,SPEC2-Q1/Slides 2-4,HIST,HIST_BASE,Score marche de bascule,La signature marche de phase 2 est calculee et exploitable.,stage2_market_score present et non vide,HIGH,,PASS,1.2142857142857142,score present,Le score de bascule marche est exploitable.
+Q1-H-02,Q1,SPEC2-Q1/Slides 3-4,HIST,HIST_BASE,Stress physique SR/FAR/IR,La bascule physique est fondee sur SR/FAR/IR.,sr_energy/far_energy/ir_p10 presentes,CRITICAL,,PASS,"far_energy,ir_p10,sr_energy",SR/FAR/IR presents,Le stress physique est calculable.
+Q1-H-03,Q1,SPEC2-Q1,HIST,HIST_BASE,Concordance marche vs physique,La relation entre bascule marche et bascule physique est mesurable.,bascule_year_market et bascule_year_physical comparables,MEDIUM,,WARN,strict=0.00%; concordant_ou_explique=50.00%,concordant_ou_explique >= 80%,Concordance partielle; divergences a expliquer pays par pays.
+Q1-H-04,Q1,Slides 4-6,HIST,HIST_BASE,Robustesse seuils,Le diagnostic reste stable sous variation raisonnable de seuils.,delta bascules sous choc de seuil <= 50%,MEDIUM,,WARN,0.400,confidence moyenne >=0.60,Proxy de robustesse du diagnostic de bascule.
+Q1-S-01,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Bascule projetee par scenario,Chaque scenario fournit un diagnostic de bascule projetee.,Q1_country_summary non vide en SCEN,HIGH,BASE,PASS,2,>0 lignes,La bascule projetee est produite.
+Q1-S-01,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Bascule projetee par scenario,Chaque scenario fournit un diagnostic de bascule projetee.,Q1_country_summary non vide en SCEN,HIGH,DEMAND_UP,PASS,2,>0 lignes,La bascule projetee est produite.
+Q1-S-01,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Bascule projetee par scenario,Chaque scenario fournit un diagnostic de bascule projetee.,Q1_country_summary non vide en SCEN,HIGH,FLEX_UP,PASS,2,>0 lignes,La bascule projetee est produite.
+Q1-S-01,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Bascule projetee par scenario,Chaque scenario fournit un diagnostic de bascule projetee.,Q1_country_summary non vide en SCEN,HIGH,LOW_RIGIDITY,PASS,2,>0 lignes,La bascule projetee est produite.
+Q1-S-02,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Effets DEMAND_UP/FLEX_UP/LOW_RIGIDITY,Les leviers scenario modifient la bascule vs BASE.,delta bascule_year_market vs BASE effectivement observable (finite_share/nonzero_share),MEDIUM,BASE,PASS,reference_scenario,scenario de reference,BASE est la reference explicite pour le calcul de sensibilite; pas de delta attendu.
+Q1-S-02,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Effets DEMAND_UP/FLEX_UP/LOW_RIGIDITY,Les leviers scenario modifient la bascule vs BASE.,delta bascule_year_market vs BASE effectivement observable (finite_share/nonzero_share),MEDIUM,DEMAND_UP,PASS,finite_share=0.00%; nonzero_share=0.00%; req_defined=100.00%; n_countries=2,nonzero_share >= 20% (scenarios non-BASE),"Delta vs BASE nul/non defini, mais solveur required_lever disponible et interpretable."
+Q1-S-02,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Effets DEMAND_UP/FLEX_UP/LOW_RIGIDITY,Les leviers scenario modifient la bascule vs BASE.,delta bascule_year_market vs BASE effectivement observable (finite_share/nonzero_share),MEDIUM,FLEX_UP,PASS,finite_share=0.00%; nonzero_share=0.00%; req_defined=100.00%; n_countries=2,nonzero_share >= 20% (scenarios non-BASE),"Delta vs BASE nul/non defini, mais solveur required_lever disponible et interpretable."
+Q1-S-02,Q1,SPEC2-Q1/Slides 5,SCEN,DEFAULT,Effets DEMAND_UP/FLEX_UP/LOW_RIGIDITY,Les leviers scenario modifient la bascule vs BASE.,delta bascule_year_market vs BASE effectivement observable (finite_share/nonzero_share),MEDIUM,LOW_RIGIDITY,PASS,finite_share=0.00%; nonzero_share=0.00%; req_defined=100.00%; n_countries=2,nonzero_share >= 20% (scenarios non-BASE),"Delta vs BASE nul/non defini, mais solveur required_lever disponible et interpretable."
+Q1-S-03,Q1,SPEC2-Q1,SCEN,DEFAULT,Qualite de causalite,Le regime_coherence respecte le seuil d'interpretation.,part regime_coherence >= seuil min,MEDIUM,BASE,PASS,100.00%,>=50% lignes >=0.55,La coherence scenario est lisible.
+Q1-S-03,Q1,SPEC2-Q1,SCEN,DEFAULT,Qualite de causalite,Le regime_coherence respecte le seuil d'interpretation.,part regime_coherence >= seuil min,MEDIUM,DEMAND_UP,PASS,100.00%,>=50% lignes >=0.55,La coherence scenario est lisible.
+Q1-S-03,Q1,SPEC2-Q1,SCEN,DEFAULT,Qualite de causalite,Le regime_coherence respecte le seuil d'interpretation.,part regime_coherence >= seuil min,MEDIUM,FLEX_UP,PASS,100.00%,>=50% lignes >=0.55,La coherence scenario est lisible.
+Q1-S-03,Q1,SPEC2-Q1,SCEN,DEFAULT,Qualite de causalite,Le regime_coherence respecte le seuil d'interpretation.,part regime_coherence >= seuil min,MEDIUM,LOW_RIGIDITY,PASS,100.00%,>=50% lignes >=0.55,La coherence scenario est lisible.
+```
+
+### Q1 - comparaison HIST vs SCEN
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\comparison_hist_vs_scen.csv`
+
+```csv
+country,scenario_id,metric,hist_value,scen_value,delta,scen_status,interpretability_status,interpretability_reason
+DE,BASE,bascule_year_market,2019.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,BASE,bascule_year_market,,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,DEMAND_UP,bascule_year_market,2019.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,DEMAND_UP,bascule_year_market,,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,FLEX_UP,bascule_year_market,2019.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,FLEX_UP,bascule_year_market,,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,LOW_RIGIDITY,bascule_year_market,2019.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,LOW_RIGIDITY,bascule_year_market,,,,,NON_TESTABLE,delta_non_interpretable_nan
+```
+
+### Q1 - checks filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\checks_filtered.csv`
+
+```csv
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2018: capture-only sans low-price ni stress physique.,HIST,,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2021: capture-only sans low-price ni stress physique.,HIST,,Q1,DE,False
+INFO,Q1_CAPTURE_ONLY_SIGNAL,DE 2022: capture-only sans low-price ni stress physique.,HIST,,Q1,DE,False
+WARN,RC_NEG_NOT_IN_AB,DE-2018: seulement 33.8% des heures negatives en regime A/B.,HIST,,Q1,DE,False
+WARN,RC_NEG_NOT_IN_AB,DE-2019: seulement 44.1% des heures negatives en regime A/B.,HIST,,Q1,DE,False
+WARN,RC_NEG_NOT_IN_AB,DE-2020: seulement 36.9% des heures negatives en regime A/B.,HIST,,Q1,DE,False
+WARN,RC_NEG_NOT_IN_AB,DE-2021: seulement 41.0% des heures negatives en regime A/B.,HIST,,Q1,DE,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q1,,True
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,DEMAND_UP,Q1,,True
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,FLEX_UP,Q1,,True
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,LOW_RIGIDITY,Q1,,True
+WARN,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=2",BUNDLE,,Q1,,True
+WARN,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=0.00%,BUNDLE,,Q1,,True
+PASS,Q1_S02_NO_SENSITIVITY,Q1-S-02: au moins un scenario non-BASE montre une sensibilite observable.,BUNDLE,,Q1,,True
+```
+
+### Q1 - warnings filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q1 - historique - Q1_before_after_bascule.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_before_after_bascule.csv`
+
+```csv
+country,bascule_year_market,pre_window_start_year,pre_window_end_year,post_window_start_year,post_window_end_year,n_pre_years,n_post_years,pre_mean_capture_ratio_pv,post_mean_capture_ratio_pv,delta_post_minus_pre_capture_ratio_pv,pre_mean_capture_ratio_wind,post_mean_capture_ratio_wind,delta_post_minus_pre_capture_ratio_wind,pre_mean_h_negative_obs,post_mean_h_negative_obs,delta_post_minus_pre_h_negative_obs,pre_mean_sr_hours_share,post_mean_sr_hours_share,delta_post_minus_pre_sr_hours_share,pre_mean_far_observed,post_mean_far_observed,delta_post_minus_pre_far_observed,pre_mean_ir_p10,post_mean_ir_p10,delta_post_minus_pre_ir_p10
+DE,2019.0,2016.0,2018.0,2019.0,2021.0,1,3,0.9842559576949768,0.8366976959170133,-0.1475582617779636,0.8584477649576012,0.8526122216244832,-0.0058355433331179,133.0,216.0,83.0,0.008904109589041,0.0134557643203499,0.0045516547313088,1.0,0.9958832082455512,-0.0041167917544489,0.3794941270703111,0.2661520433499736,-0.1133420837203375
+ES,,,,,,0,0,,,,,,,,,,,,,,,,,,
+```
+
+### Q1 - historique - Q1_country_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_country_summary.csv`
+
+```csv
+country,bascule_year_market,bascule_year_physical,bascule_confidence,drivers_at_bascule,low_price_flags_count_at_bascule,physical_flags_count_at_bascule,capture_flags_count_at_bascule,stage2_market_score_at_bascule,score_breakdown_at_bascule,required_demand_uplift_to_avoid_phase2,required_demand_uplift_status,required_flex_uplift_to_avoid_phase2,required_flex_uplift_status,bascule_rationale,sr_energy_at_bascule,far_energy_at_bascule,ir_p10_at_bascule,ttl_at_bascule,capture_ratio_pv_vs_ttl_at_bascule,h_negative_at_bascule,notes_quality
+DE,2019.0,,0.8,"low_price_family,value_family,flag_h_negative_stage2,flag_capture_wind_low",1,0,1,2.0,low=1;value=1;physical=0;crisis=0,0.0550537109375,ok,0.06878662109375,ok,Bascule validee: condition candidate (low-price/physical) + score + persistance.,0.000554157034082,0.9876496247366532,0.2843253281938316,58.38,0.5979133739875393,211,ok
+ES,,2023.0,0.0,"low_price_family,value_family,physical_family,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_spread_high",2,1,2,3.0,low=1;value=1;physical=1;crisis=1,0.0,already_not_phase2,0.0,already_not_phase2,Pas de bascule persistante sur la fenetre.,0.0147292050339075,0.9994023008613372,0.2951989701260838,140.0,0.3057226676768919,247,ok
+```
+
+### Q1 - historique - Q1_ir_diagnostics.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_ir_diagnostics.csv`
+
+```csv
+country,year,ir_p10,p10_must_run_mw,p10_load_mw,p50_must_run_mw,p50_load_mw,ir_case_class
+DE,2018,0.3794941270703111,18673.4605,49206.191,24085.081250000003,63728.1,mixed
+DE,2019,0.2843253281938316,12582.043750000004,44252.279,18371.4075,56884.927500000005,mixed
+DE,2020,0.2439759191136415,10407.21625,42656.7355,16086.86375,55683.177500000005,mixed
+DE,2021,0.2701548827424477,12313.61525,45579.836,17753.003750000003,58128.3475,mixed
+DE,2022,0.3104147117931071,13295.2035,42830.4555,18020.7975,55575.7675,mixed
+DE,2023,0.2390462318859233,9778.606000000002,40906.7565,14321.170000000002,52824.7425,mixed
+DE,2024,0.2263046487454366,9425.893,41651.345,14138.20625,53519.9775,mixed
+ES,2018,0.2941978481508908,6753.9,22957.0,7745.0,29172.0,mixed
+ES,2019,0.2913581991978373,6596.0,22638.8,7890.0,28751.0,mixed
+ES,2020,0.3059516604886905,6471.0,21150.4,8122.0,26795.0,mixed
+ES,2021,0.2859684981487956,6379.9,22309.8,7873.0,28039.0,mixed
+ES,2022,0.3049924924924925,6500.0,21312.0,7812.0,27172.0,mixed
+ES,2023,0.2950851393188854,6100.0,20672.0,7672.0,26108.0,mixed
+ES,2024,0.2951989701260838,6237.200000000001,21128.8,7532.0,26556.0,mixed
+```
+
+### Q1 - historique - Q1_rule_application.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_rule_application.csv`
+
+```csv
+country,year,stage2_market_score,score_breakdown,phase2_candidate_year,low_price_flags_count,physical_flags_count,capture_flags_count,active_flags,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_far_low,flag_ir_high,flag_spread_high,flag_capture_only_stage2,is_stage1_criteria,is_phase2_market,is_phase2_physical,phase_market,stress_phys_state
+DE,2018,1,low=0;value=1;physical=0;crisis=0,False,0,0,1,"value_family,flag_capture_wind_low",False,False,False,True,False,False,False,True,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2019,2,low=1;value=1;physical=0;crisis=0,True,1,0,1,"low_price_family,value_family,flag_h_negative_stage2,flag_capture_wind_low",True,False,False,True,False,False,False,False,False,True,False,phase2,pas_de_surplus_structurel
+DE,2020,2,low=1;value=1;physical=0;crisis=0,True,2,0,2,"low_price_family,value_family,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low",True,True,True,True,False,False,False,False,False,True,False,phase2,pas_de_surplus_structurel
+DE,2021,1,low=0;value=1;physical=0;crisis=1,False,0,0,2,"value_family,flag_capture_pv_low,flag_capture_wind_low,flag_spread_high",False,False,True,True,False,False,True,True,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2022,1,low=0;value=1;physical=0;crisis=1,False,0,0,1,"value_family,flag_capture_wind_low,flag_spread_high",False,False,False,True,False,False,True,True,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2023,2,low=1;value=1;physical=0;crisis=1,False,2,0,2,"low_price_family,value_family,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_spread_high",True,True,True,True,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2024,2,low=1;value=1;physical=0;crisis=1,False,2,0,2,"low_price_family,value_family,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_spread_high",True,True,True,True,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2018,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,True,False,False,phase1,pas_de_surplus_structurel
+ES,2019,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,True,False,False,phase1,pas_de_surplus_structurel
+ES,2020,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,True,False,False,phase1,pas_de_surplus_structurel
+ES,2021,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,True,False,False,phase1,pas_de_surplus_structurel
+ES,2022,0,low=0;value=0;physical=0;crisis=1,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2023,3,low=1;value=1;physical=1;crisis=1,False,1,1,2,"low_price_family,value_family,physical_family,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_spread_high",False,True,True,True,False,False,True,False,False,False,True,uncertain,surplus_present_mais_absorbe
+ES,2024,3,low=1;value=1;physical=1;crisis=1,False,2,1,2,"low_price_family,value_family,physical_family,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_spread_high",True,True,True,True,False,False,True,False,False,False,True,uncertain,surplus_present_mais_absorbe
+```
+
+### Q1 - historique - Q1_rule_definition.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_rule_definition.csv`
+
+```csv
+q1_rule_version,h_negative_stage2_min,h_below_5_stage2_min,capture_ratio_pv_stage2_max,capture_ratio_wind_stage2_max,sr_hours_stage2_min,far_stage2_min,ir_p10_stage2_min,days_spread_gt50_stage2_min,avg_daily_spread_crisis_min,stage1_capture_ratio_pv_min,stage1_capture_ratio_wind_min,stage1_sr_hours_max,stage1_far_min,stage1_ir_p10_max,persistence_window_years,rule_logic
+q1_rule_v3_2026_02_11,200.0,500.0,0.9,0.9,0.1,0.95,1.5,150.0,50.0,0.85,0.9,0.05,0.95,1.5,2.0,stage2_candidate=(>=2 familles LOW_PRICE/VALUE/PHYSICAL) sur 2 annees consecutives hors crise; stage1_candidate=(familles toutes inactives) sur 2 annees consecutives hors crise.
+```
+
+### Q1 - historique - Q1_scope_audit.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_scope_audit.csv`
+
+```csv
+country,year,must_run_scope_coverage,lowload_p20_mw,ir_p10,scope_status,scope_reason,load_net_mode,must_run_mode_hourly
+DE,2018,0.4017141172412004,52822.154,0.3794941270703111,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2019,0.3377310973434279,47620.35600000001,0.2843253281938316,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2020,0.3080065720265452,46146.9235,0.2439759191136415,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2021,0.344422009875212,48880.621,0.2701548827424477,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2022,0.3796831972445994,46234.308,0.3104147117931071,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2023,0.331958244672319,43869.6815,0.2390462318859233,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2024,0.347683816688784,44640.7205,0.2263046487454366,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2018,0.3234389381250165,24478.2,0.2941978481508908,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2019,0.324255568153268,24006.6,0.2913581991978373,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2020,0.3403652404135109,22690.4,0.3059516604886905,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2021,0.3217340411446978,23684.6,0.2859684981487956,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2022,0.3052174463487521,22744.800000000003,0.3049924924924925,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2023,0.2999133169869079,21968.0,0.2950851393188854,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2024,0.310927241886381,22372.0,0.2951989701260838,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+```
+
+### Q1 - historique - Q1_year_panel.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\hist\tables\Q1_year_panel.csv`
+
+```csv
+country,year,n_hours_expected,n_hours_with_price,n_hours_with_load,n_hours_with_vre,n_hours_with_must_run,missing_share_price,missing_share_load,missing_share_generation,missing_share_net_position,load_net_mode,must_run_mode,entsoe_code_used,data_version_hash,load_total_twh,load_net_twh,gen_solar_twh,gen_wind_on_twh,gen_wind_off_twh,gen_vre_twh,gen_primary_twh,gen_must_run_twh,exports_twh,vre_penetration_pct_gen,pv_penetration_pct_gen,wind_penetration_pct_gen,vre_penetration_proxy,baseload_price_eur_mwh,peakload_price_eur_mwh,offpeak_price_eur_mwh,capture_rate_pv_eur_mwh,capture_rate_wind_eur_mwh,capture_ratio_pv,capture_ratio_wind,capture_price_pv_eur_mwh,capture_price_wind_eur_mwh,capture_ratio_pv_vs_baseload,capture_ratio_wind_vs_baseload,capture_ratio_pv_vs_ttl,capture_ratio_wind_vs_ttl,h_negative_obs,h_below_5_obs,days_spread_50_obs,days_spread_gt50,avg_daily_spread_obs,max_daily_spread_obs,surplus_twh,surplus_unabsorbed_twh,sr_energy_share_load,sr_energy_share_gen,sr_energy,sr_hours,far_observed,far_energy,ir_p10,ir_mean,ttl_price_based_eur_mwh,ttl_eur_mwh,tca_ccgt_median_eur_mwh,tca_method,h_regime_a,h_regime_b,h_regime_c,h_regime_d,regime_coherence,nrl_price_corr,completeness,quality_flag,h_negative,h_below_5,vre_penetration_share_gen,pv_penetration_share_gen,wind_penetration_share_gen,sr_hours_share,p10_load_mw,p10_must_run_mw,p50_load_mw,p50_must_run_mw,ir_p10_excess,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_far_low,flag_ir_high,flag_spread_high,crisis_year,low_price_family,value_family,physical_family,low_price_flags_count,capture_flags_count,physical_flags_count,family_count,stage2_points_low_price,stage2_points_capture,stage2_points_physical,stage2_points_vol,stage2_market_score,score_breakdown,quality_ok,stage2_candidate_year,phase2_candidate_year,flag_capture_only_stage2,is_phase2_market,is_phase2_physical,signal_low_price,signal_value,signal_physical,flag_non_capture_stage2,active_flags,is_stage1_criteria,stage1_candidate_year,phase_market,stress_phys_state
+DE,2018,8760,8760,8750,8760,8760,0.0,0.0011415525114155,0.0,0.0001141552511415,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",fc4a9d60921bdf9622584b73439596dab0669c58debc359b7973c02885ab6e05,559.9527225899999,559.9527225899999,42.53518894,93.8429561475,19.0654565625,155.44360164999998,575.9773977325,205.2173406475,34.114891,26.987795399949416,7.384871195892748,19.60292420405667,0.2776012962862519,44.47275456621005,52.1181577266922,40.218063255152806,43.77257363689873,38.17753675887097,0.9842559576949768,0.8584477649576012,43.77257363689873,38.17753675887097,0.9842559576949768,0.8584477649576012,0.6055344788089055,0.5281346949178073,133,232,38,38,32.14734972677596,99.53,0.1538916974999999,0.0,0.0002748298048952,0.0002671835702335,0.0002671835702335,0.008904109589041,1.0,1.0,0.3794941270703111,0.3660721093180351,72.28749999999995,72.28749999999995,,none,0,78,7814,868,0.988812785388128,0.6964810903936534,0.9988584474885844,OK,133.0,232.0,0.2698779539994941,0.0738487119589274,0.1960292420405667,0.008904109589041,49206.191,18673.4605,63728.1,24085.081250000003,-0.6205058729296888,False,False,False,True,False,False,False,False,False,False,True,False,0,1,0,1,0,1,0,0,1,low=0;value=1;physical=0;crisis=0,True,False,False,True,False,False,False,True,False,0,"value_family,flag_capture_wind_low",False,False,uncertain,pas_de_surplus_structurel
+DE,2019,8760,8759,8759,8760,8760,0.0001141552511415,0.0001141552511415,0.0,0.0001141552511415,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",2ead0a9da339783edacd7f22b12d41c625e65a2a99af6562cf4fed8867550224,502.4789179925,502.4789179925,41.83308617,99.9897749475,24.3804648275,166.203325945,515.6919337375,156.9665405575,34.1900773,32.229188604994086,8.112030348586776,24.11715825640731,0.3307667645222097,37.669692887315904,44.45564814814815,33.892615958770214,34.906182773392544,32.78952818581776,0.926638368882113,0.8704485137137555,34.906182773392544,32.78952818581776,0.926638368882113,0.8704485137137555,0.5979133739875393,0.5616568719735827,211,335,31,31,29.95035519125683,117.32,0.2857743125,0.0035294199999999,0.0005687289600959,0.000554157034082,0.000554157034082,0.0156392694063926,0.9876496247366532,0.9876496247366532,0.2843253281938316,0.3123486705266795,58.38,58.38,,none,6,131,7760,863,0.9990866537275944,0.813246051355149,0.9997716894977168,OK,211.0,335.0,0.3222918860499408,0.0811203034858677,0.2411715825640731,0.0156392694063926,44252.279,12582.043750000004,56884.927500000005,18371.4075,-0.7156746718061684,True,False,False,True,False,False,False,False,False,True,True,False,1,1,0,2,1,1,0,0,2,low=1;value=1;physical=0;crisis=0,True,True,True,False,True,False,True,True,False,1,"low_price_family,value_family,flag_h_negative_stage2,flag_capture_wind_low",False,False,phase2,pas_de_surplus_structurel
+DE,2020,8784,8783,8783,8784,8784,0.0001138433515482,0.0001138433515482,0.0,0.0001138433515482,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",733a5defd1c10d00b64d81cb5fa9bb20285eaf0bdddb0211a2dd1080991d5985,490.2538991575,490.2538991575,45.93743737,103.4146983125,26.88256224,176.2346979225,493.9259458325,138.029930155,21.1321214,35.680388813238146,9.300470598395796,26.379918214842345,0.3594763819836188,30.47081976545599,37.464856870229006,26.57132470296152,24.511203174738068,25.24537518940176,0.8044156134757428,0.8285098787536335,24.511203174738068,25.24537518940176,0.8044156134757428,0.8285098787536335,0.4429361952860253,0.4562032453178966,298,598,42,42,32.382179836512265,164.57999999999998,0.345342565,0.0,0.0007044157437472,0.0006991788301744,0.0006991788301744,0.0159380692167577,1.0,1.0,0.2439759191136415,0.2815157953915598,55.338,55.338,,none,0,140,7779,865,0.9982921553000114,0.7903113754356191,0.9997723132969034,OK,298.0,598.0,0.3568038881323814,0.0930047059839579,0.2637991821484234,0.0159380692167577,42656.7355,10407.21625,55683.177500000005,16086.86375,-0.7560240808863585,True,True,True,True,False,False,False,False,False,True,True,False,2,2,0,2,1,1,0,0,2,low=1;value=1;physical=0;crisis=0,True,True,True,False,True,False,True,True,False,1,"low_price_family,value_family,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low",False,False,phase2,pas_de_surplus_structurel
+DE,2021,8760,8759,8759,8760,8760,0.0001141552511415,0.0001141552511415,0.0,0.0001141552511415,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",ebf5faacd8e60ed01f73a092174fa747eb7fb51517519a8ad7c85c1342ac6ff9,509.6973813775,509.6973813775,46.4220778,89.86921309,24.0098839125,160.3011748025,504.186187665,150.0659387725,23.4870805,31.79404329676125,9.207328351256727,22.58671494550452,0.3145026454114255,96.86022947825094,115.51968071519796,86.47433979029678,75.45790652091513,83.19114655913475,0.7790391053931841,0.8588782724060605,75.45790652091513,83.19114655913475,0.7790391053931841,0.8588782724060605,0.3018750960974995,0.3328125112381583,139,248,202,202,80.08633879781421,351.21000000000004,0.18532896,0.0,0.0003636058704071,0.0003675803989361,0.0003675803989361,0.0087899543378995,1.0,1.0,0.2701548827424477,0.2943880299169914,249.9639999999992,249.9639999999992,,none,0,77,7814,869,0.9737412946683413,0.5221576401467792,0.9997716894977168,CRISIS,139.0,248.0,0.3179404329676125,0.0920732835125672,0.2258671494550452,0.0087899543378995,45579.836,12313.61525,58128.3475,17753.003750000003,-0.7298451172575522,False,False,True,True,False,False,False,True,True,False,True,False,0,2,0,1,0,1,0,1,1,low=0;value=1;physical=0;crisis=1,True,False,False,True,False,False,False,True,False,0,"value_family,flag_capture_pv_low,flag_capture_wind_low,flag_spread_high",False,False,uncertain,pas_de_surplus_structurel
+DE,2022,8760,8759,8759,8760,8760,0.0001141552511415,0.0001141552511415,0.0,0.0001141552511415,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",8779e3327f0c26a267f8af48323efa726e51ef11fa8e9466e79634f0f6afb9d1,487.2505439075,487.2505439075,55.987503705,101.2674993075,24.7436552725,181.998658285,490.9224705575,152.84826037,28.8383439,37.072790348813975,11.40455103662695,25.66823931218703,0.3735217139532856,235.4667222285649,267.3603493589744,217.82031033871252,222.2697802958073,173.5038161884555,0.9439541103394328,0.7368506876315086,222.2697802958073,173.5038161884555,0.9439541103394328,0.7368506876315086,0.4327589952236369,0.3378117216890906,69,161,358,358,186.4810382513661,687.46,0.9049946575,0.0,0.0018573497122084,0.001843457392513,0.001843457392513,0.042579908675799,1.0,1.0,0.3104147117931071,0.3136596025380003,513.6109999999999,513.6109999999999,,none,0,373,7548,839,0.9733987898161892,0.5909121520525994,0.9997716894977168,CRISIS,69.0,161.0,0.3707279034881398,0.1140455103662695,0.2566823931218703,0.042579908675799,42830.4555,13295.2035,55575.7675,18020.7975,-0.6895852882068929,False,False,False,True,False,False,False,True,True,False,True,False,0,1,0,1,0,1,0,1,1,low=0;value=1;physical=0;crisis=1,True,False,False,True,False,False,False,True,False,0,"value_family,flag_capture_wind_low,flag_spread_high",False,False,uncertain,pas_de_surplus_structurel
+DE,2023,8760,8759,8759,8760,8760,0.0001141552511415,0.0001141552511415,0.0,0.0001141552511415,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",665add90b6dbd1e6064d153dc4fc9879ade96a1336b5746ce7f0ed15e4701e76,463.039837155,463.039837155,55.798730455,119.46608692750002,23.5168147175,198.7816321,444.473392015,128.784043015,16.7474867,44.72295432552947,12.55389669155199,32.169057633977474,0.4292970413114994,95.1827480305971,106.2381314102564,89.06591948927115,72.18210511017934,79.91071132318326,0.7583528171195051,0.8395503699630048,72.18210511017934,79.91071132318326,0.7583528171195051,0.8395503699630048,0.4296438792423975,0.4756462554466297,300,530,340,340,97.58131147540983,594.9,2.5567322000000003,0.0,0.0055216246958555,0.0057522727927743,0.0057522727927743,0.0775114155251141,1.0,1.0,0.2390462318859233,0.2780956006537334,168.00449999999992,168.00449999999992,,none,0,679,7273,808,0.98675647905012,0.8419341186601034,0.9997716894977168,CRISIS,300.0,530.0,0.4472295432552947,0.1255389669155199,0.3216905763397747,0.0775114155251141,40906.7565,9778.606000000002,52824.7425,14321.170000000002,-0.7609537681140767,True,True,True,True,False,False,False,True,True,True,True,False,2,2,0,2,1,1,0,1,2,low=1;value=1;physical=0;crisis=1,True,False,False,False,False,False,True,True,False,1,"low_price_family,value_family,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_spread_high",False,False,uncertain,pas_de_surplus_structurel
+DE,2024,8784,8783,8783,8784,8784,0.0001138433515482,0.0001138433515482,0.0,0.0001138433515482,entsoe_total_load_no_pumping_adjust,observed,"DE_AT_LU,DE_LU",b93be6909a4bd71719b1711c2cd72a4765db54dc541bc67c20b93bca4544aa88,470.357313537993,470.357313537993,63.44404522,112.996908715,25.661745662500003,202.1026995975,428.492190735,123.1954464575,11.7971791,47.1660170167465,14.806348071635412,32.359668945111096,0.4296790839230253,78.51545827166116,87.85491730279898,73.30828338357865,46.22796099131209,65.83122843523844,0.5887752808034911,0.838449266989748,46.22796099131209,65.83122843523844,0.5887752808034911,0.838449266989748,0.3164803003464944,0.4506858295410966,457,756,315,315,110.90152588555858,828.93,2.948435059833,0.0,0.0062685005100804,0.0068809540140638,0.0068809540140638,0.0757058287795992,1.0,1.0,0.2263046487454366,0.2618890318690237,146.069,146.069,,none,0,665,7307,812,0.9939656153933736,0.798724901005636,0.9997723132969034,CRISIS,457.0,756.0,0.471660170167465,0.1480634807163541,0.323596689451111,0.0757058287795992,41651.345,9425.893,53519.9775,14138.20625,-0.7736953512545633,True,True,True,True,False,False,False,True,True,True,True,False,2,2,0,2,1,1,0,1,2,low=1;value=1;physical=0;crisis=1,True,False,False,False,False,False,True,True,False,1,"low_price_family,value_family,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_spread_high",False,False,uncertain,pas_de_surplus_structurel
+ES,2018,8760,8759,8757,8760,8760,0.0001141552511415,0.0003424657534246,0.0,0.0001141552511415,entsoe_total_load_no_pumping_adjust,observed,ES,bf4812e74b6b6f0f9588f795fbd3ecc39b9eb06714642c121e1f300e2a1b750f,254.516312,254.516312,12.023741,48.902871,0.0,60.926612,246.072839,66.932674,1.6264807,24.759584295282583,4.886252805820638,19.873331489461947,0.2393819536407552,57.30006279255623,61.49363026819923,54.96591434156745,59.342028861067455,53.09425838495249,1.0356363670298891,0.926600352554062,59.342028861067455,53.09425838495249,1.0356363670298891,0.926600352554062,0.8037930156251731,0.7191664133954488,0,57,5,5,18.345327868852458,63.3,0.001484,0.0,5.830667544797679e-06,6.030734663893564e-06,6.030734663893564e-06,0.0003424657534246,1.0,1.0,0.2941978481508908,0.2628898372980112,73.82749999999999,73.82749999999999,,none,0,3,7881,876,0.9938349126612628,0.717322385044847,0.9995433789954338,OK,0.0,57.0,0.2475958429528258,0.0488625280582063,0.1987333148946194,0.0003424657534246,22957.0,6753.9,29172.0,7745.0,-0.7058021518491092,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,True,True,phase1,pas_de_surplus_structurel
+ES,2019,8760,8759,8759,8760,8760,0.0001141552511415,0.0001141552511415,0.0,0.0001141552511415,entsoe_total_load_no_pumping_adjust,observed,ES,586a010942020321b15fdadb915addba7ab6e7e6969ee7d40e9b3f149b11363c,249.964346,249.964346,14.421334,52.346548,0.0,66.767882,246.324252,67.57312,2.5393688,27.105687506563505,5.854613941951604,21.2510735646119,0.2671096221058662,47.67961867793127,51.243438697318005,45.69598898169539,48.57853958864,45.65081383781028,1.0188533578001284,0.9574492226159512,48.57853958864,45.65081383781028,1.0188533578001284,0.9574492226159512,0.756474758843297,0.7108836264199555,0,69,2,2,16.83762295081967,55.23,0.003224,0.0,1.2897839438269328e-05,1.308843921710153e-05,1.308843921710153e-05,0.0005707762557077,1.0,1.0,0.2913581991978373,0.2703001738236539,64.217,64.217,,none,0,5,7879,876,0.9956616052060736,0.6819177627648636,0.9997716894977168,OK,0.0,69.0,0.271056875065635,0.058546139419516,0.212510735646119,0.0005707762557077,22638.8,6596.0,28751.0,7890.0,-0.7086418008021627,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,True,True,phase1,pas_de_surplus_structurel
+ES,2020,8784,8783,8783,8784,8784,0.0001138433515482,0.0001138433515482,0.0,0.0001138433515482,entsoe_total_load_no_pumping_adjust,observed,ES,aadf283bd90c9fdd7a58c5c8b1b316a5eeddca6e50f69b1cc7effcd15ec82f04,237.904532,237.904532,20.030933,53.148687,0.0,73.17962,238.656838,69.740548,5.5799319,30.66311471033568,8.393194667231786,22.269920043103895,0.3076007816446304,33.95808038255721,37.37387722646311,32.05361766270615,32.896135604866735,32.37432130900995,0.9687277736041888,0.9533613485890452,32.896135604866735,32.37432130900995,0.9687277736041888,0.9533613485890452,0.6328735759608061,0.6228346314667453,0,60,0,0,16.82008174386921,49.49,0.143823,0.0,0.0006045408163977,0.0006026351526537,0.0006026351526537,0.0159380692167577,1.0,1.0,0.3059516604886905,0.2931117281207441,51.97899999999999,51.97899999999999,,none,0,140,7779,865,0.997609017420016,0.7267869347642084,0.9997723132969034,OK,0.0,60.0,0.3066311471033568,0.0839319466723178,0.222699200431039,0.0159380692167577,21150.4,6471.0,26795.0,8122.0,-0.6940483395113095,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,True,True,phase1,pas_de_surplus_structurel
+ES,2021,8760,8759,8759,8760,8760,0.0001141552511415,0.0001141552511415,0.0,0.0001141552511415,entsoe_total_load_no_pumping_adjust,observed,ES,100694b77bd2a9e8920e497fba215c1e06c075b891317874e8e9cdfd7345d628,243.928617,243.928617,25.354406,59.007867,0.0,84.362273,247.29159,66.875375,6.879464,34.11449333962388,10.252837955386996,23.861655384236883,0.3458481995165003,111.94053088252085,119.24339399744572,107.87574195841478,102.39616733438756,103.78184356536732,0.9147371959656876,0.9271158779324008,102.39616733438756,103.78184356536732,0.9147371959656876,0.9271158779324008,0.4014630714030662,0.4068958707952807,0,202,130,130,49.48653005464481,248.98,0.318652,0.0,0.0013063329916719,0.0012885678805332,0.0012885678805332,0.0231735159817351,1.0,1.0,0.2859684981487956,0.2741283152717243,255.0575,255.0575,,none,0,203,7701,856,0.9588994177417514,0.3751809059748108,0.9997716894977168,OK,0.0,202.0,0.3411449333962388,0.1025283795538699,0.2386165538423688,0.0231735159817351,22309.8,6379.9,28039.0,7873.0,-0.7140315018512045,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,True,True,phase1,pas_de_surplus_structurel
+ES,2022,8760,8759,8759,8760,8760,0.0001141552511415,0.0001141552511415,0.0,0.0028538812785388,entsoe_total_load_no_pumping_adjust,observed,ES,993b2f6bf63272da8ed52aa372e273a53d53ad25106904b3c1c5bb6c86a628d3,236.074608,236.074608,31.0917916,58.8177172,0.0,89.9095088,261.42073980000004,66.9526826,19.3090617,34.39264569015652,11.893391329160332,22.499254360996183,0.3808520940125843,167.52426875214064,170.57403846153846,165.83686291895728,151.07895653475305,160.5904117834413,0.9018332547284886,0.958609835933931,151.07895653475305,160.5904117834413,0.9018332547284886,0.958609835933931,0.5595454736975258,0.5947726943161421,0,114,329,329,94.1781693989071,281.45000000000005,0.626367,0.0,0.0026532586681241,0.0023960111216853,0.0023960111216853,0.0438356164383561,1.0,1.0,0.3049924924924925,0.283575773637219,270.003,270.003,,none,0,384,7538,838,0.950907637858203,0.4786983212559283,0.9997716894977168,CRISIS,0.0,114.0,0.3439264569015652,0.1189339132916033,0.2249925436099618,0.0438356164383561,21312.0,6500.0,27172.0,7812.0,-0.6950075075075075,False,False,False,False,False,False,False,True,True,False,False,False,0,0,0,0,0,0,0,1,0,low=0;value=0;physical=0;crisis=1,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+ES,2023,8760,8759,8759,8760,8760,0.0001141552511415,0.0001141552511415,0.0,0.0001141552511415,entsoe_total_load_no_pumping_adjust,observed,ES,47d6bf442268d0ea68a7fc82f3687b7f79f3cb6586c171c8bc47168d36d8f00f,229.124044,229.124044,40.4262,61.05184,0.0,101.47804,244.850968,64.702416,13.4488946,41.44481879279317,16.51053305208906,24.93428574070412,0.4428956395340159,87.11351866651445,87.7176858974359,86.77923922681326,73.07910508828432,76.31964002657413,0.8388951130311212,0.8760941033588467,73.07910508828432,76.31964002657413,0.8388951130311212,0.8760941033588467,0.4893864853763817,0.5110872711519215,0,558,273,273,73.0756830601093,190.0,2.818976,0.0012438,0.012303274465599,0.0115130277941151,0.0115130277941151,0.1315068493150684,0.9995587759526864,0.9995587759526864,0.2950851393188854,0.2823581006603221,149.328,149.328,,none,3,1149,6847,761,0.9366366023518666,0.7478810502523656,0.9997716894977168,CRISIS,0.0,558.0,0.4144481879279317,0.1651053305208905,0.2493428574070411,0.1315068493150684,20672.0,6100.0,26108.0,7672.0,-0.7049148606811145,False,True,True,True,True,False,False,True,True,True,True,True,1,2,1,3,1,1,1,1,3,low=1;value=1;physical=1;crisis=1,True,False,False,False,False,True,True,True,True,2,"low_price_family,value_family,physical_family,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_spread_high",False,False,uncertain,surplus_present_mais_absorbe
+ES,2024,8784,8783,8783,8784,8784,0.0001138433515482,0.0001138433515482,0.0,0.0001138433515482,entsoe_total_load_no_pumping_adjust,observed,ES,660eff69331b9d10038666327666bba9968b079ac4f8085b82a208d451a26b9e,232.02486,232.02486,47.252452,58.9115,0.0,106.163952,242.172744,64.546884,12.3539402,43.83810921347945,19.5118786778086,24.32623053567085,0.4575542120788264,63.03954912899921,60.2145038167939,64.6146408937755,42.80117347476487,55.60947301426717,0.6789574809169381,0.8821362744913085,42.80117347476487,55.60947301426717,0.6789574809169381,0.8821362744913085,0.3057226676768919,0.3972105215304798,247,1690,271,271,71.06787465940056,173.81,3.567012,0.002132,0.0153734043843405,0.0147292050339075,0.0147292050339075,0.1691712204007286,0.9994023008613372,0.9994023008613372,0.2951989701260838,0.2781578481133162,140.0,140.0,,none,5,1481,6568,730,0.9461459637936924,0.693152070717716,0.9997723132969034,CRISIS,247.0,1690.0,0.4383810921347945,0.1951187867780859,0.2432623053567085,0.1691712204007286,21128.8,6237.200000000001,26556.0,7532.0,-0.7048010298739161,True,True,True,True,True,False,False,True,True,True,True,True,2,2,1,3,1,1,1,1,3,low=1;value=1;physical=1;crisis=1,True,False,False,False,False,True,True,True,True,2,"low_price_family,value_family,physical_family,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_spread_high",False,False,uncertain,surplus_present_mais_absorbe
+```
+
+### Q1 - scénario `BASE`
+
+### Q1/BASE - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q1,,True
+```
+
+### Q1/BASE - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q1/BASE - Q1_before_after_bascule.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_before_after_bascule.csv`
+
+```csv
+country,bascule_year_market,pre_window_start_year,pre_window_end_year,post_window_start_year,post_window_end_year,n_pre_years,n_post_years,pre_mean_capture_ratio_pv,post_mean_capture_ratio_pv,delta_post_minus_pre_capture_ratio_pv,pre_mean_capture_ratio_wind,post_mean_capture_ratio_wind,delta_post_minus_pre_capture_ratio_wind,pre_mean_h_negative_obs,post_mean_h_negative_obs,delta_post_minus_pre_h_negative_obs,pre_mean_sr_hours_share,post_mean_sr_hours_share,delta_post_minus_pre_sr_hours_share,pre_mean_far_observed,post_mean_far_observed,delta_post_minus_pre_far_observed,pre_mean_ir_p10,post_mean_ir_p10,delta_post_minus_pre_ir_p10
+DE,,,,,,0,0,,,,,,,,,,,,,,,,,,
+ES,,,,,,0,0,,,,,,,,,,,,,,,,,,
+```
+
+### Q1/BASE - Q1_country_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_country_summary.csv`
+
+```csv
+country,bascule_year_market,bascule_year_physical,bascule_confidence,drivers_at_bascule,low_price_flags_count_at_bascule,physical_flags_count_at_bascule,capture_flags_count_at_bascule,stage2_market_score_at_bascule,score_breakdown_at_bascule,required_demand_uplift_to_avoid_phase2,required_demand_uplift_status,required_flex_uplift_to_avoid_phase2,required_flex_uplift_status,bascule_rationale,sr_energy_at_bascule,far_energy_at_bascule,ir_p10_at_bascule,ttl_at_bascule,capture_ratio_pv_vs_ttl_at_bascule,h_negative_at_bascule,notes_quality
+DE,,,0.0,,0,0,0,0.0,low=0;value=0;physical=0;crisis=0,0.0,already_not_phase2,0.0,already_not_phase2,Pas de bascule persistante sur la fenetre.,0.0,,0.0464272339042977,213.44506961818823,0.5996655238082546,0,ok
+ES,,,0.0,flag_spread_high,0,0,0,0.0,low=0;value=0;physical=0;crisis=0,0.0,already_not_phase2,0.0,already_not_phase2,Pas de bascule persistante sur la fenetre.,0.0,,0.0861614439054861,167.09627253158976,0.5709691825648695,0,ok
+```
+
+### Q1/BASE - Q1_ir_diagnostics.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_ir_diagnostics.csv`
+
+```csv
+country,year,ir_p10,p10_must_run_mw,p10_load_mw,p50_must_run_mw,p50_load_mw,ir_case_class
+DE,2025,0.0552705101068276,2355.646431232241,42620.312833719305,2586.265437959775,54781.97026983656,must_run_floor_effect
+DE,2030,0.0506960470239481,,,,,mixed
+DE,2035,0.0464272339042977,2355.646431232241,50738.46174183076,2586.265437959775,65216.62366774449,must_run_floor_effect
+ES,2025,0.102573147506531,2194.3088333300398,21392.62454815791,2648.9347173362,26877.445663145587,mixed
+ES,2030,0.0944955713769326,,,,,mixed
+ES,2035,0.0861614439054861,2194.3088333300398,25467.410176378464,2648.9347173362,31996.959122792367,mixed
+```
+
+### Q1/BASE - Q1_rule_application.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_rule_application.csv`
+
+```csv
+country,year,stage2_market_score,score_breakdown,phase2_candidate_year,low_price_flags_count,physical_flags_count,capture_flags_count,active_flags,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_far_low,flag_ir_high,flag_spread_high,flag_capture_only_stage2,is_stage1_criteria,is_phase2_market,is_phase2_physical,phase_market,stress_phys_state
+DE,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+```
+
+### Q1/BASE - Q1_rule_definition.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_rule_definition.csv`
+
+```csv
+q1_rule_version,h_negative_stage2_min,h_below_5_stage2_min,capture_ratio_pv_stage2_max,capture_ratio_wind_stage2_max,sr_hours_stage2_min,far_stage2_min,ir_p10_stage2_min,days_spread_gt50_stage2_min,avg_daily_spread_crisis_min,stage1_capture_ratio_pv_min,stage1_capture_ratio_wind_min,stage1_sr_hours_max,stage1_far_min,stage1_ir_p10_max,persistence_window_years,rule_logic
+q1_rule_v3_2026_02_11,200.0,500.0,0.9,0.9,0.1,0.95,1.5,150.0,50.0,0.85,0.9,0.05,0.95,1.5,2.0,stage2_candidate=(>=2 familles LOW_PRICE/VALUE/PHYSICAL) sur 2 annees consecutives hors crise; stage1_candidate=(familles toutes inactives) sur 2 annees consecutives hors crise.
+```
+
+### Q1/BASE - Q1_scope_audit.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_scope_audit.csv`
+
+```csv
+country,year,must_run_scope_coverage,lowload_p20_mw,ir_p10,scope_status,scope_reason,load_net_mode,must_run_mode_hourly
+DE,2025,0.1709318942627733,45686.423536464215,0.0552705101068276,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2030,0.1630177569356392,49857.25699930128,0.0506960470239481,INFO,coverage_coherent,minus_psh_pump,observed
+DE,2035,0.1565319648867515,54388.59310511726,0.0464272339042977,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2025,0.2267026266933298,22647.91767894136,0.102573147506531,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2030,0.2175660633095811,24647.23053829461,0.0944955713769326,INFO,coverage_coherent,minus_psh_pump,observed
+ES,2035,0.2124809026310437,26961.806760644475,0.0861614439054861,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+```
+
+### Q1/BASE - Q1_year_panel.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\BASE\tables\Q1_year_panel.csv`
+
+```csv
+country,year,n_hours_expected,n_hours_with_price,n_hours_with_load,n_hours_with_vre,n_hours_with_must_run,missing_share_price,missing_share_load,missing_share_generation,missing_share_net_position,load_net_mode,must_run_mode,entsoe_code_used,data_version_hash,load_total_twh,load_net_twh,gen_solar_twh,gen_wind_on_twh,gen_wind_off_twh,gen_vre_twh,gen_primary_twh,gen_must_run_twh,exports_twh,vre_penetration_pct_gen,pv_penetration_pct_gen,wind_penetration_pct_gen,vre_penetration_proxy,baseload_price_eur_mwh,peakload_price_eur_mwh,offpeak_price_eur_mwh,capture_rate_pv_eur_mwh,capture_rate_wind_eur_mwh,capture_ratio_pv,capture_ratio_wind,capture_price_pv_eur_mwh,capture_price_wind_eur_mwh,capture_ratio_pv_vs_baseload,capture_ratio_wind_vs_baseload,capture_ratio_pv_vs_ttl,capture_ratio_wind_vs_ttl,h_negative,h_negative_obs,h_below_5,h_below_5_obs,days_spread_50_obs,days_spread_gt50,avg_daily_spread_obs,max_daily_spread_obs,surplus_twh,surplus_unabsorbed_twh,sr_energy_share_load,sr_energy_share_gen,sr_energy,sr_hours,far_observed,far_energy,ir_p10,ir_mean,ttl_price_based_eur_mwh,ttl_eur_mwh,tca_ccgt_median_eur_mwh,tca_method,h_regime_a,h_regime_b,h_regime_c,h_regime_d,regime_coherence,nrl_price_corr,completeness,quality_flag,scenario_id,mode,horizon_year,calib_mustrun_scale,calib_vre_scale_pv,calib_vre_scale_wind_on,calib_vre_scale_wind_off,calib_export_cap_eff_gw,calib_export_coincidence_used,calib_flex_realization_factor,calib_price_b_floor,calib_price_b_intercept,calib_price_b_slope_surplus_norm,vre_penetration_share_gen,pv_penetration_share_gen,wind_penetration_share_gen,sr_hours_share,p10_load_mw,p10_must_run_mw,p50_load_mw,p50_must_run_mw,ir_p10_excess,must_run_scope_coverage,core_sanity_issue_count,core_sanity_issues,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_far_low,flag_ir_high,flag_spread_high,crisis_year,low_price_family,value_family,physical_family,low_price_flags_count,capture_flags_count,physical_flags_count,family_count,stage2_points_low_price,stage2_points_capture,stage2_points_physical,stage2_points_vol,stage2_market_score,score_breakdown,quality_ok,stage2_candidate_year,phase2_candidate_year,flag_capture_only_stage2,is_phase2_market,is_phase2_physical,signal_low_price,signal_value,signal_physical,flag_non_capture_stage2,active_flags,is_stage1_criteria,stage1_candidate_year,phase_market,stress_phys_state
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,5f11be867d20978ee3bb435bae265e1b036c3e37b66965d74a6f42d936314a4c,480.1727000000001,480.1727000000001,31.6974537475,93.72828455868506,19.943855546237707,145.36959385242278,169.71354795717278,22.6446,3.4586516,85.6558569437879,18.67703205138275,66.97882489240514,0.3027443956152083,121.26224202715036,125.28668552736826,119.0226263479246,116.70794685121577,116.19498788609418,0.9624425946626084,0.95821243235861,116.70794685121577,116.19498788609418,0.9624425946626084,0.95821243235861,0.5947668981791557,0.592152757318915,0,0,0,0,121,121,31.01223866591052,91.3878440192006,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0552705101068276,0.0471592824831565,196.2246843402186,196.2246843402186,,none,0,0,7884,876,1.0,0.6702923995696501,1.0,OK,BASE,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,1.65,0.45,0.8914973010374386,-26.5825,0.105,-21.08173750012614,0.856558569437879,0.1867703205138275,0.6697882489240514,0.0,42620.312833719305,2355.646431232241,54781.97026983656,2586.265437959775,-0.9447294898931724,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:BASE,3c673d51e6f45cac5ae37faaed11ee61d33aef687f7d60b6535c9c52727efc1f,525.9034,524.423312869,31.6974537475,98.74950692264126,21.756967075256217,152.20392774539746,176.5478818501475,22.6446,3.4586516,0.8621113215880268,0.1795402664440038,0.6825710551440229,0.2902310481063944,126.8851482532473,134.8957779383934,122.4272072131127,122.4715392464344,121.69258827712454,0.9652157162002613,0.959076692208618,122.4715392464344,121.69258827712454,0.9652157162002613,0.959076692208618,0.5978761206044051,0.5940734723602696,0,0,0,0,121,121,32.443118408552564,95.37989405474896,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0506960470239481,0.0431800025748599,204.8443398652976,204.8443398652976,,none,0,0,7884,876,1.0,0.6729421509073772,1.0,OK,BASE,SCEN,2030,9425.893,21.1595,38.4164,5.8601,1.65,0.45,0.8914973010374386,-26.5825,0.105,-21.08173750012614,,,,,,,,,,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,e156a00ab07a5a5d04bd1e173d33ab33775038e80256343987abe07018c0d154,571.6341,571.6341,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,185.8704736576352,22.6446,3.4586516,86.90273198012588,18.3922228147874,68.51050916533849,0.2825697759333902,132.52128607491684,144.02080926995404,126.12176463801984,127.9956494768802,127.23516333548925,0.9658497383169206,0.9601111421719885,127.9956494768802,127.23516333548925,0.9658497383169206,0.9601111421719885,0.5996655238082546,0.5961026111452854,0,0,0,0,121,121,33.773809686030425,99.21549071761106,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0464272339042977,0.0396138019057995,213.44506961818823,213.44506961818823,,none,0,0,7884,876,1.0,0.6767959000871794,1.0,OK,BASE,SCEN,2035,9425.893,22.8523,40.3698,6.34845,1.65,0.45,0.8914973010374386,-26.5825,0.105,-21.08173750012614,0.8690273198012588,0.1839222281478739,0.6851050916533848,0.0,50738.46174183076,2355.646431232241,65216.62366774449,2586.265437959775,-0.9535727660957022,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,8eb53f8f094110a49439a85b319d06df45d57559860ce8f142dbf0a32450fffd,234.2802,234.2802,28.61313144524133,43.94530341930337,0.0,72.5584348645447,115.73429566454467,22.644600000000004,6.6676834000000005,62.69397886591454,24.723122287084507,37.97085657883004,0.3097079260839998,95.29191913310169,92.5993792683497,96.79032617937092,89.09658218346348,92.85001380188986,0.9349857049160204,0.97437447630999,89.09658218346348,92.85001380188986,0.9349857049160204,0.97437447630999,0.571299975376471,0.5953675135315121,0,0,0,0,195,195,39.25075237435021,76.30446300965609,0.0,0.0,0.0,0.0,0.0,0.0,,,0.102573147506531,0.0966560554413049,155.9541152172311,155.9541152172311,,none,0,0,7884,876,1.0,0.7144035890581533,1.0,OK,BASE,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,1.65,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6269397886591453,0.247231222870845,0.3797085657883003,0.0,21392.62454815791,2194.3088333300398,26877.445663145587,2648.9347173362,-0.8974268524934689,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:BASE,f4745b5be052577b9c5a1b8dffadc62e0e29186528f69bdfb370d4d96195da76,256.5926,255.23969,31.101249710331462,46.29946036015223,0.0,77.4007100704837,120.57657087048368,22.644600000000004,6.6676834000000005,0.6419216395996451,0.2579377526313848,0.3839838869682602,0.3032471559203182,98.661156887314,97.31064458352448,99.4127213037086,92.13420270147232,96.198776191184,0.933844743040096,0.9750420451795188,92.13420270147232,96.198776191184,0.933844743040096,0.9750420451795188,0.5703919152839889,0.5955552074125496,0,0,0,0,197,197,41.31304690736875,79.58802578261405,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0944955713769326,0.0887189605973898,161.5278902675193,161.5278902675193,,none,0,0,7884,876,1.0,0.7162492897942901,1.0,OK,BASE,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,1.65,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:BASE,664cc79770c57b288405962c0cb91f77215c9dbe6006f9339d9c94ef99fb8761,278.905,278.905,33.5893679754216,48.65361730100112,0.0,82.24298527642273,125.41884607642272,22.644600000000004,6.6676834000000005,65.57466269966221,26.781754916605,38.7929077830572,0.2948781315373433,102.18095820676898,102.37194419919388,102.07467389115511,95.40682213699849,99.73814506791584,0.9337045160991476,0.9760932645208712,95.40682213699849,99.73814506791584,0.9337045160991476,0.9760932645208712,0.5709691825648695,0.5968903049531534,0,0,0,0,195,195,42.42154942427352,82.58112308465482,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0861614439054861,0.0811910865706961,167.09627253158976,167.09627253158976,,none,0,0,7884,876,1.0,0.7206055615416163,1.0,OK,BASE,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,1.65,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6557466269966221,0.26781754916605,0.387929077830572,0.0,25467.410176378464,2194.3088333300398,31996.959122792367,2648.9347173362,-0.913838556094514,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+```
+
+### Q1 - scénario `DEMAND_UP`
+
+### Q1/DEMAND_UP - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q1,,True
+```
+
+### Q1/DEMAND_UP - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q1/DEMAND_UP - Q1_before_after_bascule.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_before_after_bascule.csv`
+
+```csv
+country,bascule_year_market,pre_window_start_year,pre_window_end_year,post_window_start_year,post_window_end_year,n_pre_years,n_post_years,pre_mean_capture_ratio_pv,post_mean_capture_ratio_pv,delta_post_minus_pre_capture_ratio_pv,pre_mean_capture_ratio_wind,post_mean_capture_ratio_wind,delta_post_minus_pre_capture_ratio_wind,pre_mean_h_negative_obs,post_mean_h_negative_obs,delta_post_minus_pre_h_negative_obs,pre_mean_sr_hours_share,post_mean_sr_hours_share,delta_post_minus_pre_sr_hours_share,pre_mean_far_observed,post_mean_far_observed,delta_post_minus_pre_far_observed,pre_mean_ir_p10,post_mean_ir_p10,delta_post_minus_pre_ir_p10
+DE,,,,,,0,0,,,,,,,,,,,,,,,,,,
+ES,,,,,,0,0,,,,,,,,,,,,,,,,,,
+```
+
+### Q1/DEMAND_UP - Q1_country_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_country_summary.csv`
+
+```csv
+country,bascule_year_market,bascule_year_physical,bascule_confidence,drivers_at_bascule,low_price_flags_count_at_bascule,physical_flags_count_at_bascule,capture_flags_count_at_bascule,stage2_market_score_at_bascule,score_breakdown_at_bascule,required_demand_uplift_to_avoid_phase2,required_demand_uplift_status,required_flex_uplift_to_avoid_phase2,required_flex_uplift_status,bascule_rationale,sr_energy_at_bascule,far_energy_at_bascule,ir_p10_at_bascule,ttl_at_bascule,capture_ratio_pv_vs_ttl_at_bascule,h_negative_at_bascule,notes_quality
+DE,,,0.0,,0,0,0,0.0,low=0;value=0;physical=0;crisis=0,0.0,already_not_phase2,0.0,already_not_phase2,Pas de bascule persistante sur la fenetre.,0.0,,0.0422065769478611,217.16247335587352,0.5985579624956839,0,ok
+ES,,,0.0,flag_spread_high,0,0,0,0.0,low=0;value=0;physical=0;crisis=0,0.0,already_not_phase2,0.0,already_not_phase2,Pas de bascule persistante sur la fenetre.,0.0,,0.0783285981342278,170.36119422403377,0.5706116038386401,0,ok
+```
+
+### Q1/DEMAND_UP - Q1_ir_diagnostics.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_ir_diagnostics.csv`
+
+```csv
+country,year,ir_p10,p10_must_run_mw,p10_load_mw,p50_must_run_mw,p50_load_mw,ir_case_class
+DE,2025,0.0502459249379299,2355.646431232241,46882.337903864405,2586.265437959775,60260.15931065623,must_run_floor_effect
+DE,2030,0.0460630370874062,,,,,mixed
+DE,2035,0.0422065769478611,2355.646431232241,55812.30702841001,2586.265437959775,71738.28489363837,must_run_floor_effect
+ES,2025,0.0932483412436106,2194.3088333300398,23531.880611124467,2648.9347173362,29565.18219881481,mixed
+ES,2030,0.0858355216446282,,,,,mixed
+ES,2035,0.0783285981342278,2194.3088333300398,28014.14662840971,2648.9347173362,35196.64929889636,mixed
+```
+
+### Q1/DEMAND_UP - Q1_rule_application.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_rule_application.csv`
+
+```csv
+country,year,stage2_market_score,score_breakdown,phase2_candidate_year,low_price_flags_count,physical_flags_count,capture_flags_count,active_flags,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_far_low,flag_ir_high,flag_spread_high,flag_capture_only_stage2,is_stage1_criteria,is_phase2_market,is_phase2_physical,phase_market,stress_phys_state
+DE,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+```
+
+### Q1/DEMAND_UP - Q1_rule_definition.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_rule_definition.csv`
+
+```csv
+q1_rule_version,h_negative_stage2_min,h_below_5_stage2_min,capture_ratio_pv_stage2_max,capture_ratio_wind_stage2_max,sr_hours_stage2_min,far_stage2_min,ir_p10_stage2_min,days_spread_gt50_stage2_min,avg_daily_spread_crisis_min,stage1_capture_ratio_pv_min,stage1_capture_ratio_wind_min,stage1_sr_hours_max,stage1_far_min,stage1_ir_p10_max,persistence_window_years,rule_logic
+q1_rule_v3_2026_02_11,200.0,500.0,0.9,0.9,0.1,0.95,1.5,150.0,50.0,0.85,0.9,0.05,0.95,1.5,2.0,stage2_candidate=(>=2 familles LOW_PRICE/VALUE/PHYSICAL) sur 2 annees consecutives hors crise; stage1_candidate=(familles toutes inactives) sur 2 annees consecutives hors crise.
+```
+
+### Q1/DEMAND_UP - Q1_scope_audit.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_scope_audit.csv`
+
+```csv
+country,year,must_run_scope_coverage,lowload_p20_mw,ir_p10,scope_status,scope_reason,load_net_mode,must_run_mode_hourly
+DE,2025,0.1709318942627733,50255.05922990348,0.0502459249379299,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2030,0.1633228552275074,54856.49580205704,0.0460630370874062,INFO,coverage_coherent,minus_psh_pump,observed
+DE,2035,0.1565319648867515,59827.451464170816,0.0422065769478611,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2025,0.2267026266933298,24912.702679920338,0.0932483412436106,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2030,0.2177690428275797,27125.294546534587,0.0858355216446282,INFO,coverage_coherent,minus_psh_pump,observed
+ES,2035,0.2124809026310437,29657.98260319809,0.0783285981342278,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+```
+
+### Q1/DEMAND_UP - Q1_year_panel.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\DEMAND_UP\tables\Q1_year_panel.csv`
+
+```csv
+country,year,n_hours_expected,n_hours_with_price,n_hours_with_load,n_hours_with_vre,n_hours_with_must_run,missing_share_price,missing_share_load,missing_share_generation,missing_share_net_position,load_net_mode,must_run_mode,entsoe_code_used,data_version_hash,load_total_twh,load_net_twh,gen_solar_twh,gen_wind_on_twh,gen_wind_off_twh,gen_vre_twh,gen_primary_twh,gen_must_run_twh,exports_twh,vre_penetration_pct_gen,pv_penetration_pct_gen,wind_penetration_pct_gen,vre_penetration_proxy,baseload_price_eur_mwh,peakload_price_eur_mwh,offpeak_price_eur_mwh,capture_rate_pv_eur_mwh,capture_rate_wind_eur_mwh,capture_ratio_pv,capture_ratio_wind,capture_price_pv_eur_mwh,capture_price_wind_eur_mwh,capture_ratio_pv_vs_baseload,capture_ratio_wind_vs_baseload,capture_ratio_pv_vs_ttl,capture_ratio_wind_vs_ttl,h_negative,h_negative_obs,h_below_5,h_below_5_obs,days_spread_50_obs,days_spread_gt50,avg_daily_spread_obs,max_daily_spread_obs,surplus_twh,surplus_unabsorbed_twh,sr_energy_share_load,sr_energy_share_gen,sr_energy,sr_hours,far_observed,far_energy,ir_p10,ir_mean,ttl_price_based_eur_mwh,ttl_eur_mwh,tca_ccgt_median_eur_mwh,tca_method,h_regime_a,h_regime_b,h_regime_c,h_regime_d,regime_coherence,nrl_price_corr,completeness,quality_flag,scenario_id,mode,horizon_year,calib_mustrun_scale,calib_vre_scale_pv,calib_vre_scale_wind_on,calib_vre_scale_wind_off,calib_export_cap_eff_gw,calib_export_coincidence_used,calib_flex_realization_factor,calib_price_b_floor,calib_price_b_intercept,calib_price_b_slope_surplus_norm,vre_penetration_share_gen,pv_penetration_share_gen,wind_penetration_share_gen,sr_hours_share,p10_load_mw,p10_must_run_mw,p50_load_mw,p50_must_run_mw,ir_p10_excess,must_run_scope_coverage,core_sanity_issue_count,core_sanity_issues,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_far_low,flag_ir_high,flag_spread_high,crisis_year,low_price_family,value_family,physical_family,low_price_flags_count,capture_flags_count,physical_flags_count,family_count,stage2_points_low_price,stage2_points_capture,stage2_points_physical,stage2_points_vol,stage2_market_score,score_breakdown,quality_ok,stage2_candidate_year,phase2_candidate_year,flag_capture_only_stage2,is_phase2_market,is_phase2_physical,signal_low_price,signal_value,signal_physical,flag_non_capture_stage2,active_flags,is_stage1_criteria,stage1_candidate_year,phase_market,stress_phys_state
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,da1fece779c1800aa7655fa17a5c59013ab071d473f63093304fdc287b39cc4c,528.1899,528.1899,31.6974537475,93.72828455868506,19.943855546237707,145.36959385242278,169.71354795717278,22.6446,3.4586516,85.6558569437879,18.67703205138275,66.97882489240514,0.2752222143066779,122.831338469328,127.3586932764439,120.31185103935518,118.37156813306056,117.97500875251843,0.9636919177805664,0.9604634307716006,118.37156813306056,117.97500875251843,0.9636919177805664,0.9604634307716006,0.5939778881468974,0.591987988823147,0,0,0,0,121,121,31.811525180597176,93.39900578524114,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0502459249379299,0.0428720806664421,199.28615272591756,199.28615272591756,,none,0,0,7884,876,1.0,0.676034076936789,1.0,OK,DEMAND_UP,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,1.65,0.45,0.8914973010374386,-26.5825,0.105,-21.08173750012614,0.856558569437879,0.1867703205138275,0.6697882489240514,0.0,46882.337903864405,2355.646431232241,60260.15931065623,2586.265437959775,-0.94975407506207,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:DEMAND_UP,27e465e68b67d2c941180cca1c2006df1d46a847b0eea49f89f4e65ebffd0689,578.4937000000001,577.0136128690001,31.6974537475,98.74950692264126,21.756967075256217,152.20392774539746,176.5478818501475,22.6446,3.4586516,0.8621113215880268,0.1795402664440038,0.6825710551440229,0.2637787468975233,128.6041244627808,137.37106632026098,123.72529327983342,124.33686924114802,123.64805811999652,0.9668186752216664,0.9614626174433574,124.33686924114802,123.64805811999652,0.9668186752216664,0.9614626174433574,0.5971518379471358,0.5938436894510023,0,0,0,0,119,119,32.89345644125173,97.58259643274272,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0460630370874062,0.0392444814038399,208.21650598713427,208.21650598713427,,none,0,0,7884,876,1.0,0.6782905135897174,1.0,OK,DEMAND_UP,SCEN,2030,9425.893,21.1595,38.4164,5.8601,1.65,0.45,0.8914973010374386,-26.5825,0.105,-21.08173750012614,,,,,,,,,,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,6a172982e72f6968a7d64c3a36b638ab33e3f3aad1f920a6ff050c497168cf5e,628.7975,628.7975,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,185.8704736576352,22.6446,3.4586516,86.90273198012588,18.3922228147874,68.51050916533849,0.2568816185701838,134.39006079713556,146.8435918894391,127.45963091421184,129.9843275824149,129.3655310745405,0.9672168225195522,0.9626123413235174,129.9843275824149,129.3655310745405,0.9672168225195522,0.9626123413235174,0.5985579624956839,0.5957084991500518,0,0,0,0,119,119,34.291086266844395,101.60973370755808,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0422065769478611,0.0360125477598113,217.16247335587352,217.16247335587352,,none,0,0,7884,876,1.0,0.6818934043118587,1.0,OK,DEMAND_UP,SCEN,2035,9425.893,22.8523,40.3698,6.34845,1.65,0.45,0.8914973010374386,-26.5825,0.105,-21.08173750012614,0.8690273198012588,0.1839222281478739,0.6851050916533848,0.0,55812.30702841001,2355.646431232241,71738.28489363837,2586.265437959775,-0.9577934230521388,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,29e11465fad24754b08665a46822eda1e86d36490aa72bfcfc613b7d4c372a38,257.70815000000005,257.70815000000005,28.61313144524133,43.94530341930337,0.0,72.5584348645447,115.73429566454467,22.644600000000004,6.6676834000000005,62.69397886591454,24.723122287084507,37.97085657883004,0.2815527365531307,96.70763158365578,94.01346700404808,98.20694278893856,90.603932900698,94.3748029958919,0.9368850360307104,0.9758775129784262,90.603932900698,94.3748029958919,0.9368850360307104,0.9758775129784262,0.5710054150928136,0.5947702470932872,0,0,0,0,193,193,39.85854167042527,78.56552568680506,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0932483412436106,0.0878691651777407,158.6743847008366,158.6743847008366,,none,0,0,7884,876,1.0,0.7193047676590574,1.0,OK,DEMAND_UP,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,1.65,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6269397886591453,0.247231222870845,0.3797085657883003,0.0,23531.880611124467,2194.3088333300398,29565.18219881481,2648.9347173362,-0.9067516587563892,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:DEMAND_UP,08c732c86e912850ebbc702d88571c992a2db19749593b78709c89775e2b5540,282.2518,280.89889,31.101249710331462,46.29946036015223,0.0,77.4007100704837,120.57657087048368,22.644600000000004,6.6676834000000005,0.6419216395996451,0.2579377526313848,0.3839838869682602,0.2755465145144706,100.2119227992864,99.0544876129467,100.85603918230272,93.77119541313095,97.87297645108453,0.9357289311866064,0.9766599993008164,93.77119541313095,97.87297645108453,0.9357289311866064,0.9766599993008164,0.5700742879112846,0.5950107291508077,0,0,0,0,195,195,42.00899188617949,82.0703956245834,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0858355216446282,0.080614772098245,164.48943129272254,164.48943129272254,,none,0,0,7884,876,1.0,0.7213663787266826,1.0,OK,DEMAND_UP,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,1.65,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:DEMAND_UP,cdd2d2440988283b068e3155ab7d13d880fbf474019a79c135cc02c31b5a6bc0,306.79545,306.79545,33.5893679754216,48.65361730100112,0.0,82.24298527642273,125.41884607642272,22.644600000000004,6.6676834000000005,65.57466269966221,26.781754916605,38.7929077830572,0.268071072359198,103.86677468049072,104.4171520395286,103.56048791991743,97.21007426804198,101.53067810272398,0.9359111666562698,0.9775087212927048,97.21007426804198,101.53067810272398,0.9359111666562698,0.9775087212927048,0.5706116038386401,0.5959730357912724,0,0,0,0,195,195,43.56131820351032,85.2848000914446,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0783285981342278,0.0738100907298332,170.36119422403377,170.36119422403377,,none,0,0,7884,876,1.0,0.7254620423276266,1.0,OK,DEMAND_UP,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,1.65,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6557466269966221,0.26781754916605,0.387929077830572,0.0,28014.14662840971,2194.3088333300398,35196.64929889636,2648.9347173362,-0.921671401865772,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+```
+
+### Q1 - scénario `FLEX_UP`
+
+### Q1/FLEX_UP - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q1,,True
+```
+
+### Q1/FLEX_UP - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q1/FLEX_UP - Q1_before_after_bascule.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_before_after_bascule.csv`
+
+```csv
+country,bascule_year_market,pre_window_start_year,pre_window_end_year,post_window_start_year,post_window_end_year,n_pre_years,n_post_years,pre_mean_capture_ratio_pv,post_mean_capture_ratio_pv,delta_post_minus_pre_capture_ratio_pv,pre_mean_capture_ratio_wind,post_mean_capture_ratio_wind,delta_post_minus_pre_capture_ratio_wind,pre_mean_h_negative_obs,post_mean_h_negative_obs,delta_post_minus_pre_h_negative_obs,pre_mean_sr_hours_share,post_mean_sr_hours_share,delta_post_minus_pre_sr_hours_share,pre_mean_far_observed,post_mean_far_observed,delta_post_minus_pre_far_observed,pre_mean_ir_p10,post_mean_ir_p10,delta_post_minus_pre_ir_p10
+DE,,,,,,0,0,,,,,,,,,,,,,,,,,,
+ES,,,,,,0,0,,,,,,,,,,,,,,,,,,
+```
+
+### Q1/FLEX_UP - Q1_country_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_country_summary.csv`
+
+```csv
+country,bascule_year_market,bascule_year_physical,bascule_confidence,drivers_at_bascule,low_price_flags_count_at_bascule,physical_flags_count_at_bascule,capture_flags_count_at_bascule,stage2_market_score_at_bascule,score_breakdown_at_bascule,required_demand_uplift_to_avoid_phase2,required_demand_uplift_status,required_flex_uplift_to_avoid_phase2,required_flex_uplift_status,bascule_rationale,sr_energy_at_bascule,far_energy_at_bascule,ir_p10_at_bascule,ttl_at_bascule,capture_ratio_pv_vs_ttl_at_bascule,h_negative_at_bascule,notes_quality
+DE,,,0.0,,0,0,0,0.0,low=0;value=0;physical=0;crisis=0,0.0,already_not_phase2,0.0,already_not_phase2,Pas de bascule persistante sur la fenetre.,0.0,,0.0464272339042977,213.44506961818823,0.5996655238082546,0,ok
+ES,,,0.0,flag_spread_high,0,0,0,0.0,low=0;value=0;physical=0;crisis=0,0.0,already_not_phase2,0.0,already_not_phase2,Pas de bascule persistante sur la fenetre.,0.0,,0.0861614439054861,167.09627253158976,0.5709691825648695,0,ok
+```
+
+### Q1/FLEX_UP - Q1_ir_diagnostics.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_ir_diagnostics.csv`
+
+```csv
+country,year,ir_p10,p10_must_run_mw,p10_load_mw,p50_must_run_mw,p50_load_mw,ir_case_class
+DE,2025,0.0552705101068276,2355.646431232241,42620.312833719305,2586.265437959775,54781.97026983656,must_run_floor_effect
+DE,2030,0.050771079018632,,,,,mixed
+DE,2035,0.0464272339042977,2355.646431232241,50738.46174183076,2586.265437959775,65216.62366774449,must_run_floor_effect
+ES,2025,0.102573147506531,2194.3088333300398,21392.62454815791,2648.9347173362,26877.445663145587,mixed
+ES,2030,0.0946017932912733,,,,,mixed
+ES,2035,0.0861614439054861,2194.3088333300398,25467.410176378464,2648.9347173362,31996.959122792367,mixed
+```
+
+### Q1/FLEX_UP - Q1_rule_application.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_rule_application.csv`
+
+```csv
+country,year,stage2_market_score,score_breakdown,phase2_candidate_year,low_price_flags_count,physical_flags_count,capture_flags_count,active_flags,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_far_low,flag_ir_high,flag_spread_high,flag_capture_only_stage2,is_stage1_criteria,is_phase2_market,is_phase2_physical,phase_market,stress_phys_state
+DE,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+```
+
+### Q1/FLEX_UP - Q1_rule_definition.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_rule_definition.csv`
+
+```csv
+q1_rule_version,h_negative_stage2_min,h_below_5_stage2_min,capture_ratio_pv_stage2_max,capture_ratio_wind_stage2_max,sr_hours_stage2_min,far_stage2_min,ir_p10_stage2_min,days_spread_gt50_stage2_min,avg_daily_spread_crisis_min,stage1_capture_ratio_pv_min,stage1_capture_ratio_wind_min,stage1_sr_hours_max,stage1_far_min,stage1_ir_p10_max,persistence_window_years,rule_logic
+q1_rule_v3_2026_02_11,200.0,500.0,0.9,0.9,0.1,0.95,1.5,150.0,50.0,0.85,0.9,0.05,0.95,1.5,2.0,stage2_candidate=(>=2 familles LOW_PRICE/VALUE/PHYSICAL) sur 2 annees consecutives hors crise; stage1_candidate=(familles toutes inactives) sur 2 annees consecutives hors crise.
+```
+
+### Q1/FLEX_UP - Q1_scope_audit.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_scope_audit.csv`
+
+```csv
+country,year,must_run_scope_coverage,lowload_p20_mw,ir_p10,scope_status,scope_reason,load_net_mode,must_run_mode_hourly
+DE,2025,0.1709318942627733,45686.423536464215,0.0552705101068276,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2030,0.1625499136741028,49801.81953563722,0.050771079018632,INFO,coverage_coherent,minus_psh_pump,observed
+DE,2035,0.1565319648867515,54388.59310511726,0.0464272339042977,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2025,0.2267026266933298,22647.91767894136,0.102573147506531,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2030,0.2169135427408894,24601.13152307046,0.0946017932912733,INFO,coverage_coherent,minus_psh_pump,observed
+ES,2035,0.2124809026310437,26961.806760644475,0.0861614439054861,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+```
+
+### Q1/FLEX_UP - Q1_year_panel.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\FLEX_UP\tables\Q1_year_panel.csv`
+
+```csv
+country,year,n_hours_expected,n_hours_with_price,n_hours_with_load,n_hours_with_vre,n_hours_with_must_run,missing_share_price,missing_share_load,missing_share_generation,missing_share_net_position,load_net_mode,must_run_mode,entsoe_code_used,data_version_hash,load_total_twh,load_net_twh,gen_solar_twh,gen_wind_on_twh,gen_wind_off_twh,gen_vre_twh,gen_primary_twh,gen_must_run_twh,exports_twh,vre_penetration_pct_gen,pv_penetration_pct_gen,wind_penetration_pct_gen,vre_penetration_proxy,baseload_price_eur_mwh,peakload_price_eur_mwh,offpeak_price_eur_mwh,capture_rate_pv_eur_mwh,capture_rate_wind_eur_mwh,capture_ratio_pv,capture_ratio_wind,capture_price_pv_eur_mwh,capture_price_wind_eur_mwh,capture_ratio_pv_vs_baseload,capture_ratio_wind_vs_baseload,capture_ratio_pv_vs_ttl,capture_ratio_wind_vs_ttl,h_negative,h_negative_obs,h_below_5,h_below_5_obs,days_spread_50_obs,days_spread_gt50,avg_daily_spread_obs,max_daily_spread_obs,surplus_twh,surplus_unabsorbed_twh,sr_energy_share_load,sr_energy_share_gen,sr_energy,sr_hours,far_observed,far_energy,ir_p10,ir_mean,ttl_price_based_eur_mwh,ttl_eur_mwh,tca_ccgt_median_eur_mwh,tca_method,h_regime_a,h_regime_b,h_regime_c,h_regime_d,regime_coherence,nrl_price_corr,completeness,quality_flag,scenario_id,mode,horizon_year,calib_mustrun_scale,calib_vre_scale_pv,calib_vre_scale_wind_on,calib_vre_scale_wind_off,calib_export_cap_eff_gw,calib_export_coincidence_used,calib_flex_realization_factor,calib_price_b_floor,calib_price_b_intercept,calib_price_b_slope_surplus_norm,vre_penetration_share_gen,pv_penetration_share_gen,wind_penetration_share_gen,sr_hours_share,p10_load_mw,p10_must_run_mw,p50_load_mw,p50_must_run_mw,ir_p10_excess,must_run_scope_coverage,core_sanity_issue_count,core_sanity_issues,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_far_low,flag_ir_high,flag_spread_high,crisis_year,low_price_family,value_family,physical_family,low_price_flags_count,capture_flags_count,physical_flags_count,family_count,stage2_points_low_price,stage2_points_capture,stage2_points_physical,stage2_points_vol,stage2_market_score,score_breakdown,quality_ok,stage2_candidate_year,phase2_candidate_year,flag_capture_only_stage2,is_phase2_market,is_phase2_physical,signal_low_price,signal_value,signal_physical,flag_non_capture_stage2,active_flags,is_stage1_criteria,stage1_candidate_year,phase_market,stress_phys_state
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,870a8fcdb99081d049a568fd628a69d2b7957ddd55698467ad75b678f6ae361c,480.1727000000001,480.1727000000001,31.6974537475,93.72828455868506,19.943855546237707,145.36959385242278,169.71354795717278,22.6446,4.8190211,85.6558569437879,18.67703205138275,66.97882489240514,0.3027443956152083,121.26224202715036,125.28668552736826,119.0226263479246,116.70794685121577,116.19498788609418,0.9624425946626084,0.95821243235861,116.70794685121577,116.19498788609418,0.9624425946626084,0.95821243235861,0.5947668981791557,0.592152757318915,0,0,0,0,121,121,31.01223866591052,91.3878440192006,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0552705101068276,0.0471592824831565,196.2246843402186,196.2246843402186,,none,0,0,7884,876,1.0,0.6702923995696501,1.0,OK,FLEX_UP,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,2.4375,0.35,0.8914973010374386,-26.5825,0.105,-21.08173750012614,0.856558569437879,0.1867703205138275,0.6697882489240514,0.0,42620.312833719305,2355.646431232241,54781.97026983656,2586.265437959775,-0.9447294898931724,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:FLEX_UP,03f6358ad20b0a5f40421def3bba794d385757efeb418d334d14d73d3a1a1322,525.9034,524.1057758522501,31.6974537475,98.74950692264126,21.756967075256217,152.20392774539746,176.5478818501475,22.6446,4.8190211,0.8621113215880268,0.1795402664440038,0.6825710551440229,0.2904068887580912,126.8756286642738,134.8857858302721,122.4179505825562,122.45418727107236,121.6822557604586,0.9651513735163352,0.959067214417062,122.45418727107236,121.6822557604586,0.9651513735163352,0.959067214417062,0.597791412501787,0.5940230315393383,0,0,0,0,121,121,32.46244925212925,95.4033539304072,0.0,0.0,0.0,0.0,0.0,0.0,,,0.050771079018632,0.043206163800003,204.8443398652976,204.8443398652976,,none,0,0,7884,876,1.0,0.6729174044621066,1.0,OK,FLEX_UP,SCEN,2030,9425.893,21.1595,38.4164,5.8601,2.4375,0.35,0.8914973010374386,-26.5825,0.105,-21.08173750012614,,,,,,,,,,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,733a2d13d82017a02d63d61c03c67c8a30de26106f87d76347dc2ac7c7338dde,571.6341,571.6341,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,185.8704736576352,22.6446,4.8190211,86.90273198012588,18.3922228147874,68.51050916533849,0.2825697759333902,132.52128607491684,144.02080926995404,126.12176463801984,127.9956494768802,127.23516333548925,0.9658497383169206,0.9601111421719885,127.9956494768802,127.23516333548925,0.9658497383169206,0.9601111421719885,0.5996655238082546,0.5961026111452854,0,0,0,0,121,121,33.773809686030425,99.21549071761106,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0464272339042977,0.0396138019057995,213.44506961818823,213.44506961818823,,none,0,0,7884,876,1.0,0.6767959000871794,1.0,OK,FLEX_UP,SCEN,2035,9425.893,22.8523,40.3698,6.34845,2.4375,0.35,0.8914973010374386,-26.5825,0.105,-21.08173750012614,0.8690273198012588,0.1839222281478739,0.6851050916533848,0.0,50738.46174183076,2355.646431232241,65216.62366774449,2586.265437959775,-0.9535727660957022,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,4f3f2824684aefa1e90cad4671c326809eaf2e190e08eec0174835d7abfd5cc8,234.2802,234.2802,28.61313144524133,43.94530341930337,0.0,72.5584348645447,115.73429566454467,22.644600000000004,8.7176561,62.69397886591454,24.723122287084507,37.97085657883004,0.3097079260839998,95.29191913310169,92.5993792683497,96.79032617937092,89.09658218346348,92.85001380188986,0.9349857049160204,0.97437447630999,89.09658218346348,92.85001380188986,0.9349857049160204,0.97437447630999,0.571299975376471,0.5953675135315121,0,0,0,0,195,195,39.25075237435021,76.30446300965609,0.0,0.0,0.0,0.0,0.0,0.0,,,0.102573147506531,0.0966560554413049,155.9541152172311,155.9541152172311,,none,0,0,7884,876,1.0,0.7144035890581533,1.0,OK,FLEX_UP,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6269397886591453,0.247231222870845,0.3797085657883003,0.0,21392.62454815791,2194.3088333300398,26877.445663145587,2648.9347173362,-0.8974268524934689,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:FLEX_UP,122858f11c51bd8db0d818b3df452676fde034f7afd7256c62c2352b394a8110,256.5926,254.955638,31.101249710331462,46.29946036015223,0.0,77.4007100704837,120.57657087048368,22.644600000000004,8.7176561,0.6419216395996451,0.2579377526313848,0.3839838869682602,0.3035850106224507,98.64545138178808,97.28700685315944,99.4014301066752,92.1042029276354,96.181886462792,0.9336893048536417,0.9750260667421824,92.1042029276354,96.181886462792,0.9336893048536417,0.9750260667421824,0.5702061902442622,0.5954506451083925,0,0,0,0,197,197,41.35050447623986,79.63159560325163,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0946017932912733,0.0888178044527103,161.5278902675193,161.5278902675193,,none,0,0,7884,876,1.0,0.7153709736484742,1.0,OK,FLEX_UP,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:FLEX_UP,cb1f52ff15add754c6e6e1690f1c0ae5914ac5d49684ebda1d36e7a2ca8bf30c,278.905,278.905,33.5893679754216,48.65361730100112,0.0,82.24298527642273,125.41884607642272,22.644600000000004,8.7176561,65.57466269966221,26.781754916605,38.7929077830572,0.2948781315373433,102.18095820676898,102.37194419919388,102.07467389115511,95.40682213699849,99.73814506791584,0.9337045160991476,0.9760932645208712,95.40682213699849,99.73814506791584,0.9337045160991476,0.9760932645208712,0.5709691825648695,0.5968903049531534,0,0,0,0,195,195,42.42154942427352,82.58112308465482,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0861614439054861,0.0811910865706961,167.09627253158976,167.09627253158976,,none,0,0,7884,876,1.0,0.7206055615416163,1.0,OK,FLEX_UP,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,2.4375,0.35,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6557466269966221,0.26781754916605,0.387929077830572,0.0,25467.410176378464,2194.3088333300398,31996.959122792367,2648.9347173362,-0.913838556094514,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+```
+
+### Q1 - scénario `LOW_RIGIDITY`
+
+### Q1/LOW_RIGIDITY - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q1,,True
+```
+
+### Q1/LOW_RIGIDITY - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q1/LOW_RIGIDITY - Q1_before_after_bascule.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_before_after_bascule.csv`
+
+```csv
+country,bascule_year_market,pre_window_start_year,pre_window_end_year,post_window_start_year,post_window_end_year,n_pre_years,n_post_years,pre_mean_capture_ratio_pv,post_mean_capture_ratio_pv,delta_post_minus_pre_capture_ratio_pv,pre_mean_capture_ratio_wind,post_mean_capture_ratio_wind,delta_post_minus_pre_capture_ratio_wind,pre_mean_h_negative_obs,post_mean_h_negative_obs,delta_post_minus_pre_h_negative_obs,pre_mean_sr_hours_share,post_mean_sr_hours_share,delta_post_minus_pre_sr_hours_share,pre_mean_far_observed,post_mean_far_observed,delta_post_minus_pre_far_observed,pre_mean_ir_p10,post_mean_ir_p10,delta_post_minus_pre_ir_p10
+DE,,,,,,0,0,,,,,,,,,,,,,,,,,,
+ES,,,,,,0,0,,,,,,,,,,,,,,,,,,
+```
+
+### Q1/LOW_RIGIDITY - Q1_country_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_country_summary.csv`
+
+```csv
+country,bascule_year_market,bascule_year_physical,bascule_confidence,drivers_at_bascule,low_price_flags_count_at_bascule,physical_flags_count_at_bascule,capture_flags_count_at_bascule,stage2_market_score_at_bascule,score_breakdown_at_bascule,required_demand_uplift_to_avoid_phase2,required_demand_uplift_status,required_flex_uplift_to_avoid_phase2,required_flex_uplift_status,bascule_rationale,sr_energy_at_bascule,far_energy_at_bascule,ir_p10_at_bascule,ttl_at_bascule,capture_ratio_pv_vs_ttl_at_bascule,h_negative_at_bascule,notes_quality
+DE,,,0.0,,0,0,0,0.0,low=0;value=0;physical=0;crisis=0,0.0,already_not_phase2,0.0,already_not_phase2,Pas de bascule persistante sur la fenetre.,0.0,,0.0354535240723728,213.7566336968553,0.5994168077170399,0,ok
+ES,,,0.0,flag_spread_high,0,0,0,0.0,low=0;value=0;physical=0;crisis=0,0.0,already_not_phase2,0.0,already_not_phase2,Pas de bascule persistante sur la fenetre.,0.0,,0.0657960117096439,167.63432377930806,0.5709612709297966,0,ok
+```
+
+### Q1/LOW_RIGIDITY - Q1_ir_diagnostics.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_ir_diagnostics.csv`
+
+```csv
+country,year,ir_p10,p10_must_run_mw,p10_load_mw,p50_must_run_mw,p50_load_mw,ir_case_class
+DE,2025,0.0422065713543047,1798.8572747591656,42620.312833719305,1974.9663344420103,54781.97026983656,must_run_floor_effect
+DE,2030,0.0387133450001058,,,,,mixed
+DE,2035,0.0354535240723728,1798.8572747591656,50738.46174183076,1974.9663344420103,65216.62366774449,must_run_floor_effect
+ES,2025,0.0783285853686237,1675.6540181793027,21392.62454815791,2022.8228750567337,26877.445663145587,mixed
+ES,2030,0.0721602545060212,,,,,mixed
+ES,2035,0.0657960117096439,1675.6540181793027,25467.410176378464,2022.8228750567337,31996.959122792367,mixed
+```
+
+### Q1/LOW_RIGIDITY - Q1_rule_application.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_rule_application.csv`
+
+```csv
+country,year,stage2_market_score,score_breakdown,phase2_candidate_year,low_price_flags_count,physical_flags_count,capture_flags_count,active_flags,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_far_low,flag_ir_high,flag_spread_high,flag_capture_only_stage2,is_stage1_criteria,is_phase2_market,is_phase2_physical,phase_market,stress_phys_state
+DE,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+```
+
+### Q1/LOW_RIGIDITY - Q1_rule_definition.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_rule_definition.csv`
+
+```csv
+q1_rule_version,h_negative_stage2_min,h_below_5_stage2_min,capture_ratio_pv_stage2_max,capture_ratio_wind_stage2_max,sr_hours_stage2_min,far_stage2_min,ir_p10_stage2_min,days_spread_gt50_stage2_min,avg_daily_spread_crisis_min,stage1_capture_ratio_pv_min,stage1_capture_ratio_wind_min,stage1_sr_hours_max,stage1_far_min,stage1_ir_p10_max,persistence_window_years,rule_logic
+q1_rule_v3_2026_02_11,200.0,500.0,0.9,0.9,0.1,0.95,1.5,150.0,50.0,0.85,0.9,0.05,0.95,1.5,2.0,stage2_candidate=(>=2 familles LOW_PRICE/VALUE/PHYSICAL) sur 2 annees consecutives hors crise; stage1_candidate=(familles toutes inactives) sur 2 annees consecutives hors crise.
+```
+
+### Q1/LOW_RIGIDITY - Q1_scope_audit.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_scope_audit.csv`
+
+```csv
+country,year,must_run_scope_coverage,lowload_p20_mw,ir_p10,scope_status,scope_reason,load_net_mode,must_run_mode_hourly
+DE,2025,0.1360255248592001,45686.423536464215,0.0422065713543047,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+DE,2030,0.1294751551476486,49857.25699930128,0.0387133450001058,INFO,coverage_coherent,minus_psh_pump,observed
+DE,2035,0.124125970773189,54388.59310511726,0.0354535240723728,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2025,0.1829200019075131,22647.91767894136,0.0783285853686237,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+ES,2030,0.1751483076410315,24647.23053829461,0.0721602545060212,INFO,coverage_coherent,minus_psh_pump,observed
+ES,2035,0.1708381047570365,26961.806760644475,0.0657960117096439,INFO,coverage_coherent,entsoe_total_load_no_pumping_adjust,observed
+```
+
+### Q1/LOW_RIGIDITY - Q1_year_panel.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q1\scen\LOW_RIGIDITY\tables\Q1_year_panel.csv`
+
+```csv
+country,year,n_hours_expected,n_hours_with_price,n_hours_with_load,n_hours_with_vre,n_hours_with_must_run,missing_share_price,missing_share_load,missing_share_generation,missing_share_net_position,load_net_mode,must_run_mode,entsoe_code_used,data_version_hash,load_total_twh,load_net_twh,gen_solar_twh,gen_wind_on_twh,gen_wind_off_twh,gen_vre_twh,gen_primary_twh,gen_must_run_twh,exports_twh,vre_penetration_pct_gen,pv_penetration_pct_gen,wind_penetration_pct_gen,vre_penetration_proxy,baseload_price_eur_mwh,peakload_price_eur_mwh,offpeak_price_eur_mwh,capture_rate_pv_eur_mwh,capture_rate_wind_eur_mwh,capture_ratio_pv,capture_ratio_wind,capture_price_pv_eur_mwh,capture_price_wind_eur_mwh,capture_ratio_pv_vs_baseload,capture_ratio_wind_vs_baseload,capture_ratio_pv_vs_ttl,capture_ratio_wind_vs_ttl,h_negative,h_negative_obs,h_below_5,h_below_5_obs,days_spread_50_obs,days_spread_gt50,avg_daily_spread_obs,max_daily_spread_obs,surplus_twh,surplus_unabsorbed_twh,sr_energy_share_load,sr_energy_share_gen,sr_energy,sr_hours,far_observed,far_energy,ir_p10,ir_mean,ttl_price_based_eur_mwh,ttl_eur_mwh,tca_ccgt_median_eur_mwh,tca_method,h_regime_a,h_regime_b,h_regime_c,h_regime_d,regime_coherence,nrl_price_corr,completeness,quality_flag,scenario_id,mode,horizon_year,calib_mustrun_scale,calib_vre_scale_pv,calib_vre_scale_wind_on,calib_vre_scale_wind_off,calib_export_cap_eff_gw,calib_export_coincidence_used,calib_flex_realization_factor,calib_price_b_floor,calib_price_b_intercept,calib_price_b_slope_surplus_norm,vre_penetration_share_gen,pv_penetration_share_gen,wind_penetration_share_gen,sr_hours_share,p10_load_mw,p10_must_run_mw,p50_load_mw,p50_must_run_mw,ir_p10_excess,must_run_scope_coverage,core_sanity_issue_count,core_sanity_issues,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_sr_hours_high,flag_far_low,flag_ir_high,flag_spread_high,crisis_year,low_price_family,value_family,physical_family,low_price_flags_count,capture_flags_count,physical_flags_count,family_count,stage2_points_low_price,stage2_points_capture,stage2_points_physical,stage2_points_vol,stage2_market_score,score_breakdown,quality_ok,stage2_candidate_year,phase2_candidate_year,flag_capture_only_stage2,is_phase2_market,is_phase2_physical,signal_low_price,signal_value,signal_physical,flag_non_capture_stage2,active_flags,is_stage1_criteria,stage1_candidate_year,phase_market,stress_phys_state
+DE,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,634b1186bf0667f02c682f76be8098c9138f6149c3d0b80405805774ed1c8931,480.1727000000001,480.1727000000001,31.6974537475,93.72828455868506,19.943855546237707,145.36959385242278,164.36118795717277,17.29224,3.4586516,88.44520756950321,19.285242545070517,69.15996502443271,0.3027443956152083,121.43509767058438,125.4658796583113,119.19195460278752,116.87040994372404,116.36130665128393,0.96241047428279,0.9582180842554754,116.87040994372404,116.36130665128393,0.96241047428279,0.9582180842554754,0.5946826176437238,0.5920920998321997,0,0,0,0,122,122,31.28947671667965,91.56360574280622,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0422065713543047,0.0360125429871377,196.5256869400233,196.5256869400233,,none,0,0,7884,876,1.0,0.6703658348982127,1.0,OK,LOW_RIGIDITY,SCEN,2025,9425.893,19.466700000000003,36.46300000000001,5.3717500000000005,1.65,0.45,0.8914973010374386,-26.5825,0.105,-21.08173750012614,0.8844520756950321,0.1928524254507051,0.691599650244327,0.0,42620.312833719305,1798.8572747591656,54781.97026983656,1974.9663344420103,-0.9577934286456952,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+DE,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:LOW_RIGIDITY,6822b3bcaa37e5fdfe6fe33a858fb86ff423e25f218903448d669bba4ef52b2b,525.9034,524.423312869,31.6974537475,98.74950692264126,21.756967075256217,152.20392774539746,171.19552185014746,17.29224,3.4586516,0.8890648896682362,0.1851535215695987,0.7039113680986374,0.2902310481063944,127.05800620843968,135.0552260542705,122.60752778677266,122.6165086811288,121.86322563093228,0.9650435445994284,0.9591148898638836,122.6165086811288,121.86322563093228,0.9650435445994284,0.9591148898638836,0.5977187820637748,0.5940467526433022,0,0,0,0,122,122,32.72793668961861,95.55565577835456,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0387133450001058,0.0329738201480748,205.14079925306075,205.14079925306075,,none,0,0,7884,876,1.0,0.6730077697988456,1.0,OK,LOW_RIGIDITY,SCEN,2030,9425.893,21.1595,38.4164,5.8601,1.65,0.45,0.8914973010374386,-26.5825,0.105,-21.08173750012614,,,,,,,,,,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+DE,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,81005a84d0b76b30d239d9d045ee50c1924581d69bda3b6bdefa53d3959a193b,571.6341,571.6341,34.18571166201298,103.77072928659744,23.570078604274727,161.52651955288516,180.51811365763515,17.29224,3.4586516,89.47939698684819,18.93755201034756,70.54184497650063,0.2825697759333902,132.694140557315,144.2107415005934,126.28511529890208,128.1293189989096,127.40218115245987,0.965598921405021,0.9601191176744588,128.1293189989096,127.40218115245987,0.965598921405021,0.9601191176744588,0.5994168077170399,0.5960150988022141,0,0,0,0,121,121,33.840505394471975,99.3912524412167,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0354535240723728,0.030250539637156,213.7566336968553,213.7566336968553,,none,0,0,7884,876,1.0,0.67684466501105,1.0,OK,LOW_RIGIDITY,SCEN,2035,9425.893,22.8523,40.3698,6.34845,1.65,0.45,0.8914973010374386,-26.5825,0.105,-21.08173750012614,0.8947939698684818,0.1893755201034755,0.7054184497650062,0.0,50738.46174183076,1798.8572747591656,65216.62366774449,1974.9663344420103,-0.9645464759276272,,,,False,False,False,False,False,False,False,False,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,,False,False,uncertain,pas_de_surplus_structurel
+ES,2025,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,65fb44c357c1b415e806c6c5aef57cc8823304fb6f9734930d75fcc05ff6b8ce,234.2802,234.2802,28.61313144524133,43.94530341930337,0.0,72.5584348645447,110.38193566454468,17.29224,6.6676834000000005,65.73397578844134,25.921933034584416,39.81204275385692,0.3097079260839998,95.61131131155469,92.88863945227855,97.1264869091476,89.38942082186934,93.16554639171856,0.9349251630969586,0.9744197115771538,89.38942082186934,93.16554639171856,0.9349251630969586,0.9744197115771538,0.5712235297837912,0.595354033786211,0,0,0,0,194,194,39.21575335668828,76.58427118773886,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0783285853686237,0.0738100787006328,156.4876377828892,156.4876377828892,,none,0,0,7884,876,1.0,0.7139114336367945,1.0,OK,LOW_RIGIDITY,SCEN,2025,6237.200000000001,12.5165,13.37405,1.9703,1.65,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6573397578844133,0.2592193303458441,0.3981204275385692,0.0,21392.62454815791,1675.6540181793027,26877.445663145587,2022.8228750567337,-0.9216714146313764,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+ES,2030,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,minus_psh_pump,observed,SCEN:LOW_RIGIDITY,0a97a667845796f7f9d14e1303a8f2f68fde91570e85a6e1b8c8918b47c8eb24,256.5926,255.23969,31.101249710331462,46.29946036015223,0.0,77.4007100704837,115.2242108704837,17.29224,6.6676834000000005,0.6717399883734936,0.2699193986695246,0.4018205897039689,0.3032471559203182,98.98059642880098,97.6451187971206,99.72379400208152,92.44237525715238,96.53949978970414,0.933944415294045,0.9753376244721582,92.44237525715238,96.53949978970414,0.933944415294045,0.9753376244721582,0.570441195105838,0.5957236330391433,0,0,0,0,196,196,41.27425075912336,79.86783396069681,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0721602545060212,0.0677490244561886,162.05417149089467,162.05417149089467,,none,0,0,7884,876,1.0,0.7158297461481474,1.0,OK,LOW_RIGIDITY,SCEN,2030,6237.200000000001,13.6049,14.0905,2.1494,1.65,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,,,,,,,,,,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+ES,2035,8760,8760,8760,8760,8760,0.0,0.0,0.0,0.0,entsoe_total_load_no_pumping_adjust,observed,SCEN:LOW_RIGIDITY,36492204474733d2027d3036826878d678e20775a54b9e99287bf6ba6f48114a,278.905,278.905,33.5893679754216,48.65361730100112,0.0,82.24298527642273,120.06648607642272,17.29224,6.6676834000000005,68.49786977531332,27.975640058327237,40.52222971698608,0.2948781315373433,102.50041470982062,102.6701572834972,102.40595242468292,95.71270655649076,100.0466210094632,0.933778724968617,0.976060646122222,95.71270655649076,100.0466210094632,0.933778724968617,0.976060646122222,0.5709612709297966,0.5968146543853119,0,0,0,0,196,196,42.736799419320285,82.8609312627376,0.0,0.0,0.0,0.0,0.0,0.0,,,0.0657960117096439,0.0620004661085315,167.63432377930806,167.63432377930806,,none,0,0,7884,876,1.0,0.7202012060057617,1.0,OK,LOW_RIGIDITY,SCEN,2035,6237.200000000001,14.6933,14.80695,2.3285,1.65,0.45,0.8687903652597629,-0.02,8.33,-19.73003920827475,0.6849786977531331,0.2797564005832723,0.4052222971698608,0.0,25467.410176378464,1675.6540181793027,31996.959122792367,2022.8228750567337,-0.934203988290356,,,,False,False,False,False,False,False,False,True,False,False,False,False,0,0,0,0,0,0,0,0,0,low=0;value=0;physical=0;crisis=0,True,False,False,False,False,False,False,False,False,0,flag_spread_high,False,False,uncertain,pas_de_surplus_structurel
+```
+
+## Q2
+
+### Q2 - contexte
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\question_context.json`
+
+```json
+{
+  "question_id": "Q2",
+  "objective": "Mesurer la pente de cannibalisation (PV/Wind) et qualifier ses drivers et sa robustesse statistique.",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "run_id": "FULL_20260211_105525",
+  "source_summary_file": "outputs\\combined\\FULL_20260211_105525\\Q2\\summary.json",
+  "source_refs_in_ledger": [
+    "SPEC2-Q2",
+    "SPEC2-Q2/Slides 10",
+    "SPEC2-Q2/Slides 10-12",
+    "SPEC2-Q2/Slides 11",
+    "Slides 10-13"
+  ],
+  "scenarios": [
+    "BASE",
+    "HIGH_CO2",
+    "HIGH_GAS"
+  ],
+  "country_filter_notes": {
+    "hist_unfilterable_tables": [
+      "Q2_driver_correlations.csv"
+    ],
+    "scen_unfilterable_tables_by_scenario": {
+      "BASE": [
+        "Q2_driver_correlations.csv"
+      ],
+      "HIGH_CO2": [
+        "Q2_driver_correlations.csv"
+      ],
+      "HIGH_GAS": [
+        "Q2_driver_correlations.csv"
+      ]
+    }
+  }
+}
+```
+
+### Q2 - test ledger
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\test_ledger.csv`
+
+```csv
+test_id,question_id,source_ref,mode,scenario_group,title,what_is_tested,metric_rule,severity_if_fail,scenario_id,status,value,threshold,interpretation
+Q2-H-01,Q2,SPEC2-Q2/Slides 10,HIST,HIST_BASE,Pentes OLS post-bascule,Les pentes PV/Wind sont estimees en historique.,Q2_country_slopes non vide,HIGH,,PASS,4,>0 lignes,Les pentes historiques sont calculees.
+Q2-H-02,Q2,SPEC2-Q2/Slides 10-12,HIST,HIST_BASE,Robustesse statistique,R2/p-value/n sont disponibles pour qualifier la robustesse.,"colonnes r2,p_value,n presentes",MEDIUM,,PASS,"n,p_value,r2","r2,p_value,n disponibles",La robustesse statistique est lisible.
+Q2-H-03,Q2,Slides 10-13,HIST,HIST_BASE,Drivers physiques,Les drivers SR/FAR/IR/corr VRE-load sont exploites.,driver correlations non vides,MEDIUM,,PASS,8,>0 lignes,Les drivers de pente sont disponibles.
+Q2-S-01,Q2,SPEC2-Q2/Slides 11,SCEN,DEFAULT,Pentes projetees,Les pentes sont reproduites en mode scenario.,Q2_country_slopes non vide en SCEN,HIGH,BASE,PASS,4,>0 lignes,Pentes prospectives calculees.
+Q2-S-01,Q2,SPEC2-Q2/Slides 11,SCEN,DEFAULT,Pentes projetees,Les pentes sont reproduites en mode scenario.,Q2_country_slopes non vide en SCEN,HIGH,HIGH_CO2,PASS,4,>0 lignes,Pentes prospectives calculees.
+Q2-S-01,Q2,SPEC2-Q2/Slides 11,SCEN,DEFAULT,Pentes projetees,Les pentes sont reproduites en mode scenario.,Q2_country_slopes non vide en SCEN,HIGH,HIGH_GAS,PASS,4,>0 lignes,Pentes prospectives calculees.
+Q2-S-02,Q2,SPEC2-Q2,SCEN,DEFAULT,Delta pente vs BASE,Les differences de pente vs BASE sont calculables.,delta slope par pays/tech vs BASE,MEDIUM,BASE,PASS,finite=100.00%; robust=0.00%; reason_known=100.00%,finite_share >= 20%,Delta de pente exploitable directionnellement; robustesse statistique a lire a part.
+Q2-S-02,Q2,SPEC2-Q2,SCEN,DEFAULT,Delta pente vs BASE,Les differences de pente vs BASE sont calculables.,delta slope par pays/tech vs BASE,MEDIUM,HIGH_CO2,PASS,finite=100.00%; robust=0.00%; reason_known=100.00%,finite_share >= 20%,Delta de pente exploitable directionnellement; robustesse statistique a lire a part.
+Q2-S-02,Q2,SPEC2-Q2,SCEN,DEFAULT,Delta pente vs BASE,Les differences de pente vs BASE sont calculables.,delta slope par pays/tech vs BASE,MEDIUM,HIGH_GAS,PASS,finite=100.00%; robust=0.00%; reason_known=100.00%,finite_share >= 20%,Delta de pente exploitable directionnellement; robustesse statistique a lire a part.
+```
+
+### Q2 - comparaison HIST vs SCEN
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\comparison_hist_vs_scen.csv`
+
+```csv
+country,tech,scenario_id,metric,hist_value,scen_value,delta,scen_status,interpretability_status,interpretability_reason
+DE,PV,BASE,slope,-0.0227295312330323,-3.905118072810234e-05,0.0226904800523042,,INFORMATIVE,delta_interpretable
+DE,WIND,BASE,slope,0.0058187634834266,1.8165937824092164e-06,-0.0058169468896442,,INFORMATIVE,delta_interpretable
+ES,PV,BASE,slope,,2.820662840585422e-05,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,WIND,BASE,slope,,1.5742976986985832e-05,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,PV,HIGH_CO2,slope,-0.0227295312330323,-3.990966708010697e-05,0.0226896215659522,,INFORMATIVE,delta_interpretable
+DE,WIND,HIGH_CO2,slope,0.0058187634834266,1.5035172602400752e-06,-0.0058172599661664,,INFORMATIVE,delta_interpretable
+ES,PV,HIGH_CO2,slope,,2.8482536813608643e-05,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,WIND,HIGH_CO2,slope,,1.5188045379845756e-05,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,PV,HIGH_GAS,slope,-0.0227295312330323,-3.818113932333451e-05,0.022691350093709,,INFORMATIVE,delta_interpretable
+DE,WIND,HIGH_GAS,slope,0.0058187634834266,1.567878306112553e-06,-0.0058171956051205,,INFORMATIVE,delta_interpretable
+ES,PV,HIGH_GAS,slope,,2.7310489716200115e-05,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,WIND,HIGH_GAS,slope,,1.4602802259567769e-05,,,NON_TESTABLE,delta_non_interpretable_nan
+```
+
+### Q2 - checks filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\checks_filtered.csv`
+
+```csv
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,HIST,,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_CO2,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_GAS,Q2,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q2,,True
+PASS,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=50.00%,BUNDLE,,Q2,,True
+```
+
+### Q2 - warnings filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\warnings_filtered.csv`
+
+```csv
+question_id,status,code,message,scope,scenario_id,mentioned_countries,is_global
+Q2,WARN,QUESTION_WARNING,ES: pas de bascule Q1 ni horizon scenario pour pente Q2.,GLOBAL,,ES,False
+```
+
+### Q2 - historique - Q2_country_slopes.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\hist\tables\Q2_country_slopes.csv`
+
+```csv
+country,tech,phase2_start_year_for_slope,phase2_start_reason,phase2_end_year,years_used,years_used_no_outliers,x_axis_used,x_unit,slope,intercept,r2,p_value,n,slope_method,robust_flag,reason_code,slope_all_years,slope_excluding_outliers,outlier_years_count,mean_sr_energy_phase2,mean_far_energy_phase2,mean_ir_p10_phase2,mean_ttl_phase2,vre_load_corr_phase2,surplus_load_trough_share_phase2
+DE,PV,2019.0,q1_bascule,2024.0,"2019,2020,2021,2022,2023,2024","2019,2020,2021,2022,2023,2024",pv_penetration_pct_gen,pct_point,-0.0227295312330323,0.6679616197516525,0.2844951001821379,0.275800883589082,6,OLS,NOT_SIGNIFICANT,p_value_high,-0.0227295312330323,-0.0227295312330323,0.0,0.0026829334104239,0.9979416041227754,0.2623702870790647,198.5610833333332,,
+DE,WIND,2019.0,q1_bascule,2024.0,"2019,2020,2021,2022,2023,2024","2019,2020,2021,2022,2023,2024",wind_penetration_pct_gen,pct_point,0.0058187634834266,0.2774540545060399,0.075297644145019,0.5987247504122153,6,OLS,NOT_SIGNIFICANT,p_value_high,0.0058187634834266,0.0058187634834266,0.0,0.0026829334104239,0.9979416041227754,0.2623702870790647,198.5610833333332,,
+ES,PV,,q1_no_bascule,,,,none,,,,,,0,NONE,NON_TESTABLE,q1_no_bascule,,,,,,,,,
+ES,WIND,,q1_no_bascule,,,,none,,,,,,0,NONE,NON_TESTABLE,q1_no_bascule,,,,,,,,,
+```
+
+### Q2 - historique - Q2_driver_correlations.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\hist\tables\Q2_driver_correlations.csv`
+
+```csv
+driver_name,corr_with_slope_pv,corr_with_slope_wind,n_countries,expected_sign,sign_conflict_share
+exports_pos_share_proxy,,,2,1,0.5
+far_energy,,,2,1,0.5
+ir_p10,,,2,-1,1.0
+nrl_p10_proxy,,,2,1,0.5
+nrl_p50_proxy,,,2,1,0.5
+nrl_p90_proxy,,,2,1,0.0
+sr_energy,,,2,-1,0.0
+vre_penetration_share_gen,,,2,-1,0.0
+```
+
+### Q2 - historique - Q2_driver_diagnostics.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\hist\tables\Q2_driver_diagnostics.csv`
+
+```csv
+country,driver_name,corr_capture_pv,elasticity_capture_pv,expected_sign,observed_sign,sign_conflict
+DE,sr_energy,-0.4732381125405622,-0.106737667300861,-1,-1,False
+DE,far_energy,-0.5551291900716333,-31.911034221754573,1,-1,True
+DE,vre_penetration_share_gen,-0.5780169387256927,-0.7853657171176097,-1,-1,False
+DE,nrl_p10_proxy,-0.5021287687605718,-3.441089920388856,1,-1,True
+DE,nrl_p50_proxy,-0.2856026532774741,-3.182944859439354,1,-1,True
+DE,nrl_p90_proxy,0.5501950875488749,2.3099612670182608,1,1,False
+DE,exports_pos_share_proxy,0.7680427217306672,0.6570902854539116,1,1,False
+DE,ir_p10,0.663355208069641,0.9407524321337428,-1,1,True
+ES,sr_energy,-0.7273439725515087,-0.1672930199639397,-1,-1,False
+ES,far_energy,0.6680767654718635,835.3854542558162,1,1,False
+ES,vre_penetration_share_gen,-0.8998273546150982,-1.392548122986041,-1,-1,False
+ES,nrl_p10_proxy,0.4816356124716308,3.310495647711506,1,1,False
+ES,nrl_p50_proxy,0.6138649146023049,3.4224004011800058,1,1,False
+ES,nrl_p90_proxy,0.6755728430025111,5.156311783126873,1,1,False
+ES,exports_pos_share_proxy,-0.5934816679251145,-0.2566432560417713,1,-1,True
+ES,ir_p10,0.1572265236773891,2.0966226813438924,-1,1,True
+```
+
+### Q2 - scénario `BASE`
+
+### Q2/BASE - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\BASE\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q2,,True
+```
+
+### Q2/BASE - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\BASE\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q2/BASE - Q2_country_slopes.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\BASE\tables\Q2_country_slopes.csv`
+
+```csv
+country,tech,phase2_start_year_for_slope,phase2_start_reason,phase2_end_year,years_used,years_used_no_outliers,x_axis_used,x_unit,slope,intercept,r2,p_value,n,slope_method,robust_flag,reason_code,slope_all_years,slope_excluding_outliers,outlier_years_count,mean_sr_energy_phase2,mean_far_energy_phase2,mean_ir_p10_phase2,mean_ttl_phase2,vre_load_corr_phase2,surplus_load_trough_share_phase2
+DE,PV,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",pv_penetration_pct_gen,pct_point,-3.905118072810234e-05,0.5979210506741477,0.0278783104298014,0.8932046859570194,3,OLS,NOT_SIGNIFICANT,p_value_high,-3.905118072810234e-05,-3.905118072810234e-05,0,0.0,,0.0507979303450245,204.83803127456807,,
+DE,WIND,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",wind_penetration_pct_gen,pct_point,1.8165937824092164e-06,0.5940271572627677,0.0012685494314385,0.9773209068980216,3,OLS,NOT_SIGNIFICANT,p_value_high,1.8165937824092164e-06,1.8165937824092164e-06,0,0.0,,0.0507979303450245,204.83803127456807,,
+ES,PV,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",pv_penetration_pct_gen,pct_point,2.820662840585422e-05,0.5704003395795384,0.8201380975695806,0.2788199013381996,3,OLS,NOT_SIGNIFICANT,p_value_high,2.820662840585422e-05,2.820662840585422e-05,0,0.0,,0.0944100542629832,161.52609267211338,,
+ES,WIND,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",wind_penetration_pct_gen,pct_point,1.5742976986985832e-05,0.5955328302239786,0.173073632038949,0.7268484192135509,3,OLS,NOT_SIGNIFICANT,p_value_high,1.5742976986985832e-05,1.5742976986985832e-05,0,0.0,,0.0944100542629832,161.52609267211338,,
+```
+
+### Q2/BASE - Q2_driver_correlations.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\BASE\tables\Q2_driver_correlations.csv`
+
+```csv
+driver_name,corr_with_slope_pv,corr_with_slope_wind,n_countries,expected_sign,sign_conflict_share
+exports_pos_share_proxy,1.0,1.0,2,1,0.5
+far_energy,,,2,1,0.0
+ir_p10,1.0,1.0,2,-1,0.5
+nrl_p10_proxy,,,2,1,0.0
+nrl_p50_proxy,,,2,1,0.0
+nrl_p90_proxy,,,2,1,0.0
+sr_energy,,,2,-1,0.0
+vre_penetration_share_gen,,,2,-1,0.0
+```
+
+### Q2/BASE - Q2_driver_diagnostics.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\BASE\tables\Q2_driver_diagnostics.csv`
+
+```csv
+country,driver_name,corr_capture_pv,elasticity_capture_pv,expected_sign,observed_sign,sign_conflict
+DE,sr_energy,,,-1,0,False
+DE,far_energy,,,1,0,False
+DE,vre_penetration_share_gen,,,-1,0,False
+DE,nrl_p10_proxy,,,1,0,False
+DE,nrl_p50_proxy,,,1,0,False
+DE,nrl_p90_proxy,,,1,0,False
+DE,exports_pos_share_proxy,-0.9924793432523428,-0.0472560637310083,1,-1,True
+DE,ir_p10,-0.9909866770961706,-0.0472268137020532,-1,-1,False
+ES,sr_energy,,,-1,0,False
+ES,far_energy,,,1,0,False
+ES,vre_penetration_share_gen,,,-1,0,False
+ES,nrl_p10_proxy,,,1,0,False
+ES,nrl_p50_proxy,,,1,0,False
+ES,nrl_p90_proxy,,,1,0,False
+ES,exports_pos_share_proxy,0.3741028457499284,0.003460251383283,1,1,False
+ES,ir_p10,0.3514580001572901,0.0032550152385749,-1,1,True
+```
+
+### Q2 - scénario `HIGH_CO2`
+
+### Q2/HIGH_CO2 - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_CO2\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q2,,True
+```
+
+### Q2/HIGH_CO2 - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_CO2\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q2/HIGH_CO2 - Q2_country_slopes.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_CO2\tables\Q2_country_slopes.csv`
+
+```csv
+country,tech,phase2_start_year_for_slope,phase2_start_reason,phase2_end_year,years_used,years_used_no_outliers,x_axis_used,x_unit,slope,intercept,r2,p_value,n,slope_method,robust_flag,reason_code,slope_all_years,slope_excluding_outliers,outlier_years_count,mean_sr_energy_phase2,mean_far_energy_phase2,mean_ir_p10_phase2,mean_ttl_phase2,vre_load_corr_phase2,surplus_load_trough_share_phase2
+DE,PV,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",pv_penetration_pct_gen,pct_point,-3.990966708010697e-05,0.6063603664902906,0.0213780613670525,0.9065834223371284,3,OLS,NOT_SIGNIFICANT,p_value_high,-3.990966708010697e-05,-3.990966708010697e-05,0,0.0,,0.0507979303450245,218.9715839061471,,
+DE,WIND,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",wind_penetration_pct_gen,pct_point,1.5035172602400752e-06,0.6027110524501943,0.0005737968401847,0.984748915031495,3,OLS,NOT_SIGNIFICANT,p_value_high,1.5035172602400752e-06,1.5035172602400752e-06,0,0.0,,0.0507979303450245,218.9715839061471,,
+ES,PV,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",pv_penetration_pct_gen,pct_point,2.8482536813608643e-05,0.5755508875057649,0.8285158916737067,0.2718117185245594,3,OLS,NOT_SIGNIFICANT,p_value_high,2.8482536813608643e-05,2.8482536813608643e-05,0,0.0,,0.0944100542629832,167.31063812665886,,
+ES,WIND,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",wind_penetration_pct_gen,pct_point,1.5188045379845756e-05,0.6003088043286114,0.0850967177773397,0.8115492923404732,3,OLS,NOT_SIGNIFICANT,p_value_high,1.5188045379845756e-05,1.5188045379845756e-05,0,0.0,,0.0944100542629832,167.31063812665886,,
+```
+
+### Q2/HIGH_CO2 - Q2_driver_correlations.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_CO2\tables\Q2_driver_correlations.csv`
+
+```csv
+driver_name,corr_with_slope_pv,corr_with_slope_wind,n_countries,expected_sign,sign_conflict_share
+exports_pos_share_proxy,1.0,1.0,2,1,1.0
+far_energy,,,2,1,0.0
+ir_p10,1.0,1.0,2,-1,0.0
+nrl_p10_proxy,,,2,1,0.0
+nrl_p50_proxy,,,2,1,0.0
+nrl_p90_proxy,,,2,1,0.0
+sr_energy,,,2,-1,0.0
+vre_penetration_share_gen,,,2,-1,0.0
+```
+
+### Q2/HIGH_CO2 - Q2_driver_diagnostics.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_CO2\tables\Q2_driver_diagnostics.csv`
+
+```csv
+country,driver_name,corr_capture_pv,elasticity_capture_pv,expected_sign,observed_sign,sign_conflict
+DE,sr_energy,,,-1,0,False
+DE,far_energy,,,1,0,False
+DE,vre_penetration_share_gen,,,-1,0,False
+DE,nrl_p10_proxy,,,1,0,False
+DE,nrl_p50_proxy,,,1,0,False
+DE,nrl_p90_proxy,,,1,0,False
+DE,exports_pos_share_proxy,-0.994832527886493,-0.0545123389456482,1,-1,True
+DE,ir_p10,-0.99358286278594,-0.0544921187739486,-1,-1,False
+ES,sr_energy,,,-1,0,False
+ES,far_energy,,,1,0,False
+ES,vre_penetration_share_gen,,,-1,0,False
+ES,nrl_p10_proxy,,,1,0,False
+ES,nrl_p50_proxy,,,1,0,False
+ES,nrl_p90_proxy,,,1,0,False
+ES,exports_pos_share_proxy,-0.4631099812490978,-0.0042649811286357,1,-1,True
+ES,ir_p10,-0.4845092821561529,-0.0044678442763517,-1,-1,False
+```
+
+### Q2 - scénario `HIGH_GAS`
+
+### Q2/HIGH_GAS - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_GAS\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q2,,True
+```
+
+### Q2/HIGH_GAS - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_GAS\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q2/HIGH_GAS - Q2_country_slopes.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_GAS\tables\Q2_country_slopes.csv`
+
+```csv
+country,tech,phase2_start_year_for_slope,phase2_start_reason,phase2_end_year,years_used,years_used_no_outliers,x_axis_used,x_unit,slope,intercept,r2,p_value,n,slope_method,robust_flag,reason_code,slope_all_years,slope_excluding_outliers,outlier_years_count,mean_sr_energy_phase2,mean_far_energy_phase2,mean_ir_p10_phase2,mean_ttl_phase2,vre_load_corr_phase2,surplus_load_trough_share_phase2
+DE,PV,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",pv_penetration_pct_gen,pct_point,-3.818113932333451e-05,0.6091951234557069,0.0241114612953457,0.9007449134131972,3,OLS,NOT_SIGNIFICANT,p_value_high,-3.818113932333451e-05,-3.818113932333451e-05,0,0.0,,0.0507979303450245,224.18013653772604,,
+DE,WIND,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",wind_penetration_pct_gen,pct_point,1.567878306112553e-06,0.6056451053590062,0.0008017861727738,0.9819711736202916,3,OLS,NOT_SIGNIFICANT,p_value_high,1.567878306112553e-06,1.567878306112553e-06,0,0.0,,0.0507979303450245,224.18013653772604,,
+ES,PV,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",pv_penetration_pct_gen,pct_point,2.7310489716200115e-05,0.5818206290154797,0.7958660557209807,0.2984443296407602,3,OLS,NOT_SIGNIFICANT,p_value_high,2.7310489716200115e-05,2.7310489716200115e-05,0,0.0,,0.0944100542629832,174.8897290357498,,
+ES,WIND,2025.0,q1_no_bascule_use_scenario_start,2035,"2025,2030,2035","2025,2030,2035",wind_penetration_pct_gen,pct_point,1.4602802259567769e-05,0.6060973443073584,0.0807834570740797,0.816527918734854,3,OLS,NOT_SIGNIFICANT,p_value_high,1.4602802259567769e-05,1.4602802259567769e-05,0,0.0,,0.0944100542629832,174.8897290357498,,
+```
+
+### Q2/HIGH_GAS - Q2_driver_correlations.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_GAS\tables\Q2_driver_correlations.csv`
+
+```csv
+driver_name,corr_with_slope_pv,corr_with_slope_wind,n_countries,expected_sign,sign_conflict_share
+exports_pos_share_proxy,1.0,1.0,2,1,1.0
+far_energy,,,2,1,0.0
+ir_p10,1.0,1.0,2,-1,0.0
+nrl_p10_proxy,,,2,1,0.0
+nrl_p50_proxy,,,2,1,0.0
+nrl_p90_proxy,,,2,1,0.0
+sr_energy,,,2,-1,0.0
+vre_penetration_share_gen,,,2,-1,0.0
+```
+
+### Q2/HIGH_GAS - Q2_driver_diagnostics.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q2\scen\HIGH_GAS\tables\Q2_driver_diagnostics.csv`
+
+```csv
+country,driver_name,corr_capture_pv,elasticity_capture_pv,expected_sign,observed_sign,sign_conflict
+DE,sr_energy,,,-1,0,False
+DE,far_energy,,,1,0,False
+DE,vre_penetration_share_gen,,,-1,0,False
+DE,nrl_p10_proxy,,,1,0,False
+DE,nrl_p50_proxy,,,1,0,False
+DE,nrl_p90_proxy,,,1,0,False
+DE,exports_pos_share_proxy,-0.9938595657924708,-0.0488281710770032,1,-1,True
+DE,ir_p10,-0.9925037803215628,-0.0488047809259939,-1,-1,False
+ES,sr_energy,,,-1,0,False
+ES,far_energy,,,1,0,False
+ES,vre_penetration_share_gen,,,-1,0,False
+ES,nrl_p10_proxy,,,1,0,False
+ES,nrl_p50_proxy,,,1,0,False
+ES,nrl_p90_proxy,,,1,0,False
+ES,exports_pos_share_proxy,-0.4997718476107687,-0.0044545075526764,1,-1,True
+ES,ir_p10,-0.5206708553962784,-0.0046468016330927,-1,-1,False
+```
+
+## Q3
+
+### Q3 - contexte
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\question_context.json`
+
+```json
+{
+  "question_id": "Q3",
+  "objective": "Evaluer la sortie de Phase 2 et quantifier les conditions minimales d'inversion (demande/must-run/flex).",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "run_id": "FULL_20260211_105525",
+  "source_summary_file": "outputs\\combined\\FULL_20260211_105525\\Q3\\summary.json",
+  "source_refs_in_ledger": [
+    "SPEC2-Q3",
+    "SPEC2-Q3/Slides 16",
+    "SPEC2-Q3/Slides 17",
+    "Slides 17-19"
+  ],
+  "scenarios": [
+    "BASE",
+    "DEMAND_UP",
+    "FLEX_UP",
+    "LOW_RIGIDITY"
+  ],
+  "country_filter_notes": {
+    "hist_unfilterable_tables": [],
+    "scen_unfilterable_tables_by_scenario": {
+      "BASE": [],
+      "DEMAND_UP": [],
+      "FLEX_UP": [],
+      "LOW_RIGIDITY": []
+    }
+  }
+}
+```
+
+### Q3 - test ledger
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\test_ledger.csv`
+
+```csv
+test_id,question_id,source_ref,mode,scenario_group,title,what_is_tested,metric_rule,severity_if_fail,scenario_id,status,value,threshold,interpretation
+Q3-H-01,Q3,SPEC2-Q3/Slides 16,HIST,HIST_BASE,Tendances glissantes,Les tendances h_negative et capture_ratio sont estimees.,Q3_status non vide,HIGH,,PASS,2,>0 lignes,Les tendances historiques sont calculees.
+Q3-H-02,Q3,SPEC2-Q3,HIST,HIST_BASE,Statuts sortie phase 2,Les statuts degradation/stabilisation/amelioration sont attribues.,status dans ensemble attendu,MEDIUM,,PASS,1,status valides,Les statuts business sont renseignes.
+Q3-S-01,Q3,SPEC2-Q3/Slides 17,SCEN,DEFAULT,Conditions minimales d'inversion,Les besoins demande/must-run/flex sont quantifies en scenario.,"inversion_k, inversion_r et additional_absorbed presentes",HIGH,BASE,PASS,hors_scope=100.00%; inversion=0,hors_scope < 80% ou inversion deja atteinte,Scenario deja de-stresse: conditions minimales d'inversion deja satisfaites.
+Q3-S-01,Q3,SPEC2-Q3/Slides 17,SCEN,DEFAULT,Conditions minimales d'inversion,Les besoins demande/must-run/flex sont quantifies en scenario.,"inversion_k, inversion_r et additional_absorbed presentes",HIGH,DEMAND_UP,PASS,hors_scope=100.00%; inversion=0,hors_scope < 80% ou inversion deja atteinte,Scenario deja de-stresse: conditions minimales d'inversion deja satisfaites.
+Q3-S-01,Q3,SPEC2-Q3/Slides 17,SCEN,DEFAULT,Conditions minimales d'inversion,Les besoins demande/must-run/flex sont quantifies en scenario.,"inversion_k, inversion_r et additional_absorbed presentes",HIGH,FLEX_UP,PASS,hors_scope=100.00%; inversion=0,hors_scope < 80% ou inversion deja atteinte,Scenario deja de-stresse: conditions minimales d'inversion deja satisfaites.
+Q3-S-01,Q3,SPEC2-Q3/Slides 17,SCEN,DEFAULT,Conditions minimales d'inversion,Les besoins demande/must-run/flex sont quantifies en scenario.,"inversion_k, inversion_r et additional_absorbed presentes",HIGH,LOW_RIGIDITY,PASS,hors_scope=100.00%; inversion=0,hors_scope < 80% ou inversion deja atteinte,Scenario deja de-stresse: conditions minimales d'inversion deja satisfaites.
+Q3-S-02,Q3,Slides 17-19,SCEN,DEFAULT,Validation entree phase 3,Le statut prospectif est interpretable pour la transition phase 3.,status non vide en SCEN,MEDIUM,BASE,PASS,hors_scope=100.00%; inversion=0,hors_scope < 80% ou inversion deja atteinte,Scenario de-stresse: la transition Phase 3 est interpretable comme deja acquise.
+Q3-S-02,Q3,Slides 17-19,SCEN,DEFAULT,Validation entree phase 3,Le statut prospectif est interpretable pour la transition phase 3.,status non vide en SCEN,MEDIUM,DEMAND_UP,PASS,hors_scope=100.00%; inversion=0,hors_scope < 80% ou inversion deja atteinte,Scenario de-stresse: la transition Phase 3 est interpretable comme deja acquise.
+Q3-S-02,Q3,Slides 17-19,SCEN,DEFAULT,Validation entree phase 3,Le statut prospectif est interpretable pour la transition phase 3.,status non vide en SCEN,MEDIUM,FLEX_UP,PASS,hors_scope=100.00%; inversion=0,hors_scope < 80% ou inversion deja atteinte,Scenario de-stresse: la transition Phase 3 est interpretable comme deja acquise.
+Q3-S-02,Q3,Slides 17-19,SCEN,DEFAULT,Validation entree phase 3,Le statut prospectif est interpretable pour la transition phase 3.,status non vide en SCEN,MEDIUM,LOW_RIGIDITY,PASS,hors_scope=100.00%; inversion=0,hors_scope < 80% ou inversion deja atteinte,Scenario de-stresse: la transition Phase 3 est interpretable comme deja acquise.
+```
+
+### Q3 - comparaison HIST vs SCEN
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\comparison_hist_vs_scen.csv`
+
+```csv
+country,scenario_id,metric,hist_value,scen_value,delta,hist_status,scen_status,interpretability_status,interpretability_reason
+DE,BASE,inversion_k_demand,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+DE,BASE,inversion_r_mustrun,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+ES,BASE,inversion_k_demand,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+ES,BASE,inversion_r_mustrun,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+DE,DEMAND_UP,inversion_k_demand,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+DE,DEMAND_UP,inversion_r_mustrun,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+ES,DEMAND_UP,inversion_k_demand,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+ES,DEMAND_UP,inversion_r_mustrun,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+DE,FLEX_UP,inversion_k_demand,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+DE,FLEX_UP,inversion_r_mustrun,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+ES,FLEX_UP,inversion_k_demand,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+ES,FLEX_UP,inversion_r_mustrun,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+DE,LOW_RIGIDITY,inversion_k_demand,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+DE,LOW_RIGIDITY,inversion_r_mustrun,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+ES,LOW_RIGIDITY,inversion_k_demand,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+ES,LOW_RIGIDITY,inversion_r_mustrun,,,,degradation,hors_scope_stage2,NON_TESTABLE,scenario_hors_scope_stage2
+```
+
+### Q3 - checks filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\checks_filtered.csv`
+
+```csv
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,HIST,,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,HIST,,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,HIST,,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,HIST,,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,HIST,,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,HIST,,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,HIST,,Q3,,True
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,SCEN,BASE,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,SCEN,BASE,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,SCEN,BASE,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,SCEN,BASE,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,SCEN,BASE,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,SCEN,BASE,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q3,,True
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,SCEN,DEMAND_UP,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,SCEN,DEMAND_UP,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,SCEN,DEMAND_UP,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,SCEN,DEMAND_UP,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,SCEN,DEMAND_UP,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,DEMAND_UP,Q3,,True
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,SCEN,FLEX_UP,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,SCEN,FLEX_UP,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,SCEN,FLEX_UP,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,SCEN,FLEX_UP,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,SCEN,FLEX_UP,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,SCEN,FLEX_UP,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,FLEX_UP,Q3,,True
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,LOW_RIGIDITY,Q3,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q3,,True
+WARN,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=0.00%,BUNDLE,,Q3,,True
+```
+
+### Q3 - warnings filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q3 - historique - Q3_status.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\hist\tables\Q3_status.csv`
+
+```csv
+country,reference_year,trend_window_years,status,stage3_ready_year,trend_h_negative,trend_capture_ratio_pv_vs_ttl,trend_h_negative_ols,trend_h_negative_ols_no_outliers,trend_capture_ols,trend_capture_ols_no_outliers,trend_points_n,inversion_k_demand,inversion_k_demand_status,inversion_r_mustrun,inversion_r_mustrun_status,inversion_f_flex,inversion_f_flex_status,additional_absorbed_needed_TWh_year,additional_sink_power_p95_mw,warnings_quality
+DE,2024,3,degradation,False,194.0,-0.0581393474385712,194.0,194.0,-0.0581393474385712,-0.0581393474385712,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+ES,2024,3,degradation,False,123.5,-0.1269114030103169,123.5,123.5,-0.1269114030103169,-0.1269114030103169,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+```
+
+### Q3 - scénario `BASE`
+
+### Q3/BASE - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\BASE\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q3,,True
+```
+
+### Q3/BASE - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\BASE\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q3/BASE - Q3_status.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\BASE\tables\Q3_status.csv`
+
+```csv
+country,reference_year,trend_window_years,status,stage3_ready_year,trend_h_negative,trend_capture_ratio_pv_vs_ttl,trend_h_negative_ols,trend_h_negative_ols_no_outliers,trend_capture_ols,trend_capture_ols_no_outliers,trend_points_n,inversion_k_demand,inversion_k_demand_status,inversion_r_mustrun,inversion_r_mustrun_status,inversion_f_flex,inversion_f_flex_status,additional_absorbed_needed_TWh_year,additional_sink_power_p95_mw,warnings_quality
+DE,2035,3,hors_scope_stage2,False,0.0,0.0004898625629098,0.0,0.0,0.0004898625629098,0.0004898625629098,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+ES,2035,3,hors_scope_stage2,False,0.0,-3.307928116015324e-05,0.0,0.0,-3.3079281160153244e-05,-3.3079281160153244e-05,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+```
+
+### Q3 - scénario `DEMAND_UP`
+
+### Q3/DEMAND_UP - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\DEMAND_UP\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q3,,True
+```
+
+### Q3/DEMAND_UP - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\DEMAND_UP\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q3/DEMAND_UP - Q3_status.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\DEMAND_UP\tables\Q3_status.csv`
+
+```csv
+country,reference_year,trend_window_years,status,stage3_ready_year,trend_h_negative,trend_capture_ratio_pv_vs_ttl,trend_h_negative_ols,trend_h_negative_ols_no_outliers,trend_capture_ols,trend_capture_ols_no_outliers,trend_points_n,inversion_k_demand,inversion_k_demand_status,inversion_r_mustrun,inversion_r_mustrun_status,inversion_f_flex,inversion_f_flex_status,additional_absorbed_needed_TWh_year,additional_sink_power_p95_mw,warnings_quality
+DE,2035,3,hors_scope_stage2,False,0.0,0.0004580074348786,0.0,0.0,0.0004580074348786,0.0004580074348786,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+ES,2035,3,hors_scope_stage2,False,0.0,-3.938112541734817e-05,0.0,0.0,-3.938112541734818e-05,-3.938112541734818e-05,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+```
+
+### Q3 - scénario `FLEX_UP`
+
+### Q3/FLEX_UP - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\FLEX_UP\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q3,,True
+```
+
+### Q3/FLEX_UP - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\FLEX_UP\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q3/FLEX_UP - Q3_status.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\FLEX_UP\tables\Q3_status.csv`
+
+```csv
+country,reference_year,trend_window_years,status,stage3_ready_year,trend_h_negative,trend_capture_ratio_pv_vs_ttl,trend_h_negative_ols,trend_h_negative_ols_no_outliers,trend_capture_ols,trend_capture_ols_no_outliers,trend_points_n,inversion_k_demand,inversion_k_demand_status,inversion_r_mustrun,inversion_r_mustrun_status,inversion_f_flex,inversion_f_flex_status,additional_absorbed_needed_TWh_year,additional_sink_power_p95_mw,warnings_quality
+DE,2035,3,hors_scope_stage2,False,0.0,0.0004898625629098,0.0,0.0,0.0004898625629098,0.0004898625629098,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+ES,2035,3,hors_scope_stage2,False,0.0,-3.307928116015324e-05,0.0,0.0,-3.3079281160153244e-05,-3.3079281160153244e-05,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+```
+
+### Q3 - scénario `LOW_RIGIDITY`
+
+### Q3/LOW_RIGIDITY - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\LOW_RIGIDITY\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,DE: demande requise au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,DE: flexibilisation must-run au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,DE: flexibilite additionnelle au-dela de la borne.,Q3,DE,False
+WARN,Q3_INVERSION_K_BEYOND_BOUNDS,ES: demande requise au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_R_BEYOND_BOUNDS,ES: flexibilisation must-run au-dela de la borne.,Q3,ES,False
+WARN,Q3_INVERSION_F_BEYOND_BOUNDS,ES: flexibilite additionnelle au-dela de la borne.,Q3,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,Q3,,True
+```
+
+### Q3/LOW_RIGIDITY - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\LOW_RIGIDITY\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q3/LOW_RIGIDITY - Q3_status.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q3\scen\LOW_RIGIDITY\tables\Q3_status.csv`
+
+```csv
+country,reference_year,trend_window_years,status,stage3_ready_year,trend_h_negative,trend_capture_ratio_pv_vs_ttl,trend_h_negative_ols,trend_h_negative_ols_no_outliers,trend_capture_ols,trend_capture_ols_no_outliers,trend_points_n,inversion_k_demand,inversion_k_demand_status,inversion_r_mustrun,inversion_r_mustrun_status,inversion_f_flex,inversion_f_flex_status,additional_absorbed_needed_TWh_year,additional_sink_power_p95_mw,warnings_quality
+DE,2035,3,hors_scope_stage2,False,0.0,0.0004734190073316,0.0,0.0,0.0004734190073316,0.0004734190073316,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+ES,2035,3,hors_scope_stage2,False,0.0,-2.622588539945569e-05,0.0,0.0,-2.6225885399455694e-05,-2.6225885399455694e-05,3,,beyond_bounds,,beyond_bounds,,beyond_bounds,0.0,0.0,
+```
+
+## Q4
+
+### Q4 - contexte
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\question_context.json`
+
+```json
+{
+  "question_id": "Q4",
+  "objective": "Quantifier l'impact batterie (systeme et actif) et estimer des ordres de grandeur de sizing.",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "run_id": "FULL_20260211_105525",
+  "source_summary_file": "outputs\\combined\\FULL_20260211_105525\\Q4\\summary.json",
+  "source_refs_in_ledger": [
+    "SPEC2-Q4",
+    "SPEC2-Q4/Slides 22",
+    "SPEC2-Q4/Slides 23",
+    "Slides 23-25"
+  ],
+  "scenarios": [
+    "BASE",
+    "FLEX_UP",
+    "HIGH_CO2",
+    "HIGH_GAS"
+  ],
+  "country_filter_notes": {
+    "hist_unfilterable_tables": [
+      "Q4_bess_frontier.csv"
+    ],
+    "scen_unfilterable_tables_by_scenario": {
+      "BASE": [
+        "Q4_bess_frontier.csv"
+      ],
+      "FLEX_UP": [
+        "Q4_bess_frontier.csv"
+      ],
+      "HIGH_CO2": [
+        "Q4_bess_frontier.csv"
+      ],
+      "HIGH_GAS": [
+        "Q4_bess_frontier.csv"
+      ]
+    }
+  }
+}
+```
+
+### Q4 - test ledger
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\test_ledger.csv`
+
+```csv
+test_id,question_id,source_ref,mode,scenario_group,title,what_is_tested,metric_rule,severity_if_fail,scenario_id,status,value,threshold,interpretation
+Q4-H-01,Q4,SPEC2-Q4/Slides 22,HIST,HIST_BASE,Simulation BESS 3 modes,"SURPLUS_FIRST, PRICE_ARBITRAGE_SIMPLE et PV_COLOCATED sont executes.",3 modes executes avec sorties non vides,CRITICAL,,PASS,"HIST_PRICE_ARBITRAGE_SIMPLE,HIST_PV_COLOCATED",3 modes executes,Les trois modes Q4 sont disponibles.
+Q4-H-02,Q4,SPEC2-Q4,HIST,HIST_BASE,Invariants physiques BESS,Bornes SOC/puissance/energie respectees.,aucun check FAIL Q4,CRITICAL,,PASS,PASS,pas de FAIL,Les invariants physiques batterie sont respectes.
+Q4-S-01,Q4,SPEC2-Q4/Slides 23,SCEN,DEFAULT,Comparaison effet batteries par scenario,Impact FAR/surplus/capture compare entre scenarios utiles.,Q4 summary non vide pour >=1 scenario,HIGH,BASE,PASS,2,>0 lignes,Resultats Q4 prospectifs disponibles.
+Q4-S-01,Q4,SPEC2-Q4/Slides 23,SCEN,DEFAULT,Comparaison effet batteries par scenario,Impact FAR/surplus/capture compare entre scenarios utiles.,Q4 summary non vide pour >=1 scenario,HIGH,FLEX_UP,PASS,2,>0 lignes,Resultats Q4 prospectifs disponibles.
+Q4-S-01,Q4,SPEC2-Q4/Slides 23,SCEN,DEFAULT,Comparaison effet batteries par scenario,Impact FAR/surplus/capture compare entre scenarios utiles.,Q4 summary non vide pour >=1 scenario,HIGH,HIGH_CO2,PASS,2,>0 lignes,Resultats Q4 prospectifs disponibles.
+Q4-S-01,Q4,SPEC2-Q4/Slides 23,SCEN,DEFAULT,Comparaison effet batteries par scenario,Impact FAR/surplus/capture compare entre scenarios utiles.,Q4 summary non vide pour >=1 scenario,HIGH,HIGH_GAS,PASS,2,>0 lignes,Resultats Q4 prospectifs disponibles.
+Q4-S-02,Q4,Slides 23-25,SCEN,DEFAULT,Sensibilite valeur commodites,Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.,delta pv_capture ou revenus vs BASE,MEDIUM,BASE,PASS,share_finite=100.00%,>=80% valeurs finies,Sensibilite valeur exploitable sur le panel.
+Q4-S-02,Q4,Slides 23-25,SCEN,DEFAULT,Sensibilite valeur commodites,Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.,delta pv_capture ou revenus vs BASE,MEDIUM,FLEX_UP,PASS,share_finite=100.00%,>=80% valeurs finies,Sensibilite valeur exploitable sur le panel.
+Q4-S-02,Q4,Slides 23-25,SCEN,DEFAULT,Sensibilite valeur commodites,Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.,delta pv_capture ou revenus vs BASE,MEDIUM,HIGH_CO2,PASS,share_finite=100.00%,>=80% valeurs finies,Sensibilite valeur exploitable sur le panel.
+Q4-S-02,Q4,Slides 23-25,SCEN,DEFAULT,Sensibilite valeur commodites,Les scenarios HIGH_CO2/HIGH_GAS modifient les indicateurs de valeur.,delta pv_capture ou revenus vs BASE,MEDIUM,HIGH_GAS,PASS,share_finite=100.00%,>=80% valeurs finies,Sensibilite valeur exploitable sur le panel.
+```
+
+### Q4 - comparaison HIST vs SCEN
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\comparison_hist_vs_scen.csv`
+
+```csv
+country,scenario_id,metric,hist_value,scen_value,delta,scen_status,interpretability_status,interpretability_reason
+DE,BASE,far_after,1.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,BASE,surplus_unabs_energy_after,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,BASE,pv_capture_price_after,46.22796099131209,127.9956494768802,81.76768848556812,,INFORMATIVE,delta_interpretable
+ES,BASE,far_after,0.9994023008613372,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,BASE,surplus_unabs_energy_after,0.002132,0.0,-0.002132,,INFORMATIVE,delta_interpretable
+ES,BASE,pv_capture_price_after,42.80117347476487,95.40682213699849,52.605648662233605,,INFORMATIVE,delta_interpretable
+DE,FLEX_UP,far_after,1.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,FLEX_UP,surplus_unabs_energy_after,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,FLEX_UP,pv_capture_price_after,46.22796099131209,127.9956494768802,81.76768848556812,,INFORMATIVE,delta_interpretable
+ES,FLEX_UP,far_after,0.9994023008613372,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,FLEX_UP,surplus_unabs_energy_after,0.002132,0.0,-0.002132,,INFORMATIVE,delta_interpretable
+ES,FLEX_UP,pv_capture_price_after,42.80117347476487,95.40682213699849,52.605648662233605,,INFORMATIVE,delta_interpretable
+DE,HIGH_CO2,far_after,1.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,HIGH_CO2,surplus_unabs_energy_after,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIGH_CO2,pv_capture_price_after,46.22796099131209,139.43948267621957,93.21152168490748,,INFORMATIVE,delta_interpretable
+ES,HIGH_CO2,far_after,0.9994023008613372,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,HIGH_CO2,surplus_unabs_energy_after,0.002132,0.0,-0.002132,,INFORMATIVE,delta_interpretable
+ES,HIGH_CO2,pv_capture_price_after,42.80117347476487,100.0357568118577,57.23458333709283,,INFORMATIVE,delta_interpretable
+DE,HIGH_GAS,far_after,1.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,HIGH_GAS,surplus_unabs_energy_after,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIGH_GAS,pv_capture_price_after,46.22796099131209,143.09748214463005,96.86952115331796,,INFORMATIVE,delta_interpretable
+ES,HIGH_GAS,far_after,0.9994023008613372,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,HIGH_GAS,surplus_unabs_energy_after,0.002132,0.0,-0.002132,,INFORMATIVE,delta_interpretable
+ES,HIGH_GAS,pv_capture_price_after,42.80117347476487,105.71880532356604,62.917631848801165,,INFORMATIVE,delta_interpretable
+DE,HIST_PRICE_ARBITRAGE_SIMPLE,far_after,1.0,1.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+ES,HIST_PRICE_ARBITRAGE_SIMPLE,far_after,0.9994023008613372,0.9994023008613372,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIST_PV_COLOCATED,far_after,1.0,1.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+ES,HIST_PV_COLOCATED,far_after,0.9994023008613372,0.9994023008613372,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+```
+
+### Q4 - checks filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\checks_filtered.csv`
+
+```csv
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,HIST,,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,HIST,,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",SCEN,BASE,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,BASE,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",SCEN,BASE,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,BASE,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",SCEN,FLEX_UP,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,FLEX_UP,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",SCEN,FLEX_UP,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,FLEX_UP,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",SCEN,HIGH_CO2,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_CO2,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",SCEN,HIGH_CO2,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_CO2,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",SCEN,HIGH_GAS,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_GAS,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",SCEN,HIGH_GAS,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_GAS,Q4,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q4,,True
+PASS,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=42.86%,BUNDLE,,Q4,,True
+```
+
+### Q4 - warnings filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\warnings_filtered.csv`
+
+```csv
+question_id,status,code,message,scope,scenario_id,mentioned_countries,is_global
+Q4,WARN,QUESTION_WARNING,BASE: Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,BASE: Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,FLEX_UP: Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,FLEX_UP: Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,HIGH_CO2: Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,HIGH_CO2: Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,HIGH_GAS: Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,HIGH_GAS: Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+```
+
+### Q4 - historique - Q4_bess_frontier.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\hist\tables\Q4_bess_frontier.csv`
+
+```csv
+dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,858.3460840476877,0.0,250.0,0.0,234.5207879911715,0.0,234.5207879911715,234.5207879911715,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,10346.930261799687,0.0,500.0,0.0,250.0,0.0,469.0415759823429,469.041575982343,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,21843.86883319757,0.0,750.0,0.0,250.0,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,35071.32281395178,0.0,1000.0,0.0,250.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,1716.692168095375,0.0,500.0,0.0,469.041575982343,0.0,469.041575982343,469.041575982343,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,20693.86052359937,0.0,1000.0,0.0,500.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,43687.73766639515,0.0,1500.0,0.0,500.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,70142.64562790356,0.0,2000.0,0.0,500.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,2575.038252143064,0.0,750.0,0.0,703.5623639735145,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,31040.790785399065,0.0,1500.0,0.0,750.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,65531.60649959272,0.0,2250.0,0.0,750.0,0.0,2110.687091920543,2110.6870919205435,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,105213.96844185534,0.0,3000.0,0.0,750.0,0.0,2814.249455894057,2814.249455894058,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,3433.3843361907507,0.0,1000.0,0.0,938.083151964686,0.0,938.083151964686,938.083151964686,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,41387.72104719875,0.0,2000.0,0.0,1000.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,87375.4753327903,0.0,3000.0,0.0,1000.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,140285.29125580713,0.0,4000.0,0.0,1000.0,0.0,3752.332607858744,3752.332607858744,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,5150.076504286127,0.0,1500.0,0.0,1407.124727947029,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,62081.58157079813,0.0,3000.0,0.0,1500.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,131063.21299918545,0.0,4500.0,0.0,1500.0,0.0,4221.374183841086,4221.374183841087,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,210427.93688371067,0.0,6000.0,0.0,1500.0,0.0,5628.498911788115,5628.498911788116,v2.1.1,0.2741322999936528,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,0.9994023008613372,0.9994023008613372,0.002132,0.002132,42.80117347476487,42.80117347476487,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,0.9994023008613372,0.9994023008613372,0.002132,0.002132,42.80117347476487,42.80117347476487,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,0.9994023008613372,0.9994023008613372,0.002132,0.002132,42.80117347476487,42.80117347476487,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,0.9994023008613372,0.9994023008613372,0.002132,0.002132,42.80117347476487,42.80117347476487,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,0.9994023008613372,0.9996125608772832,0.002132,0.001382,42.80117347476487,42.80117347476487,37625.94627047778,0.0,469.041575982343,250.0,250.0,750.0,894.5207879911715,234.5207879911715,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,0.9994023008613372,0.9997120839514978,0.002132,0.001027,42.80117347476487,42.80117347476487,54575.25885916129,0.0,802.0610949298065,250.0,250.0,1105.0,1441.4415759823428,469.041575982343,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,0.9994023008613372,0.9997120839514978,0.002132,0.001027,42.80117347476487,42.80117347476487,64900.74683284788,0.0,802.0610949298065,250.0,250.0,1105.0,1675.9623639735146,703.5623639735145,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,0.9994023008613372,0.9997120839514978,0.002132,0.001027,42.80117347476487,42.80117347476487,74914.31795849916,0.0,802.0610949298065,250.0,250.0,1105.0,1910.483151964686,938.083151964686,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,0.9994023008613372,0.9997959076111884,0.002132,0.000728,42.80117347476487,42.80117347476487,70178.86854095556,0.0,938.083151964686,500.0,500.0,1404.0,1704.5615759823431,469.041575982343,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,0.9994023008613372,0.9999444913557902,0.002132,0.000198,42.80117347476487,42.80117347476487,101637.41371832255,0.0,1435.2672225059696,500.0,500.0,1934.0,2640.003151964686,938.083151964686,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,0.9994023008613372,0.9999444913557902,0.002132,0.000198,42.80117347476487,42.80117347476487,122288.38966569577,0.0,1435.2672225059696,500.0,500.0,1934.0,3109.044727947029,1407.124727947029,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,0.9994023008613372,0.9999444913557902,0.002132,0.000198,42.80117347476487,42.80117347476487,142315.5319169983,0.0,1466.998209110974,500.0,500.0,1934.0,3578.086303929372,1876.166303929372,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,0.9994023008613372,0.9999360809551524,0.002132,0.000228,42.80117347476487,42.80117347476487,94593.81481143336,0.0,1407.124727947029,601.0,750.0,1904.0,2379.0823639735145,703.5623639735145,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,134030.96937748388,0.0,1621.0076865949773,601.0,750.0,2132.0,3283.284727947029,1407.124727947029,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,165007.43329854362,0.0,1621.0076865949773,601.0,750.0,2132.0,3986.847091920543,2110.6870919205435,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,195048.14667549744,0.0,2200.4973136664607,601.0,750.0,2132.0,4690.409455894058,2814.249455894058,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,111592.51788191112,0.0,1621.0076865949773,601.0,1000.0,2132.0,2814.2431519646857,938.083151964686,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,156311.83223664513,0.0,1621.0076865949773,601.0,1000.0,2132.0,3752.326303929372,1876.166303929372,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,197613.78413139156,0.0,1933.996418221948,601.0,1000.0,2132.0,4690.409455894058,2814.249455894058,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,237668.06863399665,0.0,2933.996418221948,601.0,1000.0,2132.0,5628.492607858743,3752.332607858744,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,133156.8104228667,0.0,1621.0076865949773,601.0,1500.0,2132.0,3283.284727947029,1407.124727947029,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,200235.7819549677,0.0,1621.0076865949773,601.0,1500.0,2132.0,4690.409455894058,2814.249455894058,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,262188.7097970873,0.0,2900.994627332921,601.0,1500.0,2132.0,6097.534183841086,4221.374183841087,v2.1.1,0.2770795000251382,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,0.9994023008613372,1.0,0.002132,0.0,42.80117347476487,42.80117347476487,322270.1365509949,0.0,4400.9946273329215,601.0,1500.0,2132.0,7504.658911788116,5628.498911788116,v2.1.1,0.2770795000251382,True
+```
+
+### Q4 - historique - Q4_sizing_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\hist\tables\Q4_sizing_summary.csv`
+
+```csv
+country,year,dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit,objective_not_reached,objective_recommendation,pv_capacity_proxy_mw,power_grid_max_mw,duration_grid_max_h,notes_quality
+DE,2024,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,1.0,1.0,0.0,0.0,46.22796099131209,46.22796099131209,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2741322999936528,True,False,,40714.24005000002,1500.0,8.0,ok
+ES,2024,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,0.9994023008613372,0.9994023008613372,0.002132,0.002132,42.80117347476487,42.80117347476487,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2770795000251382,True,False,,20284.0,1500.0,8.0,ok
+```
+
+### Q4 - scénario `BASE`
+
+### Q4/BASE - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\BASE\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+```
+
+### Q4/BASE - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\BASE\warnings_filtered.csv`
+
+```csv
+question_id,status,code,message,scope,scenario_id,mentioned_countries,is_global
+Q4,WARN,QUESTION_WARNING,Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+```
+
+### Q4/BASE - Q4_bess_frontier.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\BASE\tables\Q4_bess_frontier.csv`
+
+```csv
+dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,27200.453696585908,0.0,0.0,0.0,234.5207879911715,0.0,234.5207879911715,234.5207879911715,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,54336.68684227842,0.0,233.49910455548692,0.0,250.0,0.0,469.0415759823429,469.041575982343,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,81473.13036445504,0.0,483.49910455548695,0.0,250.0,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,108602.07131342808,0.0,733.499104555487,0.0,250.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,54400.907393171816,0.0,0.0,0.0,469.041575982343,0.0,469.041575982343,469.041575982343,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,108673.37368455683,0.0,466.9982091109739,0.0,500.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,162946.26072891007,0.0,966.998209110974,0.0,500.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,217204.14262685613,0.0,1466.998209110974,0.0,500.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,81601.36108975772,0.0,0.0,0.0,703.5623639735145,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,163010.06052683527,0.0,700.4973136664609,0.0,750.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,244419.3910933651,0.0,1450.4973136664607,0.0,750.0,0.0,2110.687091920543,2110.6870919205435,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,325806.21394028416,0.0,2200.4973136664607,0.0,750.0,0.0,2814.249455894057,2814.249455894058,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,108801.81478634365,0.0,0.0,0.0,938.083151964686,0.0,938.083151964686,938.083151964686,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,217346.74736911367,0.0,933.9964182219478,0.0,1000.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,325892.52145782014,0.0,1933.996418221948,0.0,1000.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,434408.28525371227,0.0,2933.996418221948,0.0,1000.0,0.0,3752.332607858744,3752.332607858744,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,163202.72217951543,0.0,0.0,0.0,1407.124727947029,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,326020.12105367053,0.0,1400.9946273329217,0.0,1500.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,488838.7821867302,0.0,2900.994627332921,0.0,1500.0,0.0,4221.374183841086,4221.374183841087,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,651612.4278805683,0.0,4400.9946273329215,0.0,1500.0,0.0,5628.498911788115,5628.498911788116,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,22235.83554763605,0.0,0.0,0.0,234.5207879911715,0.0,234.5207879911715,234.5207879911715,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,44361.14642645507,0.0,233.49910455548692,0.0,250.0,0.0,469.0415759823429,469.041575982343,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,66363.87896374927,0.0,483.49910455548695,0.0,250.0,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,88240.4895411669,0.0,733.499104555487,0.0,250.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,44471.6710952721,0.0,0.0,0.0,469.041575982343,0.0,469.041575982343,469.041575982343,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,88722.29285291013,0.0,466.9982091109739,0.0,500.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,132727.75792749855,0.0,966.998209110974,0.0,500.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,176480.9790823338,0.0,1466.998209110974,0.0,500.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,66707.50664290816,0.0,0.0,0.0,703.5623639735145,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,133083.4392793652,0.0,700.4973136664609,0.0,750.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,199091.6368912478,0.0,1450.4973136664607,0.0,750.0,0.0,2110.687091920543,2110.6870919205435,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,264721.46862350067,0.0,2200.4973136664607,0.0,750.0,0.0,2814.249455894057,2814.249455894058,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,88943.34219054421,0.0,0.0,0.0,938.083151964686,0.0,938.083151964686,938.083151964686,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,177444.58570582027,0.0,933.9964182219478,0.0,1000.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,265455.5158549971,0.0,1933.996418221948,0.0,1000.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,352961.9581646676,0.0,2933.996418221948,0.0,1000.0,0.0,3752.332607858744,3752.332607858744,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,133415.01328581633,0.0,0.0,0.0,1407.124727947029,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,266166.8785587304,0.0,1400.9946273329217,0.0,1500.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,398183.2737824956,0.0,2900.994627332921,0.0,1500.0,0.0,4221.374183841086,4221.374183841087,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,529442.9372470013,0.0,4400.9946273329215,0.0,1500.0,0.0,5628.498911788115,5628.498911788116,v2.1.1,0.2238077000365592,True
+```
+
+### Q4/BASE - Q4_sizing_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\BASE\tables\Q4_sizing_summary.csv`
+
+```csv
+country,year,dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit,objective_not_reached,objective_recommendation,pv_capacity_proxy_mw,power_grid_max_mw,duration_grid_max_h,notes_quality
+DE,2035,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True,True,increase_grid_upper_bound,21963.55840765988,1500.0,8.0,ok
+ES,2035,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True,True,increase_grid_upper_bound,14442.668017057573,1500.0,8.0,ok
+```
+
+### Q4 - scénario `FLEX_UP`
+
+### Q4/FLEX_UP - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\FLEX_UP\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+```
+
+### Q4/FLEX_UP - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\FLEX_UP\warnings_filtered.csv`
+
+```csv
+question_id,status,code,message,scope,scenario_id,mentioned_countries,is_global
+Q4,WARN,QUESTION_WARNING,Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+```
+
+### Q4/FLEX_UP - Q4_bess_frontier.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\FLEX_UP\tables\Q4_bess_frontier.csv`
+
+```csv
+dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,27200.453696585908,0.0,0.0,0.0,234.5207879911715,0.0,234.5207879911715,234.5207879911715,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,54336.68684227842,0.0,233.49910455548692,0.0,250.0,0.0,469.0415759823429,469.041575982343,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,81473.13036445504,0.0,483.49910455548695,0.0,250.0,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,108602.07131342808,0.0,733.499104555487,0.0,250.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,54400.907393171816,0.0,0.0,0.0,469.041575982343,0.0,469.041575982343,469.041575982343,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,108673.37368455683,0.0,466.9982091109739,0.0,500.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,162946.26072891007,0.0,966.998209110974,0.0,500.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,217204.14262685613,0.0,1466.998209110974,0.0,500.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,81601.36108975772,0.0,0.0,0.0,703.5623639735145,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,163010.06052683527,0.0,700.4973136664609,0.0,750.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,244419.3910933651,0.0,1450.4973136664607,0.0,750.0,0.0,2110.687091920543,2110.6870919205435,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,325806.21394028416,0.0,2200.4973136664607,0.0,750.0,0.0,2814.249455894057,2814.249455894058,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,108801.81478634365,0.0,0.0,0.0,938.083151964686,0.0,938.083151964686,938.083151964686,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,217346.74736911367,0.0,933.9964182219478,0.0,1000.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,325892.52145782014,0.0,1933.996418221948,0.0,1000.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,434408.28525371227,0.0,2933.996418221948,0.0,1000.0,0.0,3752.332607858744,3752.332607858744,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,163202.72217951543,0.0,0.0,0.0,1407.124727947029,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,,,0.0,0.0,127.9956494768802,127.9956494768802,326020.12105367053,0.0,1400.9946273329217,0.0,1500.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,,,0.0,0.0,127.9956494768802,127.9956494768802,488838.7821867302,0.0,2900.994627332921,0.0,1500.0,0.0,4221.374183841086,4221.374183841087,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,,,0.0,0.0,127.9956494768802,127.9956494768802,651612.4278805683,0.0,4400.9946273329215,0.0,1500.0,0.0,5628.498911788115,5628.498911788116,v2.1.1,0.2949954000068828,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,22235.83554763605,0.0,0.0,0.0,234.5207879911715,0.0,234.5207879911715,234.5207879911715,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,44361.14642645507,0.0,233.49910455548692,0.0,250.0,0.0,469.0415759823429,469.041575982343,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,66363.87896374927,0.0,483.49910455548695,0.0,250.0,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,88240.4895411669,0.0,733.499104555487,0.0,250.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,44471.6710952721,0.0,0.0,0.0,469.041575982343,0.0,469.041575982343,469.041575982343,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,88722.29285291013,0.0,466.9982091109739,0.0,500.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,132727.75792749855,0.0,966.998209110974,0.0,500.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,176480.9790823338,0.0,1466.998209110974,0.0,500.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,66707.50664290816,0.0,0.0,0.0,703.5623639735145,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,133083.4392793652,0.0,700.4973136664609,0.0,750.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,199091.6368912478,0.0,1450.4973136664607,0.0,750.0,0.0,2110.687091920543,2110.6870919205435,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,264721.46862350067,0.0,2200.4973136664607,0.0,750.0,0.0,2814.249455894057,2814.249455894058,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,88943.34219054421,0.0,0.0,0.0,938.083151964686,0.0,938.083151964686,938.083151964686,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,177444.58570582027,0.0,933.9964182219478,0.0,1000.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,265455.5158549971,0.0,1933.996418221948,0.0,1000.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,352961.9581646676,0.0,2933.996418221948,0.0,1000.0,0.0,3752.332607858744,3752.332607858744,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,133415.01328581633,0.0,0.0,0.0,1407.124727947029,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,,,0.0,0.0,95.40682213699849,95.40682213699849,266166.8785587304,0.0,1400.9946273329217,0.0,1500.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,,,0.0,0.0,95.40682213699849,95.40682213699849,398183.2737824956,0.0,2900.994627332921,0.0,1500.0,0.0,4221.374183841086,4221.374183841087,v2.1.1,0.2238077000365592,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,,,0.0,0.0,95.40682213699849,95.40682213699849,529442.9372470013,0.0,4400.9946273329215,0.0,1500.0,0.0,5628.498911788115,5628.498911788116,v2.1.1,0.2238077000365592,True
+```
+
+### Q4/FLEX_UP - Q4_sizing_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\FLEX_UP\tables\Q4_sizing_summary.csv`
+
+```csv
+country,year,dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit,objective_not_reached,objective_recommendation,pv_capacity_proxy_mw,power_grid_max_mw,duration_grid_max_h,notes_quality
+DE,2035,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,127.9956494768802,127.9956494768802,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2949954000068828,True,True,increase_grid_upper_bound,21963.55840765988,1500.0,8.0,ok
+ES,2035,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,95.40682213699849,95.40682213699849,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2238077000365592,True,True,increase_grid_upper_bound,14442.668017057573,1500.0,8.0,ok
+```
+
+### Q4 - scénario `HIGH_CO2`
+
+### Q4/HIGH_CO2 - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_CO2\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+```
+
+### Q4/HIGH_CO2 - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_CO2\warnings_filtered.csv`
+
+```csv
+question_id,status,code,message,scope,scenario_id,mentioned_countries,is_global
+Q4,WARN,QUESTION_WARNING,Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+```
+
+### Q4/HIGH_CO2 - Q4_bess_frontier.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_CO2\tables\Q4_bess_frontier.csv`
+
+```csv
+dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,139.43948267621957,139.43948267621957,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,,,0.0,0.0,139.43948267621957,139.43948267621957,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,,,0.0,0.0,139.43948267621957,139.43948267621957,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,,,0.0,0.0,139.43948267621957,139.43948267621957,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,,,0.0,0.0,139.43948267621957,139.43948267621957,29831.09806188161,0.0,0.0,0.0,234.5207879911715,0.0,234.5207879911715,234.5207879911715,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,,,0.0,0.0,139.43948267621957,139.43948267621957,59597.97557286982,0.0,233.49910455548692,0.0,250.0,0.0,469.0415759823429,469.041575982343,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,,,0.0,0.0,139.43948267621957,139.43948267621957,89365.06346034215,0.0,483.49910455548695,0.0,250.0,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,,,0.0,0.0,139.43948267621957,139.43948267621957,119124.64877461088,0.0,733.499104555487,0.0,250.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,,,0.0,0.0,139.43948267621957,139.43948267621957,59662.19612376322,0.0,0.0,0.0,469.041575982343,0.0,469.041575982343,469.041575982343,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,,,0.0,0.0,139.43948267621957,139.43948267621957,119195.95114573964,0.0,466.9982091109739,0.0,500.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,,,0.0,0.0,139.43948267621957,139.43948267621957,178730.1269206843,0.0,966.998209110974,0.0,500.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,,,0.0,0.0,139.43948267621957,139.43948267621957,238249.29754922172,0.0,1466.998209110974,0.0,500.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,,,0.0,0.0,139.43948267621957,139.43948267621957,89493.29418564485,0.0,0.0,0.0,703.5623639735145,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,,,0.0,0.0,139.43948267621957,139.43948267621957,178793.9267186095,0.0,700.4973136664609,0.0,750.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,,,0.0,0.0,139.43948267621957,139.43948267621957,268095.1903810264,0.0,1450.4973136664607,0.0,750.0,0.0,2110.687091920543,2110.6870919205435,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,,,0.0,0.0,139.43948267621957,139.43948267621957,357373.9463238326,0.0,2200.4973136664607,0.0,750.0,0.0,2814.249455894057,2814.249455894058,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,,,0.0,0.0,139.43948267621957,139.43948267621957,119324.39224752644,0.0,0.0,0.0,938.083151964686,0.0,938.083151964686,938.083151964686,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,,,0.0,0.0,139.43948267621957,139.43948267621957,238391.9022914793,0.0,933.9964182219478,0.0,1000.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,,,0.0,0.0,139.43948267621957,139.43948267621957,357460.2538413686,0.0,1933.996418221948,0.0,1000.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,,,0.0,0.0,139.43948267621957,139.43948267621957,476498.5950984435,0.0,2933.996418221948,0.0,1000.0,0.0,3752.332607858744,3752.332607858744,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,,,0.0,0.0,139.43948267621957,139.43948267621957,178986.5883712897,0.0,0.0,0.0,1407.124727947029,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,,,0.0,0.0,139.43948267621957,139.43948267621957,357587.853437219,0.0,1400.9946273329217,0.0,1500.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,,,0.0,0.0,139.43948267621957,139.43948267621957,536190.3807620528,0.0,2900.994627332921,0.0,1500.0,0.0,4221.374183841086,4221.374183841087,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,,,0.0,0.0,139.43948267621957,139.43948267621957,714747.8926476652,0.0,4400.9946273329215,0.0,1500.0,0.0,5628.498911788115,5628.498911788116,v2.1.1,0.2589133000001311,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,100.0357568118577,100.0357568118577,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,,,0.0,0.0,100.0357568118577,100.0357568118577,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,,,0.0,0.0,100.0357568118577,100.0357568118577,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,,,0.0,0.0,100.0357568118577,100.0357568118577,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,,,0.0,0.0,100.0357568118577,100.0357568118577,23312.49916523189,0.0,0.0,0.0,234.5207879911715,0.0,234.5207879911715,234.5207879911715,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,,,0.0,0.0,100.0357568118577,100.0357568118577,46514.473661646734,0.0,233.49910455548692,0.0,250.0,0.0,469.0415759823429,469.041575982343,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,,,0.0,0.0,100.0357568118577,100.0357568118577,69593.86981653677,0.0,483.49910455548695,0.0,250.0,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,,,0.0,0.0,100.0357568118577,100.0357568118577,92547.14401155023,0.0,733.499104555487,0.0,250.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,,,0.0,0.0,100.0357568118577,100.0357568118577,46624.99833046377,0.0,0.0,0.0,469.041575982343,0.0,469.041575982343,469.041575982343,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,,,0.0,0.0,100.0357568118577,100.0357568118577,93028.94732329348,0.0,466.9982091109739,0.0,500.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,,,0.0,0.0,100.0357568118577,100.0357568118577,139187.73963307354,0.0,966.998209110974,0.0,500.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,,,0.0,0.0,100.0357568118577,100.0357568118577,185094.28802310047,0.0,1466.998209110974,0.0,500.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,,,0.0,0.0,100.0357568118577,100.0357568118577,69937.49749569566,0.0,0.0,0.0,703.5623639735145,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,,,0.0,0.0,100.0357568118577,100.0357568118577,139543.4209849402,0.0,700.4973136664609,0.0,750.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,,,0.0,0.0,100.0357568118577,100.0357568118577,208781.60944961032,0.0,1450.4973136664607,0.0,750.0,0.0,2110.687091920543,2110.6870919205435,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,,,0.0,0.0,100.0357568118577,100.0357568118577,277641.4320346507,0.0,2200.4973136664607,0.0,750.0,0.0,2814.249455894057,2814.249455894058,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,,,0.0,0.0,100.0357568118577,100.0357568118577,93249.99666092754,0.0,0.0,0.0,938.083151964686,0.0,938.083151964686,938.083151964686,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,,,0.0,0.0,100.0357568118577,100.0357568118577,186057.8946465869,0.0,933.9964182219478,0.0,1000.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,,,0.0,0.0,100.0357568118577,100.0357568118577,278375.4792661471,0.0,1933.996418221948,0.0,1000.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,,,0.0,0.0,100.0357568118577,100.0357568118577,370188.5760462009,0.0,2933.996418221948,0.0,1000.0,0.0,3752.332607858744,3752.332607858744,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,,,0.0,0.0,100.0357568118577,100.0357568118577,139874.99499139132,0.0,0.0,0.0,1407.124727947029,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,,,0.0,0.0,100.0357568118577,100.0357568118577,279086.8419698804,0.0,1400.9946273329217,0.0,1500.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,,,0.0,0.0,100.0357568118577,100.0357568118577,417563.21889922064,0.0,2900.994627332921,0.0,1500.0,0.0,4221.374183841086,4221.374183841087,v2.1.1,0.2553778999717906,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,,,0.0,0.0,100.0357568118577,100.0357568118577,555282.8640693014,0.0,4400.9946273329215,0.0,1500.0,0.0,5628.498911788115,5628.498911788116,v2.1.1,0.2553778999717906,True
+```
+
+### Q4/HIGH_CO2 - Q4_sizing_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_CO2\tables\Q4_sizing_summary.csv`
+
+```csv
+country,year,dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit,objective_not_reached,objective_recommendation,pv_capacity_proxy_mw,power_grid_max_mw,duration_grid_max_h,notes_quality
+DE,2035,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,139.43948267621957,139.43948267621957,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2589133000001311,True,True,increase_grid_upper_bound,21963.55840765988,1500.0,8.0,ok
+ES,2035,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,100.0357568118577,100.0357568118577,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2553778999717906,True,True,increase_grid_upper_bound,14442.668017057573,1500.0,8.0,ok
+```
+
+### Q4 - scénario `HIGH_GAS`
+
+### Q4/HIGH_GAS - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_GAS\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED,"Aucune paire (P,E) de la grille ne satisfait l'objectif; augmenter la borne superieure.",Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+```
+
+### Q4/HIGH_GAS - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_GAS\warnings_filtered.csv`
+
+```csv
+question_id,status,code,message,scope,scenario_id,mentioned_countries,is_global
+Q4,WARN,QUESTION_WARNING,Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+Q4,WARN,QUESTION_WARNING,Objectif non atteint sur la grille de sizing; meilleur compromis retourne et extension de grille recommandee.,GLOBAL,,,True
+```
+
+### Q4/HIGH_GAS - Q4_bess_frontier.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_GAS\tables\Q4_bess_frontier.csv`
+
+```csv
+dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,143.09748214463005,143.09748214463005,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,,,0.0,0.0,143.09748214463005,143.09748214463005,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,,,0.0,0.0,143.09748214463005,143.09748214463005,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,,,0.0,0.0,143.09748214463005,143.09748214463005,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,,,0.0,0.0,143.09748214463005,143.09748214463005,30671.97851882364,0.0,0.0,0.0,234.5207879911715,0.0,234.5207879911715,234.5207879911715,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,,,0.0,0.0,143.09748214463005,143.09748214463005,61279.736486753885,0.0,233.49910455548692,0.0,250.0,0.0,469.0415759823429,469.041575982343,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,,,0.0,0.0,143.09748214463005,143.09748214463005,91887.70483116824,0.0,483.49910455548695,0.0,250.0,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,,,0.0,0.0,143.09748214463005,143.09748214463005,122488.170602379,0.0,733.499104555487,0.0,250.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,,,0.0,0.0,143.09748214463005,143.09748214463005,61343.95703764728,0.0,0.0,0.0,469.041575982343,0.0,469.041575982343,469.041575982343,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,,,0.0,0.0,143.09748214463005,143.09748214463005,122559.47297350776,0.0,466.9982091109739,0.0,500.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,,,0.0,0.0,143.09748214463005,143.09748214463005,183775.4096623365,0.0,966.998209110974,0.0,500.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,,,0.0,0.0,143.09748214463005,143.09748214463005,244976.341204758,0.0,1466.998209110974,0.0,500.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,,,0.0,0.0,143.09748214463005,143.09748214463005,92015.93555647093,0.0,0.0,0.0,703.5623639735145,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,,,0.0,0.0,143.09748214463005,143.09748214463005,183839.20946026169,0.0,700.4973136664609,0.0,750.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,,,0.0,0.0,143.09748214463005,143.09748214463005,275663.1144935047,0.0,1450.4973136664607,0.0,750.0,0.0,2110.687091920543,2110.6870919205435,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,,,0.0,0.0,143.09748214463005,143.09748214463005,367464.51180713694,0.0,2200.4973136664607,0.0,750.0,0.0,2814.249455894057,2814.249455894058,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,,,0.0,0.0,143.09748214463005,143.09748214463005,122687.91407529455,0.0,0.0,0.0,938.083151964686,0.0,938.083151964686,938.083151964686,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,,,0.0,0.0,143.09748214463005,143.09748214463005,245118.94594701557,0.0,933.9964182219478,0.0,1000.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,,,0.0,0.0,143.09748214463005,143.09748214463005,367550.8193246729,0.0,1933.996418221948,0.0,1000.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,,,0.0,0.0,143.09748214463005,143.09748214463005,489952.682409516,0.0,2933.996418221948,0.0,1000.0,0.0,3752.332607858744,3752.332607858744,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,,,0.0,0.0,143.09748214463005,143.09748214463005,184031.87111294185,0.0,0.0,0.0,1407.124727947029,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,,,0.0,0.0,143.09748214463005,143.09748214463005,367678.4189205233,0.0,1400.9946273329217,0.0,1500.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,,,0.0,0.0,143.09748214463005,143.09748214463005,551326.2289870094,0.0,2900.994627332921,0.0,1500.0,0.0,4221.374183841086,4221.374183841087,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,,,0.0,0.0,143.09748214463005,143.09748214463005,734929.0236142739,0.0,4400.9946273329215,0.0,1500.0,0.0,5628.498911788115,5628.498911788116,v2.1.1,0.2505562999867834,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,105.71880532356604,105.71880532356604,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,4.0,,,0.0,0.0,105.71880532356604,105.71880532356604,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,6.0,,,0.0,0.0,105.71880532356604,105.71880532356604,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,0.0,0.0,8.0,,,0.0,0.0,105.71880532356604,105.71880532356604,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,250.0,500.0,2.0,,,0.0,0.0,105.71880532356604,105.71880532356604,24634.34360663667,0.0,0.0,0.0,234.5207879911715,0.0,234.5207879911715,234.5207879911715,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1000.0,4.0,,,0.0,0.0,105.71880532356604,105.71880532356604,49158.162544456296,0.0,233.49910455548692,0.0,250.0,0.0,469.0415759823429,469.041575982343,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,250.0,1500.0,6.0,,,0.0,0.0,105.71880532356604,105.71880532356604,73559.40314075112,0.0,483.49910455548695,0.0,250.0,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,250.0,2000.0,8.0,,,0.0,0.0,105.71880532356604,105.71880532356604,97834.52177716936,0.0,733.499104555487,0.0,250.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,500.0,1000.0,2.0,,,0.0,0.0,105.71880532356604,105.71880532356604,49268.68721327334,0.0,0.0,0.0,469.041575982343,0.0,469.041575982343,469.041575982343,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,500.0,2000.0,4.0,,,0.0,0.0,105.71880532356604,105.71880532356604,98316.3250889126,0.0,466.9982091109739,0.0,500.0,0.0,938.0831519646858,938.083151964686,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,500.0,3000.0,6.0,,,0.0,0.0,105.71880532356604,105.71880532356604,147118.80628150224,0.0,966.998209110974,0.0,500.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,500.0,4000.0,8.0,,,0.0,0.0,105.71880532356604,105.71880532356604,195669.0435543387,0.0,1466.998209110974,0.0,500.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,750.0,1500.0,2.0,,,0.0,0.0,105.71880532356604,105.71880532356604,73903.03081991001,0.0,0.0,0.0,703.5623639735145,0.0,703.5623639735145,703.5623639735145,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,750.0,3000.0,4.0,,,0.0,0.0,105.71880532356604,105.71880532356604,147474.4876333689,0.0,700.4973136664609,0.0,750.0,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,750.0,4500.0,6.0,,,0.0,0.0,105.71880532356604,105.71880532356604,220678.20942225336,0.0,1450.4973136664607,0.0,750.0,0.0,2110.687091920543,2110.6870919205435,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,750.0,6000.0,8.0,,,0.0,0.0,105.71880532356604,105.71880532356604,293503.56533150806,0.0,2200.4973136664607,0.0,750.0,0.0,2814.249455894057,2814.249455894058,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,2000.0,2.0,,,0.0,0.0,105.71880532356604,105.71880532356604,98537.37442654668,0.0,0.0,0.0,938.083151964686,0.0,938.083151964686,938.083151964686,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,4000.0,4.0,,,0.0,0.0,105.71880532356604,105.71880532356604,196632.6501778252,0.0,933.9964182219478,0.0,1000.0,0.0,1876.166303929372,1876.166303929372,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,6000.0,6.0,,,0.0,0.0,105.71880532356604,105.71880532356604,294237.6125630045,0.0,1933.996418221948,0.0,1000.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,1000.0,8000.0,8.0,,,0.0,0.0,105.71880532356604,105.71880532356604,391338.0871086774,0.0,2933.996418221948,0.0,1000.0,0.0,3752.332607858744,3752.332607858744,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,3000.0,2.0,,,0.0,0.0,105.71880532356604,105.71880532356604,147806.06163982002,0.0,0.0,0.0,1407.124727947029,0.0,1407.124727947029,1407.124727947029,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,6000.0,4.0,,,0.0,0.0,105.71880532356604,105.71880532356604,294948.9752667378,0.0,1400.9946273329217,0.0,1500.0,0.0,2814.249455894058,2814.249455894058,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,9000.0,6.0,,,0.0,0.0,105.71880532356604,105.71880532356604,441356.4188445067,0.0,2900.994627332921,0.0,1500.0,0.0,4221.374183841086,4221.374183841087,v2.1.1,0.2459145999746397,True
+SURPLUS_FIRST,FAR_TARGET,1500.0,12000.0,8.0,,,0.0,0.0,105.71880532356604,105.71880532356604,587007.1306630161,0.0,4400.9946273329215,0.0,1500.0,0.0,5628.498911788115,5628.498911788116,v2.1.1,0.2459145999746397,True
+```
+
+### Q4/HIGH_GAS - Q4_sizing_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q4\scen\HIGH_GAS\tables\Q4_sizing_summary.csv`
+
+```csv
+country,year,dispatch_mode,objective,required_bess_power_mw,required_bess_energy_mwh,required_bess_duration_h,far_before,far_after,surplus_unabs_energy_before,surplus_unabs_energy_after,pv_capture_price_before,pv_capture_price_after,revenue_bess_price_taker,soc_min,soc_max,charge_max,discharge_max,charge_sum_mwh,discharge_sum_mwh,initial_deliverable_mwh,engine_version,compute_time_sec,cache_hit,objective_not_reached,objective_recommendation,pv_capacity_proxy_mw,power_grid_max_mw,duration_grid_max_h,notes_quality
+DE,2035,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,143.09748214463005,143.09748214463005,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2505562999867834,True,True,increase_grid_upper_bound,21963.55840765988,1500.0,8.0,ok
+ES,2035,SURPLUS_FIRST,FAR_TARGET,0.0,0.0,2.0,,,0.0,0.0,105.71880532356604,105.71880532356604,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,v2.1.1,0.2459145999746397,True,True,increase_grid_upper_bound,14442.668017057573,1500.0,8.0,ok
+```
+
+## Q5
+
+### Q5 - contexte
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\question_context.json`
+
+```json
+{
+  "question_id": "Q5",
+  "objective": "Mesurer l'impact CO2/gaz sur l'ancre thermique (TCA/TTL) et calculer le CO2 requis pour une cible TTL.",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "run_id": "FULL_20260211_105525",
+  "source_summary_file": "outputs\\combined\\FULL_20260211_105525\\Q5\\summary.json",
+  "source_refs_in_ledger": [
+    "SPEC2-Q5",
+    "SPEC2-Q5/Slides 28",
+    "SPEC2-Q5/Slides 29",
+    "SPEC2-Q5/Slides 31"
+  ],
+  "scenarios": [
+    "BASE",
+    "HIGH_BOTH",
+    "HIGH_CO2",
+    "HIGH_GAS"
+  ],
+  "country_filter_notes": {
+    "hist_unfilterable_tables": [],
+    "scen_unfilterable_tables_by_scenario": {
+      "BASE": [],
+      "HIGH_BOTH": [],
+      "HIGH_CO2": [],
+      "HIGH_GAS": []
+    }
+  }
+}
+```
+
+### Q5 - test ledger
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\test_ledger.csv`
+
+```csv
+test_id,question_id,source_ref,mode,scenario_group,title,what_is_tested,metric_rule,severity_if_fail,scenario_id,status,value,threshold,interpretation
+Q5-H-01,Q5,SPEC2-Q5/Slides 28,HIST,HIST_BASE,Ancre thermique historique,TTL/TCA/alpha/corr sont estimes hors surplus.,Q5_summary non vide avec ttl_obs et tca_q95,HIGH,,PASS,share_fini=100.00%,>=80% lignes ttl/tca finies,L'ancre thermique est quantifiable sur la majorite des pays.
+Q5-H-02,Q5,SPEC2-Q5,HIST,HIST_BASE,Sensibilites analytiques,dTCA/dCO2 et dTCA/dGas sont positives.,dTCA_dCO2 > 0 et dTCA_dGas > 0,CRITICAL,,PASS,share_positive=100.00%,100% lignes >0,Sensibilites analytiques globalement coherentes.
+Q5-S-01,Q5,SPEC2-Q5/Slides 29,SCEN,DEFAULT,Sensibilites scenarisees,BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.,Q5_summary non vide sur scenarios selectionnes,HIGH,BASE,PASS,2,>0 lignes,Sensibilites scenario calculees.
+Q5-S-01,Q5,SPEC2-Q5/Slides 29,SCEN,DEFAULT,Sensibilites scenarisees,BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.,Q5_summary non vide sur scenarios selectionnes,HIGH,HIGH_CO2,PASS,2,>0 lignes,Sensibilites scenario calculees.
+Q5-S-01,Q5,SPEC2-Q5/Slides 29,SCEN,DEFAULT,Sensibilites scenarisees,BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.,Q5_summary non vide sur scenarios selectionnes,HIGH,HIGH_GAS,PASS,2,>0 lignes,Sensibilites scenario calculees.
+Q5-S-01,Q5,SPEC2-Q5/Slides 29,SCEN,DEFAULT,Sensibilites scenarisees,BASE/HIGH_CO2/HIGH_GAS/HIGH_BOTH sont compares.,Q5_summary non vide sur scenarios selectionnes,HIGH,HIGH_BOTH,PASS,2,>0 lignes,Sensibilites scenario calculees.
+Q5-S-02,Q5,SPEC2-Q5/Slides 31,SCEN,DEFAULT,CO2 requis pour TTL cible,Le CO2 requis est calcule et interpretable.,co2_required_* non NaN,MEDIUM,BASE,PASS,share_finite=100.00%,>=80% valeurs finies,CO2 requis interpretable sur le panel.
+Q5-S-02,Q5,SPEC2-Q5/Slides 31,SCEN,DEFAULT,CO2 requis pour TTL cible,Le CO2 requis est calcule et interpretable.,co2_required_* non NaN,MEDIUM,HIGH_CO2,PASS,share_finite=100.00%,>=80% valeurs finies,CO2 requis interpretable sur le panel.
+Q5-S-02,Q5,SPEC2-Q5/Slides 31,SCEN,DEFAULT,CO2 requis pour TTL cible,Le CO2 requis est calcule et interpretable.,co2_required_* non NaN,MEDIUM,HIGH_GAS,PASS,share_finite=100.00%,>=80% valeurs finies,CO2 requis interpretable sur le panel.
+Q5-S-02,Q5,SPEC2-Q5/Slides 31,SCEN,DEFAULT,CO2 requis pour TTL cible,Le CO2 requis est calcule et interpretable.,co2_required_* non NaN,MEDIUM,HIGH_BOTH,PASS,share_finite=100.00%,>=80% valeurs finies,CO2 requis interpretable sur le panel.
+```
+
+### Q5 - comparaison HIST vs SCEN
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\comparison_hist_vs_scen.csv`
+
+```csv
+country,scenario_id,metric,hist_value,scen_value,delta,scen_status,interpretability_status,interpretability_reason
+DE,BASE,ttl_obs,283.7215,204.8443398652976,-78.87716013470242,,INFORMATIVE,delta_interpretable
+DE,BASE,tca_q95,280.9753684210526,158.8684210526316,-122.10694736842105,,INFORMATIVE,delta_interpretable
+DE,BASE,co2_required_base_non_negative,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+ES,BASE,ttl_obs,214.73399999999992,161.69364241883665,-53.04035758116328,,INFORMATIVE,delta_interpretable
+ES,BASE,tca_q95,287.6926909090909,121.54545454545452,-166.14723636363638,,INFORMATIVE,delta_interpretable
+ES,BASE,co2_required_base_non_negative,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIGH_CO2,ttl_obs,283.7215,218.9778924968765,-64.74360750312346,,INFORMATIVE,delta_interpretable
+DE,HIGH_CO2,tca_q95,280.9753684210526,203.7368421052632,-77.23852631578944,,INFORMATIVE,delta_interpretable
+DE,HIGH_CO2,co2_required_base_non_negative,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+ES,HIGH_CO2,ttl_obs,214.73399999999992,167.4491587083915,-47.284841291608416,,INFORMATIVE,delta_interpretable
+ES,HIGH_CO2,tca_q95,287.6926909090909,139.9090909090909,-147.7836,,INFORMATIVE,delta_interpretable
+ES,HIGH_CO2,co2_required_base_non_negative,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIGH_GAS,ttl_obs,283.7215,224.1864451284555,-59.5350548715445,,INFORMATIVE,delta_interpretable
+DE,HIGH_GAS,tca_q95,280.9753684210526,191.43421052631575,-89.54115789473684,,INFORMATIVE,delta_interpretable
+DE,HIGH_GAS,co2_required_base_non_negative,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+ES,HIGH_GAS,ttl_obs,214.73399999999992,174.98725514796757,-39.74674485203235,,INFORMATIVE,delta_interpretable
+ES,HIGH_GAS,tca_q95,287.6926909090909,162.45454545454544,-125.23814545454547,,INFORMATIVE,delta_interpretable
+ES,HIGH_GAS,co2_required_base_non_negative,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIGH_BOTH,ttl_obs,283.7215,204.8443398652976,-78.87716013470242,,INFORMATIVE,delta_interpretable
+DE,HIGH_BOTH,tca_q95,280.9753684210526,236.30263157894737,-44.67273684210525,,INFORMATIVE,delta_interpretable
+DE,HIGH_BOTH,co2_required_base_non_negative,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+ES,HIGH_BOTH,ttl_obs,214.73399999999992,161.69364241883665,-53.04035758116328,,INFORMATIVE,delta_interpretable
+ES,HIGH_BOTH,tca_q95,287.6926909090909,180.8181818181818,-106.8745090909091,,INFORMATIVE,delta_interpretable
+ES,HIGH_BOTH,co2_required_base_non_negative,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+```
+
+### Q5 - checks filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\checks_filtered.csv`
+
+```csv
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=14.2 EUR/MWh (acceptable).,HIST,,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,HIST,,Q5,,True
+WARN,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=58.0 EUR/MWh (a revoir).,HIST,,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=35.0 EUR/MWh (acceptable).,SCEN,BASE,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,BASE,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=28.5 EUR/MWh (acceptable).,SCEN,BASE,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,BASE,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=36.4 EUR/MWh (acceptable).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=29.0 EUR/MWh (acceptable).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_CO2,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=37.1 EUR/MWh (acceptable).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=29.9 EUR/MWh (acceptable).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_GAS,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=66.4 EUR/MWh (acceptable).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=47.6 EUR/MWh (acceptable).,SCEN,HIGH_BOTH,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,SCEN,HIGH_BOTH,Q5,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q5,,True
+PASS,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=66.67%,BUNDLE,,Q5,,True
+```
+
+### Q5 - warnings filtrés
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q5 - historique - Q5_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\hist\tables\Q5_summary.csv`
+
+```csv
+country,year_range_used,marginal_tech,chosen_anchor_tech,ttl_obs,ttl_obs_price_cd,ttl_anchor,ttl_physical,ttl_regression,ttl_method,tca_q95,alpha,alpha_effective,corr_cd,anchor_confidence,anchor_distribution_error_p90_p95,anchor_error_p90,anchor_error_p95,anchor_status,dTCA_dCO2,dTCA_dGas,ttl_target,required_co2_eur_t,required_gas_eur_mwh_th,co2_required_base,co2_required_gas_override,co2_required_base_non_negative,co2_required_gas_override_non_negative,warnings_quality
+DE,2018-2024,COAL,COAL,283.7215,283.7215,280.9753684210526,280.9753684210526,,anchor_distributional,280.9753684210526,2.74613157894737,2.74613157894737,0.8541834303436624,0.8223985197368423,14.208118421052616,-25.670105263157865,2.74613157894737,already_above_target,0.8973684210526316,1.4473684210526316,160.0,0.0,0.0,0.0,,0.0,,
+ES,2018-2024,CCGT,CCGT,214.73399999999992,214.73399999999992,287.6926909090909,287.6926909090909,,anchor_distributional,287.6926909090909,-72.95869090909099,-72.95869090909099,0.7085520267720752,0.2743913636363648,58.04869090909081,-43.13869090909063,-72.95869090909099,already_above_target,0.3672727272727272,1.818181818181818,160.0,0.0,0.0,0.0,,0.0,,
+```
+
+### Q5 - scénario `BASE`
+
+### Q5/BASE - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\BASE\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=35.0 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=28.5 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+```
+
+### Q5/BASE - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\BASE\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q5/BASE - Q5_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\BASE\tables\Q5_summary.csv`
+
+```csv
+country,year_range_used,marginal_tech,chosen_anchor_tech,ttl_obs,ttl_obs_price_cd,ttl_anchor,ttl_physical,ttl_regression,ttl_method,tca_q95,alpha,alpha_effective,corr_cd,anchor_confidence,anchor_distribution_error_p90_p95,anchor_error_p90,anchor_error_p95,anchor_status,dTCA_dCO2,dTCA_dGas,ttl_target,required_co2_eur_t,required_gas_eur_mwh_th,co2_required_base,co2_required_gas_override,co2_required_base_non_negative,co2_required_gas_override_non_negative,warnings_quality
+DE,2025-2035,COAL,COAL,204.8443398652976,204.8443398652976,158.8684210526316,158.8684210526316,,anchor_distributional,158.8684210526316,45.97591881266598,45.97591881266598,0.1721523081215795,0.5629085137748667,34.96731889801066,-23.95871898335534,45.97591881266598,already_above_target,0.8973684210526316,1.4473684210526316,160.0,0.0,0.0,0.0,,0.0,,
+ES,2025-2035,CCGT,CCGT,161.69364241883665,161.69364241883665,121.54545454545452,121.54545454545452,,anchor_distributional,121.54545454545452,40.14818787338211,40.14818787338211,0.1309825490773777,0.6442816330153167,28.457469358774667,-16.76675084416722,40.14818787338211,already_above_target,0.3672727272727272,1.818181818181818,160.0,0.0,0.0,0.0,,0.0,,
+```
+
+### Q5 - scénario `HIGH_BOTH`
+
+### Q5/HIGH_BOTH - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_BOTH\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=66.4 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_ALPHA_NEGATIVE,Alpha negatif mais TTL deja au-dessus de la cible (lecture normale).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=47.6 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+```
+
+### Q5/HIGH_BOTH - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_BOTH\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q5/HIGH_BOTH - Q5_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_BOTH\tables\Q5_summary.csv`
+
+```csv
+country,year_range_used,marginal_tech,chosen_anchor_tech,ttl_obs,ttl_obs_price_cd,ttl_anchor,ttl_physical,ttl_regression,ttl_method,tca_q95,alpha,alpha_effective,corr_cd,anchor_confidence,anchor_distribution_error_p90_p95,anchor_error_p90,anchor_error_p95,anchor_status,dTCA_dCO2,dTCA_dGas,ttl_target,required_co2_eur_t,required_gas_eur_mwh_th,co2_required_base,co2_required_gas_override,co2_required_base_non_negative,co2_required_gas_override_non_negative,warnings_quality
+DE,2025-2035,COAL,COAL,204.8443398652976,204.8443398652976,236.30263157894737,236.30263157894737,,anchor_distributional,236.30263157894737,-31.4582917136498,-31.4582917136498,0.1721523081215798,0.1696798673542442,66.42561061166046,-101.39292950967112,-31.4582917136498,already_above_target,0.8973684210526316,1.4473684210526316,160.0,0.0,0.0,0.0,,0.0,,
+ES,2025-2035,CCGT,CCGT,161.69364241883665,161.69364241883665,180.8181818181818,180.8181818181818,,anchor_distributional,180.8181818181818,-19.124539399345167,-19.124539399345167,0.1309825490773779,0.4052248905235021,47.58200875811984,-76.0394781168945,-19.124539399345167,already_above_target,0.3672727272727272,1.818181818181818,160.0,0.0,0.0,0.0,,0.0,,
+```
+
+### Q5 - scénario `HIGH_CO2`
+
+### Q5/HIGH_CO2 - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_CO2\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=36.4 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=29.0 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+```
+
+### Q5/HIGH_CO2 - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_CO2\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q5/HIGH_CO2 - Q5_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_CO2\tables\Q5_summary.csv`
+
+```csv
+country,year_range_used,marginal_tech,chosen_anchor_tech,ttl_obs,ttl_obs_price_cd,ttl_anchor,ttl_physical,ttl_regression,ttl_method,tca_q95,alpha,alpha_effective,corr_cd,anchor_confidence,anchor_distribution_error_p90_p95,anchor_error_p90,anchor_error_p95,anchor_status,dTCA_dCO2,dTCA_dGas,ttl_target,required_co2_eur_t,required_gas_eur_mwh_th,co2_required_base,co2_required_gas_override,co2_required_base_non_negative,co2_required_gas_override_non_negative,warnings_quality
+DE,2025-2035,COAL,COAL,218.9778924968765,218.9778924968765,203.7368421052632,203.7368421052632,,anchor_distributional,203.7368421052632,15.241050391613356,15.241050391613356,0.1977231264178585,0.5455220006169903,36.35823995064078,-57.4754295096682,15.241050391613356,already_above_target,0.8973684210526316,1.4473684210526316,160.0,0.0,0.0,0.0,,0.0,,
+ES,2025-2035,CCGT,CCGT,167.4491587083915,167.4491587083915,139.9090909090909,139.9090909090909,,anchor_distributional,139.9090909090909,27.5400677993006,27.5400677993006,0.1454548832076073,0.6373471562056063,29.012227503551493,-30.484387207802385,27.5400677993006,already_above_target,0.3672727272727272,1.818181818181818,160.0,0.0,0.0,0.0,,0.0,,
+```
+
+### Q5 - scénario `HIGH_GAS`
+
+### Q5/HIGH_GAS - checks
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_GAS\checks_filtered.csv`
+
+```csv
+status,code,message,question_id,mentioned_countries,is_global
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=37.1 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+INFO,Q5_DISTRIBUTIONAL_FIT,Erreur distributionnelle p90/p95=29.9 EUR/MWh (acceptable).,Q5,,True
+INFO,Q5_LOW_CORR_CD,Corr horaire faible mais non bloquante (fit distributionnel prioritaire).,Q5,,True
+```
+
+### Q5/HIGH_GAS - warnings
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_GAS\warnings_filtered.csv`
+
+```csv
+
+```
+
+### Q5/HIGH_GAS - Q5_summary.csv
+Source: `reports\chatgpt52_structured_FULL_20260211_105525_DE_ES\questions\Q5\scen\HIGH_GAS\tables\Q5_summary.csv`
+
+```csv
+country,year_range_used,marginal_tech,chosen_anchor_tech,ttl_obs,ttl_obs_price_cd,ttl_anchor,ttl_physical,ttl_regression,ttl_method,tca_q95,alpha,alpha_effective,corr_cd,anchor_confidence,anchor_distribution_error_p90_p95,anchor_error_p90,anchor_error_p95,anchor_status,dTCA_dCO2,dTCA_dGas,ttl_target,required_co2_eur_t,required_gas_eur_mwh_th,co2_required_base,co2_required_gas_override,co2_required_base_non_negative,co2_required_gas_override_non_negative,warnings_quality
+DE,2025-2035,COAL,COAL,224.1864451284555,224.1864451284555,191.43421052631575,191.43421052631575,,anchor_distributional,191.43421052631575,32.75223460213971,32.75223460213971,0.1908329930625627,0.53651048745912,37.0791610032704,-41.40608740440109,32.75223460213971,already_above_target,0.8973684210526316,1.4473684210526316,160.0,0.0,0.0,0.0,,0.0,,
+ES,2025-2035,CCGT,CCGT,174.98725514796757,174.98725514796757,162.45454545454544,162.45454545454544,,anchor_distributional,162.45454545454544,12.532709693422134,12.532709693422134,0.1495094431887566,0.6264806443673689,29.88154845061048,-47.23038720779883,12.532709693422134,already_above_target,0.3672727272727272,1.818181818181818,160.0,0.0,0.0,0.0,,0.0,,
+```

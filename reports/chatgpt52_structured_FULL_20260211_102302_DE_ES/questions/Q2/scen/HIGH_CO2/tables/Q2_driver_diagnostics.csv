@@ -1,0 +1,17 @@
+country,driver_name,corr_capture_pv,elasticity_capture_pv,expected_sign,observed_sign,sign_conflict
+DE,sr_energy,,,-1,0,False
+DE,far_energy,,,1,0,False
+DE,vre_penetration_share_gen,0.6594707667372779,0.2807972787064522,-1,1,True
+DE,nrl_p10_proxy,0.6781398807199046,0.0242080424370259,1,1,False
+DE,nrl_p50_proxy,0.6645703807897805,0.023397203873046,1,1,False
+DE,nrl_p90_proxy,0.6796792639722204,0.0255687248163897,1,1,False
+DE,exports_pos_share_proxy,-0.755410539240721,-0.0288478010015459,1,-1,True
+DE,ir_p10,-0.6168274795645395,-0.0188979349949205,-1,-1,False
+ES,sr_energy,,,-1,0,False
+ES,far_energy,,,1,0,False
+ES,vre_penetration_share_gen,-0.7374071526032226,-0.6049479790808908,-1,-1,False
+ES,nrl_p10_proxy,-0.7587140623028786,-0.1438877999433477,1,-1,True
+ES,nrl_p50_proxy,-0.7917234771645233,-0.1416619961752691,1,-1,True
+ES,nrl_p90_proxy,-0.7364223874833429,-0.1592470528914119,1,-1,True
+ES,exports_pos_share_proxy,0.5948463048434939,0.1175902126256846,1,1,False
+ES,ir_p10,0.8452695494220362,0.1080594297886362,-1,1,True

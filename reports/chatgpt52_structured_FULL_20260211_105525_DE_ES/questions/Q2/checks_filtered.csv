@@ -1,0 +1,21 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,HIST,,Q2,DE,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,HIST,,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,BASE,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,BASE,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_CO2,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_CO2,Q2,,True
+INFO,Q2_NOT_SIGNIFICANT,DE-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,DE-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,DE,False
+INFO,Q2_NOT_SIGNIFICANT,ES-PV: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,ES,False
+INFO,Q2_NOT_SIGNIFICANT,ES-WIND: signal statistique faible (p-value/R2).,SCEN,HIGH_GAS,Q2,ES,False
+PASS,RC_COMMON_PASS,Checks communs RC-1..RC-4 OK.,SCEN,HIGH_GAS,Q2,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q2,,True
+PASS,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=50.00%,BUNDLE,,Q2,,True

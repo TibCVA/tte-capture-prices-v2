@@ -1,0 +1,17 @@
+country,scenario_id,metric,hist_value,scen_value,delta,hist_status,scen_status,interpretability_status,interpretability_reason
+DE,BASE,inversion_k_demand,0.0,,,STOP_POSSIBLE,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+DE,BASE,inversion_r_mustrun,,,,STOP_POSSIBLE,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+ES,BASE,inversion_k_demand,,,,HORS_SCOPE_PHASE2,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+ES,BASE,inversion_r_mustrun,,,,HORS_SCOPE_PHASE2,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+DE,DEMAND_UP,inversion_k_demand,0.0,,,STOP_POSSIBLE,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+DE,DEMAND_UP,inversion_r_mustrun,,,,STOP_POSSIBLE,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+ES,DEMAND_UP,inversion_k_demand,,,,HORS_SCOPE_PHASE2,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+ES,DEMAND_UP,inversion_r_mustrun,,,,HORS_SCOPE_PHASE2,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+DE,FLEX_UP,inversion_k_demand,0.0,,,STOP_POSSIBLE,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+DE,FLEX_UP,inversion_r_mustrun,,,,STOP_POSSIBLE,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+ES,FLEX_UP,inversion_k_demand,,,,HORS_SCOPE_PHASE2,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+ES,FLEX_UP,inversion_r_mustrun,,,,HORS_SCOPE_PHASE2,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+DE,LOW_RIGIDITY,inversion_k_demand,0.0,,,STOP_POSSIBLE,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+DE,LOW_RIGIDITY,inversion_r_mustrun,,,,STOP_POSSIBLE,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+ES,LOW_RIGIDITY,inversion_k_demand,,,,HORS_SCOPE_PHASE2,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2
+ES,LOW_RIGIDITY,inversion_r_mustrun,,,,HORS_SCOPE_PHASE2,HORS_SCOPE_PHASE2,NON_TESTABLE,scenario_hors_scope_phase2

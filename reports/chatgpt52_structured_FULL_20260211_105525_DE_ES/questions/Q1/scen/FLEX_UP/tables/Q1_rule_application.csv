@@ -1,0 +1,7 @@
+country,year,stage2_market_score,score_breakdown,phase2_candidate_year,low_price_flags_count,physical_flags_count,capture_flags_count,active_flags,flag_h_negative_stage2,flag_h_below_5_stage2,flag_capture_pv_low,flag_capture_wind_low,flag_far_low,flag_ir_high,flag_spread_high,flag_capture_only_stage2,is_stage1_criteria,is_phase2_market,is_phase2_physical,phase_market,stress_phys_state
+DE,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+DE,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,,False,False,False,False,False,False,False,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2025,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2030,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel
+ES,2035,0,low=0;value=0;physical=0;crisis=0,False,0,0,0,flag_spread_high,False,False,False,False,False,False,True,False,False,False,False,uncertain,pas_de_surplus_structurel

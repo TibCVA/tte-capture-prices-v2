@@ -1,0 +1,9 @@
+driver_name,corr_with_slope_pv,corr_with_slope_wind,n_countries,expected_sign,sign_conflict_share
+exports_pos_share_proxy,1.0,1.0,2,1,0.5
+far_energy,,,2,1,0.0
+ir_p10,1.0,1.0,2,-1,0.5
+nrl_p10_proxy,,,2,1,0.0
+nrl_p50_proxy,,,2,1,0.0
+nrl_p90_proxy,,,2,1,0.0
+sr_energy,,,2,-1,0.0
+vre_penetration_share_gen,,,2,-1,0.0
