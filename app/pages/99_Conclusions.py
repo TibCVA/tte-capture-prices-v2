@@ -7,7 +7,7 @@ import re
 import pandas as pd
 import streamlit as st
 
-from app.ui_components import (
+from app.ui_shims import (
     guided_header,
     inject_theme,
     render_interpretation,

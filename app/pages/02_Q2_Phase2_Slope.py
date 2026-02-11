@@ -30,7 +30,7 @@ except Exception as exc:  # pragma: no cover
     load_annual_metrics = _page_utils_unavailable  # type: ignore[assignment]
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
-from app.ui_components import (
+from app.ui_shims import (
     derive_outlier_flags_from_q2,
     guided_header,
     inject_theme,

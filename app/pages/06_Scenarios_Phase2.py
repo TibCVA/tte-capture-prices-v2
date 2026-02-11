@@ -29,7 +29,7 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
     load_scenario_validation_findings_ui = _page_utils_unavailable  # type: ignore[assignment]
     phase2_assumptions_editor = _page_utils_unavailable  # type: ignore[assignment]
     run_phase2_scenario_ui = _page_utils_unavailable  # type: ignore[assignment]
-from app.ui_components import (
+from app.ui_shims import (
     guided_header,
     inject_theme,
     render_interpretation,
