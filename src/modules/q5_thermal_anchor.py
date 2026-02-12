@@ -436,6 +436,66 @@ def run_q5(
     required_co2 = required_co2_abs
     required_gas = required_gas_abs
 
+    # Explicit TCA/TTL audit fields with optional BASE anchoring.
+    ccgt_eff, ccgt_ef, ccgt_vom, ccgt_mult = _tech_params(assumptions_df, "CCGT")
+    coal_eff, coal_ef, coal_vom, coal_mult = _tech_params(assumptions_df, "COAL")
+    gas_for_tca = assumed_gas
+    coal_for_tca = assumed_coal if np.isfinite(assumed_coal) else (assumed_gas * coal_mult if np.isfinite(assumed_gas) else np.nan)
+    tca_ccgt_eur_mwh = (
+        gas_for_tca * ccgt_mult / ccgt_eff + assumed_co2 * (ccgt_ef / ccgt_eff) + ccgt_vom
+        if np.isfinite(gas_for_tca) and np.isfinite(assumed_co2) and ccgt_eff > 0
+        else np.nan
+    )
+    tca_coal_eur_mwh = (
+        coal_for_tca / coal_eff + assumed_co2 * (coal_ef / coal_eff) + coal_vom
+        if np.isfinite(coal_for_tca) and np.isfinite(assumed_co2) and coal_eff > 0
+        else np.nan
+    )
+    tca_current_eur_mwh = ttl_anchor_formula
+
+    pass_through_factor = _safe_float(selection.get("pass_through_factor"), 1.0)
+    if not np.isfinite(pass_through_factor):
+        pass_through_factor = 1.0
+    base_tca_ref = _safe_float(
+        selection.get("base_tca_eur_mwh", selection.get("base_tca_ccgt_eur_mwh")),
+        np.nan,
+    )
+    base_ttl_observed_ref = _safe_float(
+        selection.get("base_ttl_observed_eur_mwh", selection.get("base_ttl_obs")),
+        np.nan,
+    )
+    if str(scenario_id_effective).upper() in {"HIST", "BASE"}:
+        if not np.isfinite(base_tca_ref):
+            base_tca_ref = _safe_float(tca_current_eur_mwh, np.nan)
+        if not np.isfinite(base_ttl_observed_ref):
+            base_ttl_observed_ref = _safe_float(ttl_obs, np.nan)
+    ttl_model_eur_mwh = (
+        base_ttl_observed_ref + (tca_current_eur_mwh - base_tca_ref) * pass_through_factor
+        if np.isfinite(base_ttl_observed_ref) and np.isfinite(base_tca_ref) and np.isfinite(tca_current_eur_mwh)
+        else ttl_anchor_formula
+    )
+    delta_tca_vs_base = (
+        tca_current_eur_mwh - base_tca_ref
+        if np.isfinite(tca_current_eur_mwh) and np.isfinite(base_tca_ref)
+        else (0.0 if str(scenario_id_effective).upper() in {"HIST", "BASE"} else np.nan)
+    )
+    delta_ttl_model_vs_base = (
+        ttl_model_eur_mwh - base_ttl_observed_ref
+        if np.isfinite(ttl_model_eur_mwh) and np.isfinite(base_ttl_observed_ref)
+        else (0.0 if str(scenario_id_effective).upper() in {"HIST", "BASE"} else np.nan)
+    )
+    coherence_flag = (
+        "PASS"
+        if (
+            (np.isfinite(delta_tca_vs_base) and np.isfinite(delta_ttl_model_vs_base)
+             and (np.sign(delta_tca_vs_base) == np.sign(delta_ttl_model_vs_base) or (abs(delta_tca_vs_base) <= 1e-12 and abs(delta_ttl_model_vs_base) <= 1e-12)))
+            or str(scenario_id_effective).upper() in {"HIST", "BASE"}
+        )
+        else "WARN"
+    )
+    horizon_year = _safe_float(selection.get("horizon_year"), np.nan)
+    q5_year = int(horizon_year) if np.isfinite(horizon_year) else (int(ref_year_used) if np.isfinite(_safe_float(ref_year_used, np.nan)) else np.nan)
+
     thermal_share = np.nan
     thermal_cols = [c for c in ["gen_gas_mw", "gen_coal_mw", "gen_lignite_mw", "gen_oil_mw", "gen_other_mw"] if c in h.columns]
     if thermal_cols and "gen_total_mw" in h.columns:
@@ -564,6 +624,7 @@ def run_q5(
                 "assumed_vom_eur_mwh": vom,
                 "assumed_fuel_multiplier_vs_gas": fuel_mult,
                 "ttl_obs": ttl_obs,
+                "ttl_observed_eur_mwh": ttl_obs,
                 "ttl_obs_price_cd": ttl_obs,
                 "ttl_annual_metrics_same_year": _safe_float(
                     annual_ttl.loc[annual_ttl["year"] == int(ref_year_used), "ttl_eur_mwh"].iloc[0],
@@ -573,6 +634,7 @@ def run_q5(
                 else np.nan,
                 "ttl_anchor": ttl_anchor,
                 "ttl_anchor_formula": ttl_anchor_formula,
+                "ttl_model_eur_mwh": ttl_model_eur_mwh,
                 "ttl_physical": ttl_anchor,
                 "ttl_regression": np.nan,
                 "ttl_method": "anchor_distributional",
@@ -598,6 +660,13 @@ def run_q5(
                 "required_gas_abs_eur_mwh_th": required_gas_abs,
                 "delta_co2_vs_scenario": delta_co2_vs_scenario,
                 "delta_gas_vs_scenario": delta_gas_vs_scenario,
+                "tca_ccgt_eur_mwh": tca_ccgt_eur_mwh,
+                "tca_coal_eur_mwh": tca_coal_eur_mwh,
+                "tca_current_eur_mwh": tca_current_eur_mwh,
+                "pass_through_factor": pass_through_factor,
+                "delta_tca_vs_base": delta_tca_vs_base,
+                "delta_ttl_model_vs_base": delta_ttl_model_vs_base,
+                "coherence_flag": coherence_flag,
                 "required_co2_abs_raw_eur_t": raw_required_co2,
                 "required_gas_abs_raw_eur_mwh_th": raw_required_gas,
                 "co2_required_base": required_co2,
@@ -605,6 +674,25 @@ def run_q5(
                 "co2_required_base_non_negative": required_co2 if np.isfinite(required_co2) else np.nan,
                 "co2_required_gas_override_non_negative": required_co2 if gas_override_eur_mwh_th is not None and np.isfinite(required_co2) else np.nan,
                 "warnings_quality": "",
+            }
+        ]
+    )
+
+    q5_anchor_sensitivity = pd.DataFrame(
+        [
+            {
+                "country": country,
+                "scenario_id": scenario_id_effective,
+                "year": q5_year,
+                "gas_eur_per_mwh_th": assumed_gas,
+                "co2_eur_per_t": assumed_co2,
+                "tca_ccgt_eur_mwh": tca_ccgt_eur_mwh,
+                "tca_coal_eur_mwh": tca_coal_eur_mwh,
+                "ttl_observed_eur_mwh": ttl_obs,
+                "ttl_model_eur_mwh": ttl_model_eur_mwh,
+                "delta_tca_vs_base": delta_tca_vs_base,
+                "delta_ttl_model_vs_base": delta_ttl_model_vs_base,
+                "coherence_flag": coherence_flag,
             }
         ]
     )
@@ -630,8 +718,10 @@ def run_q5(
             "dTCA_dGas": dgas,
             "delta_co2_vs_scenario": delta_co2_vs_scenario,
             "delta_gas_vs_scenario": delta_gas_vs_scenario,
+            "delta_tca_vs_base": delta_tca_vs_base,
+            "delta_ttl_model_vs_base": delta_ttl_model_vs_base,
         },
-        tables={"Q5_summary": summary},
+        tables={"Q5_summary": summary, "q5_anchor_sensitivity": q5_anchor_sensitivity},
         figures=[],
         narrative_md=narrative,
         checks=checks,

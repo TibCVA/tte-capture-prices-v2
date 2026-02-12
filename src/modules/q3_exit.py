@@ -241,6 +241,128 @@ def _additional_sink_power_p95(
     return max(0.0, p95), "profile_weighted_surplus"
 
 
+def _safe_series(df: pd.DataFrame, col: str, default: float = 0.0) -> pd.Series:
+    if col in df.columns:
+        return pd.to_numeric(df[col], errors="coerce")
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+def _compute_hourly_proxy_metrics(
+    hourly: pd.DataFrame,
+    *,
+    demand_uplift: float = 0.0,
+    export_uplift: float = 0.0,
+    flex_mw_additional: float = 0.0,
+    export_coincidence_factor: float = 1.0,
+) -> dict[str, float]:
+    h = hourly.copy()
+    if h.empty:
+        return {"status": "NOT_CALCULABLE"}
+
+    load = _safe_series(h, "load_mw", np.nan)
+    if load.notna().sum() == 0:
+        load = _safe_series(h, "load_total_mw", np.nan) - _safe_series(h, "psh_pump_mw", 0.0).fillna(0.0)
+    vre = _safe_series(h, "gen_vre_mw", np.nan)
+    if vre.notna().sum() == 0:
+        vre = _safe_series(h, "gen_solar_mw", 0.0).fillna(0.0) + _safe_series(h, "gen_wind_on_mw", 0.0).fillna(0.0) + _safe_series(h, "gen_wind_off_mw", 0.0).fillna(0.0)
+    must_run = _safe_series(h, "gen_must_run_mw", 0.0).fillna(0.0)
+    net_position = _safe_series(h, "net_position_mw", 0.0).fillna(0.0)
+    psh = _safe_series(h, "psh_pump_mw", 0.0).fillna(0.0).clip(lower=0.0)
+    flex_obs = _safe_series(h, "flex_sink_observed_mw", np.nan)
+    export_base = net_position.clip(lower=0.0)
+    if flex_obs.notna().sum() == 0:
+        flex_obs = export_base + psh
+    else:
+        flex_obs = flex_obs.fillna(0.0).clip(lower=0.0)
+
+    load_after = load * (1.0 + max(0.0, float(demand_uplift)))
+    nrl_after = load_after - vre - must_run
+    surplus_after = (-nrl_after).clip(lower=0.0)
+
+    export_after = export_base * (1.0 + max(0.0, float(export_uplift))) * max(0.0, float(export_coincidence_factor))
+    other_sink = (flex_obs - export_base - psh).clip(lower=0.0)
+    base_sink_after = export_after + psh + other_sink
+    extra_flex_sink = pd.Series(0.0, index=h.index, dtype=float)
+    if float(flex_mw_additional) > 0.0:
+        extra_flex_sink = np.minimum(float(flex_mw_additional), surplus_after)
+    sink_after = base_sink_after + extra_flex_sink
+    absorbed_after = np.minimum(surplus_after, sink_after)
+    unabsorbed_after = (surplus_after - absorbed_after).clip(lower=0.0)
+
+    sr_hours_after = float((unabsorbed_after > 0.0).mean())
+    nrl_q10 = _safe_float(pd.to_numeric(nrl_after, errors="coerce").quantile(0.10), np.nan)
+    proxy_mask = (unabsorbed_after > 0.0)
+    if np.isfinite(nrl_q10):
+        proxy_mask = proxy_mask | (nrl_after <= nrl_q10)
+    h_negative_proxy_after = float(proxy_mask.sum())
+
+    return {
+        "status": "OK",
+        "sr_hours_after": sr_hours_after,
+        "h_negative_proxy_after": h_negative_proxy_after,
+        "surplus_unabsorbed_twh_after": float(unabsorbed_after.sum()) / 1e6,
+    }
+
+
+def _solve_lever_binary_search(
+    eval_fn: Any,
+    *,
+    min_value: float,
+    max_value: float,
+    target_sr_hours: float,
+    target_h_negative_proxy: float,
+) -> dict[str, Any]:
+    base = eval_fn(min_value)
+    if str(base.get("status", "")) != "OK":
+        return {"status": "NOT_CALCULABLE", "required_uplift": np.nan, **base}
+
+    def _objective_ok(metrics: dict[str, Any]) -> bool:
+        sr_ok = _safe_float(metrics.get("sr_hours_after"), np.nan) <= float(target_sr_hours)
+        h_ok = _safe_float(metrics.get("h_negative_proxy_after"), np.nan) <= float(target_h_negative_proxy)
+        return bool(sr_ok and h_ok)
+
+    if _objective_ok(base):
+        return {
+            "status": "OK",
+            "within_bounds": True,
+            "required_uplift": float(min_value),
+            **base,
+        }
+
+    hi_metrics = eval_fn(max_value)
+    if str(hi_metrics.get("status", "")) != "OK":
+        return {"status": "NOT_CALCULABLE", "required_uplift": np.nan, **hi_metrics}
+    if not _objective_ok(hi_metrics):
+        return {
+            "status": "UNREACHABLE",
+            "within_bounds": False,
+            "required_uplift": np.nan,
+            **hi_metrics,
+        }
+
+    lo = float(min_value)
+    hi = float(max_value)
+    best_metrics = hi_metrics
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        m = eval_fn(mid)
+        if str(m.get("status", "")) != "OK":
+            return {"status": "NOT_CALCULABLE", "required_uplift": np.nan, **m}
+        if _objective_ok(m):
+            hi = mid
+            best_metrics = m
+        else:
+            lo = mid
+        if abs(hi - lo) <= 1e-4:
+            break
+    return {
+        "status": "OK",
+        "within_bounds": True,
+        "required_uplift": float(hi),
+        **best_metrics,
+    }
+
+
 def run_q3(
     annual_df: pd.DataFrame,
     hourly_by_country_year: dict[tuple[str, int], pd.DataFrame],
@@ -260,6 +382,9 @@ def run_q3(
     }
     trend_window = max(2, int(params.get("trend_window_years", 3)))
     sr_energy_target = float(params.get("sr_energy_target", 0.01))
+    target_sr_hours = float(selection.get("target_sr_hours", all_params.get("stage1_sr_hours_max", 0.05)))
+    target_h_negative_proxy = float(selection.get("target_h_negative", all_params.get("stage1_h_negative_max", 200.0)))
+    max_export_uplift = max(0.0, float(selection.get("export_uplift_max", all_params.get("q1_lever_max_uplift", 1.0))))
     slope_capture_target = float(params.get("slope_capture_target", params.get("trend_capture_ratio_min", 0.0)))
     mode = str(selection.get("mode", "HIST")).upper()
     scenario_id = str(selection.get("scenario_id") or ("HIST" if mode == "HIST" else "SCEN"))
@@ -296,6 +421,7 @@ def run_q3(
 
     countries = selection.get("countries", sorted(annual_df["country"].dropna().astype(str).unique().tolist()))
     rows: list[dict[str, Any]] = []
+    requirement_rows: list[dict[str, Any]] = []
     checks: list[dict[str, str]] = []
     warnings: list[str] = []
 
@@ -372,6 +498,25 @@ def run_q3(
                     "bascule_reference_source": bascule_source,
                 }
             )
+            for lever in ["demand_uplift", "export_uplift", "flex_uplift"]:
+                requirement_rows.append(
+                    {
+                        "country": country,
+                        "scenario_id": scenario_id,
+                        "year": np.nan,
+                        "lever": lever,
+                        "required_uplift": np.nan,
+                        "within_bounds": False,
+                        "target_sr": target_sr_hours,
+                        "target_h_negative": target_h_negative_proxy,
+                        "predicted_sr_after": np.nan,
+                        "predicted_h_negative_after": np.nan,
+                        "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+                        "applicability_flag": "HORS_SCOPE_PHASE2",
+                        "status": "NOT_CALCULABLE",
+                        "reason": "missing_panel",
+                    }
+                )
             continue
 
         if not np.isfinite(bascule_ref):
@@ -409,6 +554,25 @@ def run_q3(
                     "bascule_reference_source": bascule_source,
                 }
             )
+            for lever in ["demand_uplift", "export_uplift", "flex_uplift"]:
+                requirement_rows.append(
+                    {
+                        "country": country,
+                        "scenario_id": scenario_id,
+                        "year": int(_safe_float(last_any.get("year"), np.nan)) if np.isfinite(_safe_float(last_any.get("year"), np.nan)) else np.nan,
+                        "lever": lever,
+                        "required_uplift": np.nan,
+                        "within_bounds": False,
+                        "target_sr": target_sr_hours,
+                        "target_h_negative": target_h_negative_proxy,
+                        "predicted_sr_after": np.nan,
+                        "predicted_h_negative_after": np.nan,
+                        "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+                        "applicability_flag": "HORS_SCOPE_PHASE2",
+                        "status": "HORS_SCOPE_PHASE2",
+                        "reason": "q1_no_bascule",
+                    }
+                )
             continue
 
         c_phase = c_panel[c_panel["year"] >= int(bascule_ref)].copy()
@@ -478,6 +642,129 @@ def run_q3(
             else np.nan
         )
 
+        in_phase2_current = bool(last.get("is_phase2_market", False))
+        available_ref_years = sorted([int(y) for (c, y) in hourly_by_country_year.keys() if str(c) == str(country)])
+        ref_year_int = int(ref_year) if np.isfinite(ref_year) else None
+        if ref_year_int is not None and ref_year_int in available_ref_years:
+            hourly_ref_year = ref_year_int
+        elif available_ref_years:
+            hourly_ref_year = int(available_ref_years[-1])
+        else:
+            hourly_ref_year = None
+        hourly_ref = hourly_by_country_year.get((str(country), int(hourly_ref_year))) if hourly_ref_year is not None else None
+        export_coincidence_factor = _safe_float(last.get("export_coincidence_factor"), _safe_float(selection.get("export_coincidence_factor"), 1.0))
+        if not np.isfinite(export_coincidence_factor):
+            export_coincidence_factor = 1.0
+
+        if hourly_ref is None or hourly_ref.empty:
+            demand_solver = {"status": "NOT_CALCULABLE", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
+            export_solver = {"status": "NOT_CALCULABLE", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
+            flex_solver = {"status": "NOT_CALCULABLE", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
+        else:
+            demand_solver = _solve_lever_binary_search(
+                lambda x: _compute_hourly_proxy_metrics(
+                    hourly_ref,
+                    demand_uplift=x,
+                    export_uplift=0.0,
+                    flex_mw_additional=0.0,
+                    export_coincidence_factor=export_coincidence_factor,
+                ),
+                min_value=0.0,
+                max_value=max(0.0, float(params.get("demand_k_max", 0.30))),
+                target_sr_hours=target_sr_hours,
+                target_h_negative_proxy=target_h_negative_proxy,
+            )
+            export_solver = _solve_lever_binary_search(
+                lambda x: _compute_hourly_proxy_metrics(
+                    hourly_ref,
+                    demand_uplift=0.0,
+                    export_uplift=x,
+                    flex_mw_additional=0.0,
+                    export_coincidence_factor=export_coincidence_factor,
+                ),
+                min_value=0.0,
+                max_value=max_export_uplift,
+                target_sr_hours=target_sr_hours,
+                target_h_negative_proxy=target_h_negative_proxy,
+            )
+            flex_cap = _safe_float(selection.get("flex_mw_max"), np.nan)
+            if not np.isfinite(flex_cap) or flex_cap <= 0.0:
+                nrl_proxy = _safe_series(hourly_ref, "nrl_mw", np.nan)
+                if nrl_proxy.notna().sum() > 0:
+                    flex_cap = max(1.0, float((-nrl_proxy).clip(lower=0.0).quantile(0.95)) * 1.5)
+                else:
+                    load_proxy = _safe_series(hourly_ref, "load_mw", np.nan)
+                    flex_cap = max(1.0, _safe_float(load_proxy.quantile(0.5), 1000.0) * 0.05)
+            flex_solver = _solve_lever_binary_search(
+                lambda x: _compute_hourly_proxy_metrics(
+                    hourly_ref,
+                    demand_uplift=0.0,
+                    export_uplift=0.0,
+                    flex_mw_additional=x,
+                    export_coincidence_factor=export_coincidence_factor,
+                ),
+                min_value=0.0,
+                max_value=float(flex_cap),
+                target_sr_hours=target_sr_hours,
+                target_h_negative_proxy=target_h_negative_proxy,
+            )
+
+        for lever, solver in [
+            ("demand_uplift", demand_solver),
+            ("export_uplift", export_solver),
+            ("flex_uplift", flex_solver),
+        ]:
+            raw_status = str(solver.get("status", "NOT_CALCULABLE")).upper()
+            if raw_status not in {"OK", "UNREACHABLE", "NOT_CALCULABLE"}:
+                raw_status = "NOT_CALCULABLE"
+            req_uplift = _safe_float(solver.get("required_uplift"), np.nan)
+            pred_sr_after = _safe_float(solver.get("sr_hours_after"), np.nan)
+            pred_hneg_after = _safe_float(solver.get("h_negative_proxy_after"), np.nan)
+            if raw_status == "OK" and not np.isfinite(req_uplift):
+                raw_status = "NOT_CALCULABLE"
+            requirement_rows.append(
+                {
+                    "country": country,
+                    "scenario_id": scenario_id,
+                    "year": hourly_ref_year if hourly_ref_year is not None else (ref_year_int if ref_year_int is not None else np.nan),
+                    "lever": lever,
+                    "required_uplift": req_uplift,
+                    "within_bounds": bool(solver.get("within_bounds", False)) if in_phase2_current else False,
+                    "target_sr": target_sr_hours,
+                    "target_h_negative": target_h_negative_proxy,
+                    "predicted_sr_after": pred_sr_after,
+                    "predicted_h_negative_after": pred_hneg_after,
+                    "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+                    "applicability_flag": "APPLICABLE" if in_phase2_current else "HORS_SCOPE_PHASE2",
+                    "status": raw_status if in_phase2_current else "HORS_SCOPE_PHASE2",
+                    "reason": str(solver.get("reason", raw_status.lower())),
+                    "export_coincidence_factor": export_coincidence_factor,
+                }
+            )
+
+        demand_status = str(demand_solver.get("status", "NOT_CALCULABLE")).upper()
+        if in_phase2_current:
+            if demand_status == "OK" and _safe_float(demand_solver.get("required_uplift"), np.nan) <= 1e-6:
+                status = "STOP_CONFIRMED"
+                reason_code = "already_meets_targets"
+                status_explanation = "Les cibles proxy sont deja respectees."
+            elif demand_status == "UNREACHABLE":
+                status = "CONTINUES"
+                reason_code = "targets_unreachable_within_bounds"
+                status_explanation = "Les cibles proxy ne sont pas atteignables dans les bornes du levier."
+            elif demand_status == "NOT_CALCULABLE":
+                status = "CONTINUES"
+                reason_code = "not_calculable"
+                status_explanation = "Le calcul du levier demande est indisponible."
+            else:
+                status = "CONTINUES"
+                reason_code = "no_family_turned_off"
+                status_explanation = "Une hausse de demande est necessaire pour respecter les cibles proxy."
+        else:
+            status = "HORS_SCOPE_PHASE2"
+            reason_code = "not_in_phase2"
+            status_explanation = "Le pays n'est pas en phase2 sur l'annee de reference."
+
         surplus_twh = _safe_float(last.get("surplus_energy_twh", last.get("surplus_twh")), np.nan)
         load_twh = _safe_float(last.get("load_net_twh"), np.nan)
         target_abs_twh = load_twh * sr_energy_target if np.isfinite(load_twh) else np.nan
@@ -486,15 +773,10 @@ def run_q3(
             if np.isfinite(surplus_twh) and np.isfinite(target_abs_twh)
             else np.nan
         )
-        k_demand = (
-            demand_uplift_twh / load_twh
-            if np.isfinite(demand_uplift_twh) and np.isfinite(load_twh) and load_twh > 0
-            else np.nan
-        )
         sink_p95, sink_profile_status = _additional_sink_power_p95(
             hourly_by_country_year,
             str(country),
-            ref_year,
+            float(hourly_ref_year) if hourly_ref_year is not None else ref_year,
             demand_uplift_twh,
         )
         mustrun_reduction_needed, mustrun_status = _required_mustrun_reduction(last, all_params, max_reduction=1.0)
@@ -503,8 +785,8 @@ def run_q3(
             {
                 "country": country,
                 **audit_common,
-                "reference_year": int(ref_year) if np.isfinite(ref_year) else np.nan,
-                "in_phase2": True,
+                "reference_year": hourly_ref_year if hourly_ref_year is not None else (int(ref_year) if np.isfinite(ref_year) else np.nan),
+                "in_phase2": in_phase2_current,
                 "status": status,
                 "reason_code": reason_code,
                 "status_explanation": status_explanation,
@@ -519,12 +801,12 @@ def run_q3(
                 "surplus_energy_twh_recent": surplus_twh,
                 "target_absorption_twh": target_abs_twh,
                 "demand_uplift_twh": demand_uplift_twh,
-                "inversion_k_demand": k_demand,
-                "inversion_k_demand_status": "proxy_from_surplus_gap" if np.isfinite(k_demand) else "insufficient_data",
+                "inversion_k_demand": _safe_float(demand_solver.get("required_uplift"), np.nan),
+                "inversion_k_demand_status": demand_status.lower(),
                 "inversion_r_mustrun": mustrun_reduction_needed,
                 "inversion_r_mustrun_status": mustrun_status,
-                "inversion_f_flex": np.nan,
-                "inversion_f_flex_status": "proxy_not_computed",
+                "inversion_f_flex": _safe_float(flex_solver.get("required_uplift"), np.nan),
+                "inversion_f_flex_status": str(flex_solver.get("status", "NOT_CALCULABLE")).upper().lower(),
                 "additional_absorbed_needed_TWh_year": demand_uplift_twh,
                 "additional_sink_power_p95_mw": sink_p95,
                 "additional_sink_profile_status": sink_profile_status,
@@ -538,11 +820,18 @@ def run_q3(
                 "turned_off_value_wind": bool(turned_off_map["VALUE_WIND"]),
                 "turned_off_family_any": bool(turned_off_any),
                 "turned_off_family_persistent_2y": bool(persistent_off),
+                "within_bounds": bool(demand_solver.get("within_bounds", False)) if in_phase2_current else False,
+                "target_sr": target_sr_hours,
+                "target_h_negative": target_h_negative_proxy,
+                "predicted_sr_after": _safe_float(demand_solver.get("sr_hours_after"), np.nan),
+                "predicted_h_negative_after": _safe_float(demand_solver.get("h_negative_proxy_after"), np.nan),
+                "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
                 "q2_slope_above_target": bool(np.isfinite(q2_slope) and q2_slope >= slope_capture_target),
             }
         )
 
     out = pd.DataFrame(rows)
+    q3_inversion_requirements = pd.DataFrame(requirement_rows)
     if out.empty:
         checks.append({"status": "FAIL", "code": "Q3_EMPTY", "message": "Aucune sortie Q3."})
     else:
@@ -614,6 +903,19 @@ def run_q3(
                 }
             )
 
+    if not q3_inversion_requirements.empty:
+        ok_mask = q3_inversion_requirements["status"].astype(str).str.upper() == "OK"
+        pred_sr_nan = pd.to_numeric(q3_inversion_requirements["predicted_sr_after"], errors="coerce").isna()
+        pred_h_nan = pd.to_numeric(q3_inversion_requirements["predicted_h_negative_after"], errors="coerce").isna()
+        if bool((ok_mask & (pred_sr_nan | pred_h_nan)).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q3_PREDICTED_NAN_WITH_STATUS_OK",
+                    "message": "status=OK doit fournir predicted_sr_after et predicted_h_negative_after.",
+                }
+            )
+
     checks.extend(build_common_checks(q1_panel))
     if not checks:
         checks.append({"status": "PASS", "code": "Q3_PASS", "message": "Q3 checks pass."})
@@ -623,6 +925,7 @@ def run_q3(
         "n_in_phase2": int((out.get("in_phase2") == True).sum()) if not out.empty else 0,
         "n_stop_possible": int((out.get("status") == "STOP_POSSIBLE").sum()) if not out.empty else 0,
         "n_stop_confirmed": int((out.get("status") == "STOP_CONFIRMED").sum()) if not out.empty else 0,
+        "n_requirements_rows": int(len(q3_inversion_requirements)),
     }
 
     narrative = (
@@ -639,7 +942,7 @@ def run_q3(
         selection=selection,
         assumptions_used=assumptions_subset(assumptions_df, Q3_PARAMS),
         kpis=kpis,
-        tables={"Q3_status": out},
+        tables={"Q3_status": out, "q3_inversion_requirements": q3_inversion_requirements},
         figures=[],
         narrative_md=narrative,
         checks=checks,

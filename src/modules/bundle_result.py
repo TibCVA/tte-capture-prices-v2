@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 import json
 
+import numpy as np
 import pandas as pd
 
 from src.modules.result import ModuleResult
@@ -48,7 +49,8 @@ def _export_module_into_dir(module_result: ModuleResult, out_dir: Path) -> None:
     figures_dir.mkdir(parents=True, exist_ok=True)
 
     for name, df in module_result.tables.items():
-        df.to_csv(tables_dir / f"{name}.csv", index=False)
+        out_df = df.replace("", np.nan)
+        out_df.to_csv(tables_dir / f"{name}.csv", index=False, na_rep="NaN")
 
     (out_dir / "narrative.md").write_text(module_result.narrative_md, encoding="utf-8")
     with (out_dir / "summary.json").open("w", encoding="utf-8") as f:
@@ -63,12 +65,15 @@ def export_question_bundle(result: QuestionBundleResult, base_dir: str = "output
     for scenario_id, scen_result in result.scen_results.items():
         _export_module_into_dir(scen_result, root / "scen" / str(scenario_id))
 
-    result.test_ledger.to_csv(root / "test_ledger.csv", index=False)
-    result.comparison_table.to_csv(root / "comparison_hist_vs_scen.csv", index=False)
+    result.test_ledger.replace("", np.nan).to_csv(root / "test_ledger.csv", index=False, na_rep="NaN")
+    result.comparison_table.replace("", np.nan).to_csv(
+        root / "comparison_hist_vs_scen.csv",
+        index=False,
+        na_rep="NaN",
+    )
     (root / "narrative.md").write_text(result.narrative_md, encoding="utf-8")
 
     with (root / "summary.json").open("w", encoding="utf-8") as f:
         json.dump(result.to_summary(), f, ensure_ascii=False, indent=2, default=str)
 
     return root
-

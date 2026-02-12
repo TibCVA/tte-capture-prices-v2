@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from src.constants import COL_GEN_TOTAL, COL_LOAD_NET, COL_MUST_RUN_MODE
+from src.constants import COL_GEN_TOTAL, COL_LOAD_NET, COL_LOW_RESIDUAL_HOUR, COL_MUST_RUN_MODE, COL_PRICE_DA, COL_REGIME
 from src.config_loader import load_thresholds
 from src.core.definitions import compute_scope_coverage_lowload
 from src.modules.common import assumptions_subset
@@ -17,6 +17,18 @@ from src.modules.result import ModuleResult
 
 Q1_RULE_VERSION = "q1_rule_v5_2026_02_12"
 DEFAULT_CRISIS_YEARS = {2022}
+Q1_UNEXPLAINED_NEGATIVE_PRICES_MAX = 0.35
+Q1_REASON_CODE_REQUIRED_METRICS = {
+    "h_negative_obs",
+    "h_below_5_obs",
+    "low_price_hours_share",
+    "capture_ratio_pv",
+    "capture_ratio_wind",
+    "sr_energy",
+    "sr_hours_share",
+    "far_observed",
+    "ir_p10",
+}
 DATA_QUALITY_BLOCKING_FLAGS = {
     "FAIL",
     "DATA_GAP",
@@ -225,7 +237,7 @@ def _build_rule_definition(params: dict[str, float], crisis_years: set[int]) -> 
                 "persistence_window_years": _safe_param(params, "q1_persistence_window_years", 2.0),
                 "crisis_years_explicit": ",".join([str(int(y)) for y in sorted(crisis_years)]),
                 "rule_logic": (
-                    "is_phase2_market := LOW_PRICE_FLAG AND CAPTURE_DEGRADATION_FLAG; "
+                    "is_phase2_market := family_count(LOW_PRICE,VALUE,PHYSICAL) >= 2; "
                     "is_phase2_physical := PHYSICAL_STRESS_FLAG. "
                     "LOW_PRICE_FLAG uses h_negative OR h_below_5 OR low_price_hours_share. "
                     "PHYSICAL_STRESS_FLAG uses sr_energy OR sr_hours OR ir_p10. "
@@ -295,6 +307,14 @@ def _apply_phase2_logic(
         out["share_neg_price_hours_in_low_residual"] = np.nan
     if "share_neg_price_hours_in_AB_OR_LOW_RESIDUAL" not in out.columns:
         out["share_neg_price_hours_in_AB_OR_LOW_RESIDUAL"] = np.nan
+    out["share_neg_hours_unexplained"] = (
+        1.0
+        - pd.to_numeric(out.get("share_neg_price_hours_in_AB_OR_LOW_RESIDUAL"), errors="coerce")
+    ).clip(lower=0.0, upper=1.0)
+    out["flag_unexplained_negative_prices"] = pd.to_numeric(
+        out.get("share_neg_hours_unexplained"),
+        errors="coerce",
+    ) > Q1_UNEXPLAINED_NEGATIVE_PRICES_MAX
     for col, default in {
         "psh_pumping_twh": 0.0,
         "psh_pumping_coverage_share": np.nan,
@@ -446,12 +466,14 @@ def _apply_phase2_logic(
     )
     out["market_physical_gap_flag"] = out["market_physical_gap_flag"].fillna(False).astype(bool)
 
-    phase2_market_core = out["LOW_PRICE_FLAG"] & out["CAPTURE_DEGRADATION_FLAG"]
-    out["is_phase2_market"] = phase2_market_core & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
+    phase2_market_core_country = out["family_count"] >= 2
+    phase2_market_core_pv = out["family_count_pv"] >= 2
+    phase2_market_core_wind = out["family_count_wind"] >= 2
+    out["is_phase2_market"] = phase2_market_core_country & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
     out["is_phase2_physical"] = out["PHYSICAL_STRESS_FLAG"] & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
     out["stage2_candidate_year"] = out["is_phase2_market"]
-    out["stage2_candidate_year_pv"] = out["is_phase2_market"] & out["flag_capture_pv_low"]
-    out["stage2_candidate_year_wind"] = out["is_phase2_market"] & out["flag_capture_wind_low"]
+    out["stage2_candidate_year_pv"] = phase2_market_core_pv & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
+    out["stage2_candidate_year_wind"] = phase2_market_core_wind & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
     out["stage2_candidate_year_country"] = out["is_phase2_market"]
     out["phase2_candidate_year"] = out["stage2_candidate_year"]
     out["flag_capture_only_stage2"] = out["CAPTURE_DEGRADATION_FLAG"] & (~out["LOW_PRICE_FLAG"]) & (~out["PHYSICAL_STRESS_FLAG"])
@@ -635,6 +657,10 @@ def _drivers_at_bascule(row: pd.Series, p: dict[str, float]) -> str:
             drivers.append(
                 f"PHYSICAL:ir_p10>={_safe_param(p, 'ir_p10_stage2_min', 1.5):.2f} ({_safe_float(row.get('ir_p10'), np.nan):.3f})"
             )
+    if bool(row.get("flag_unexplained_negative_prices", False)):
+        drivers.append(
+            f"UNEXPLAINED_NEGATIVE_PRICES:share>{Q1_UNEXPLAINED_NEGATIVE_PRICES_MAX:.2f} ({_safe_float(row.get('share_neg_hours_unexplained'), np.nan):.3f})"
+        )
     return "; ".join(drivers)
 
 
@@ -916,6 +942,136 @@ def _build_residual_diagnostics(
     return pd.DataFrame(rows).sort_values(["country", "year"]).reset_index(drop=True)
 
 
+def _ensure_reason_code_metrics_available(panel: pd.DataFrame) -> None:
+    missing = sorted([c for c in Q1_REASON_CODE_REQUIRED_METRICS if c not in panel.columns])
+    if missing:
+        raise ValueError(
+            "Q1 reason_codes reference metrics missing from annual_metrics_phase1: "
+            + ", ".join(missing)
+        )
+
+
+def _build_q1_yearly_diagnostics(
+    panel: pd.DataFrame,
+    summary: pd.DataFrame,
+    params: dict[str, float],
+) -> pd.DataFrame:
+    if panel.empty:
+        return pd.DataFrame()
+    persist_window = int(_safe_param(params, "q1_persistence_window_years", 2.0))
+    out = panel.copy()
+    out["score_price"] = out[["flag_h_negative_stage2", "flag_h_below_5_stage2", "flag_low_price_share_high"]].fillna(False).astype(int).sum(axis=1)
+    out["score_value"] = out[["flag_capture_pv_low", "flag_capture_wind_low"]].fillna(False).astype(int).sum(axis=1)
+    out["score_physical"] = out[["flag_sr_energy_high", "flag_sr_hours_high", "flag_ir_high"]].fillna(False).astype(int).sum(axis=1)
+    out["family_count_overall"] = out[["low_price_family", "value_family", "physical_family"]].fillna(False).astype(int).sum(axis=1)
+    out["stage_label"] = np.select(
+        [
+            out["is_phase2_market"].fillna(False),
+            out["is_stage1_criteria"].fillna(False),
+        ],
+        ["Phase2", "Phase1"],
+        default="ambiguous",
+    )
+    out["reason_codes"] = out.apply(lambda r: _drivers_at_bascule(r, params), axis=1)
+    keep_cols = [
+        "country",
+        "year",
+        "stage_label",
+        "family_count_overall",
+        "score_price",
+        "score_value",
+        "score_physical",
+        "low_price_family",
+        "value_family",
+        "physical_family",
+        "value_family_pv",
+        "value_family_wind",
+        "is_phase2_market",
+        "is_stage1_criteria",
+        "reason_codes",
+    ]
+    diag = out[[c for c in keep_cols if c in out.columns]].copy()
+    if not summary.empty:
+        enrich_cols = [
+            "country",
+            "bascule_year_market",
+            "bascule_year_market_pv",
+            "bascule_year_market_wind",
+            "bascule_confidence",
+        ]
+        diag = diag.merge(summary[[c for c in enrich_cols if c in summary.columns]], on="country", how="left")
+    diag["persistence_window_years"] = persist_window
+    return diag.sort_values(["country", "year"]).reset_index(drop=True)
+
+
+def _build_negative_price_explainability(
+    panel: pd.DataFrame,
+    hourly_by_country_year: dict[tuple[str, int], pd.DataFrame] | None,
+) -> pd.DataFrame:
+    if panel.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, Any]] = []
+    hourly_by_country_year = hourly_by_country_year or {}
+    for _, row in panel[["country", "year"]].iterrows():
+        country = str(row["country"])
+        year = int(_safe_float(row["year"], np.nan))
+        key = (country, year)
+        share_a = np.nan
+        share_b = np.nan
+        share_low = np.nan
+        share_union = np.nan
+        neg_hours = np.nan
+
+        hourly = hourly_by_country_year.get(key)
+        if hourly is not None and not hourly.empty and COL_PRICE_DA in hourly.columns:
+            price = pd.to_numeric(hourly.get(COL_PRICE_DA), errors="coerce")
+            reg = hourly.get(COL_REGIME, pd.Series(index=hourly.index, dtype=object)).astype(str)
+            low_residual = (
+                pd.to_numeric(hourly.get(COL_LOW_RESIDUAL_HOUR), errors="coerce").fillna(0.0) > 0.0
+                if COL_LOW_RESIDUAL_HOUR in hourly.columns
+                else pd.Series(False, index=hourly.index)
+            )
+            neg = price < 0.0
+            neg_count = int(neg.sum())
+            neg_hours = float(neg_count)
+            if neg_count > 0:
+                share_a = float((neg & reg.eq("A")).sum()) / float(neg_count)
+                share_b = float((neg & reg.eq("B")).sum()) / float(neg_count)
+                share_low = float((neg & low_residual).sum()) / float(neg_count)
+                share_union = float((neg & (reg.isin(["A", "B"]) | low_residual)).sum()) / float(neg_count)
+
+        if not np.isfinite(share_union):
+            p_row = panel[(panel["country"].astype(str) == country) & (pd.to_numeric(panel["year"], errors="coerce") == year)]
+            if not p_row.empty:
+                r0 = p_row.iloc[0]
+                share_union = _safe_float(r0.get("share_neg_price_hours_in_AB_OR_LOW_RESIDUAL"), np.nan)
+                share_low = _safe_float(r0.get("share_neg_price_hours_in_low_residual"), np.nan)
+                if np.isfinite(_safe_float(r0.get("share_neg_price_hours_in_AB"), np.nan)):
+                    share_ab = _safe_float(r0.get("share_neg_price_hours_in_AB"), np.nan)
+                    share_a = share_ab
+                    share_b = 0.0
+
+        share_unexplained = (1.0 - share_union) if np.isfinite(share_union) else np.nan
+        if np.isfinite(share_unexplained):
+            share_unexplained = float(np.clip(share_unexplained, 0.0, 1.0))
+        rows.append(
+            {
+                "country": country,
+                "year": year,
+                "negative_hours": neg_hours,
+                "share_neg_hours_in_regime_A": share_a,
+                "share_neg_hours_in_regime_B": share_b,
+                "share_neg_hours_in_low_residual_bucket": share_low,
+                "share_neg_hours_explained_union": share_union,
+                "share_neg_hours_unexplained": share_unexplained,
+                "flag_unexplained_negative_prices": bool(
+                    np.isfinite(share_unexplained) and share_unexplained > Q1_UNEXPLAINED_NEGATIVE_PRICES_MAX
+                ),
+            }
+        )
+    return pd.DataFrame(rows).sort_values(["country", "year"]).reset_index(drop=True)
+
+
 def run_q1(
     annual_df: pd.DataFrame,
     assumptions_df: pd.DataFrame,
@@ -944,6 +1100,28 @@ def run_q1(
         quality_overrides=None,
         market_physical_gap_ratios=market_physical_gap_overrides,
     )
+    _ensure_reason_code_metrics_available(panel)
+    q1_negative_price_explainability = _build_negative_price_explainability(panel, hourly_by_country_year)
+    if not q1_negative_price_explainability.empty:
+        panel = panel.merge(
+            q1_negative_price_explainability[
+                ["country", "year", "share_neg_hours_unexplained", "flag_unexplained_negative_prices"]
+            ],
+            on=["country", "year"],
+            how="left",
+            suffixes=("", "_expl"),
+        )
+        if "flag_unexplained_negative_prices_expl" in panel.columns:
+            panel["flag_unexplained_negative_prices"] = (
+                panel["flag_unexplained_negative_prices"].fillna(False)
+                | panel["flag_unexplained_negative_prices_expl"].fillna(False)
+            )
+            panel = panel.drop(columns=["flag_unexplained_negative_prices_expl"])
+        if "share_neg_hours_unexplained_expl" in panel.columns:
+            panel["share_neg_hours_unexplained"] = panel["share_neg_hours_unexplained_expl"].combine_first(
+                panel["share_neg_hours_unexplained"]
+            )
+            panel = panel.drop(columns=["share_neg_hours_unexplained_expl"])
 
     checks: list[dict[str, str]] = []
     warnings: list[str] = []
@@ -1095,29 +1273,27 @@ def run_q1(
                     "message": f"{row['country']} {int(row['year'])}: capture-only sans low-price ni stress physique.",
                 }
             )
-        if bool(row.get("is_phase2_market", False)) and (
-            (not bool(row.get("LOW_PRICE_FLAG", False)))
-            or (not bool(row.get("CAPTURE_DEGRADATION_FLAG", False)))
-        ):
+        if bool(row.get("is_phase2_market", False)) and int(_safe_float(row.get("family_count"), 0.0)) < 2:
             checks.append(
                 {
                     "status": "FAIL",
-                    "code": "Q1_NO_FALSE_PHASE2_WITHOUT_LOW_PRICE",
+                    "code": "Q1_NO_FALSE_PHASE2_WITHOUT_TWO_FAMILIES",
                     "message": (
-                        f"{row['country']} {int(row['year'])}: is_phase2_market doit exiger LOW_PRICE_FLAG "
-                        "et CAPTURE_DEGRADATION_FLAG."
+                        f"{row['country']} {int(row['year'])}: is_phase2_market exige >=2 familles "
+                        "actives parmi LOW_PRICE/VALUE/PHYSICAL."
                     ),
                 }
             )
         if bool(row.get("is_phase2_market", False)) and (
             (not bool(row.get("LOW_PRICE_FLAG", False)))
             and (not bool(row.get("PHYSICAL_STRESS_FLAG", False)))
+            and (not bool(row.get("CAPTURE_DEGRADATION_FLAG", False)))
         ):
             checks.append(
                 {
                     "status": "FAIL",
-                    "code": "Q1_NO_FALSE_PHASE2_WITHOUT_LOW_PRICE_AND_PHYSICAL",
-                    "message": f"{row['country']} {int(row['year'])}: impossible d'avoir phase2 sans LOW_PRICE et sans PHYSICAL.",
+                    "code": "Q1_NO_FALSE_PHASE2_WITHOUT_ANY_FAMILY",
+                    "message": f"{row['country']} {int(row['year'])}: impossible d'avoir phase2 sans aucune famille active.",
                 }
             )
         capture_ratio_pv = _safe_float(row.get("capture_ratio_pv"), np.nan)
@@ -1278,6 +1454,39 @@ def run_q1(
     ]
     q1_rule_application = panel[[c for c in q1_rule_application_cols if c in panel.columns]].copy()
     q1_before_after_bascule = _build_before_after_bascule(panel, summary)
+    if not q1_negative_price_explainability.empty:
+        invalid_share = q1_negative_price_explainability[
+            pd.to_numeric(q1_negative_price_explainability["share_neg_hours_explained_union"], errors="coerce")
+            > 1.000001
+        ]
+        for _, irow in invalid_share.iterrows():
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q1_NEG_EXPLAINABILITY_SUM_INVALID",
+                    "message": (
+                        f"{irow['country']}-{int(irow['year'])}: share_neg_hours_explained_union>1 "
+                        f"({ _safe_float(irow.get('share_neg_hours_explained_union'), np.nan):.3f})."
+                    ),
+                }
+            )
+        bad_explain = q1_negative_price_explainability[
+            pd.to_numeric(q1_negative_price_explainability["share_neg_hours_unexplained"], errors="coerce")
+            > Q1_UNEXPLAINED_NEGATIVE_PRICES_MAX
+        ]
+        for _, erow in bad_explain.iterrows():
+            checks.append(
+                {
+                    "status": "WARN",
+                    "code": "UNEXPLAINED_NEGATIVE_PRICES",
+                    "message": (
+                        f"{erow['country']}-{int(erow['year'])}: share_neg_hours_unexplained="
+                        f"{_safe_float(erow.get('share_neg_hours_unexplained'), np.nan):.1%} > "
+                        f"{Q1_UNEXPLAINED_NEGATIVE_PRICES_MAX:.0%}."
+                    ),
+                }
+            )
+    q1_yearly_diagnostics = _build_q1_yearly_diagnostics(panel, summary, params)
 
     for col in ["p10_load_mw", "p10_must_run_mw", "p50_load_mw", "p50_must_run_mw"]:
         if col not in panel.columns:
@@ -1345,6 +1554,8 @@ def run_q1(
         tables={
             "Q1_country_summary": summary,
             "Q1_year_panel": panel,
+            "q1_yearly_diagnostics": q1_yearly_diagnostics,
+            "q1_negative_price_explainability": q1_negative_price_explainability,
             "Q1_rule_definition": q1_rule_definition,
             "Q1_rule_application": q1_rule_application,
             "Q1_before_after_bascule": q1_before_after_bascule,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -19,7 +20,10 @@ from src.constants import (
     COL_FLEX_EXPORTS,
     COL_FLEX_OBS,
     COL_FLEX_PSH,
+    COL_GEN_BIOMASS,
+    COL_GEN_HYDRO_ROR,
     COL_GEN_MUST_RUN,
+    COL_GEN_NUCLEAR,
     COL_GEN_PRIMARY,
     COL_GEN_SOLAR,
     COL_GEN_TOTAL,
@@ -133,6 +137,13 @@ def _quality_flag(completeness: float) -> str:
 def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_version_hash: str) -> dict[str, Any]:
     timezone = country_cfg["timezone"]
     year = int(df[COL_YEAR].iloc[0])
+    scenario_id = (
+        str(df.get("scenario_id", pd.Series(["HIST"])).iloc[0]).strip()
+        if "scenario_id" in df.columns
+        else "HIST"
+    )
+    if scenario_id == "":
+        scenario_id = "HIST"
     expected = expected_hours(year)
 
     canonical_hourly = build_canonical_hourly_panel(df)
@@ -140,7 +151,7 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         hourly_df=df,
         country=str(df[COL_COUNTRY].iloc[0]),
         year=year,
-        scenario_id=str(df.get("scenario_id", pd.Series([""])).iloc[0]) if "scenario_id" in df.columns else "",
+        scenario_id=scenario_id,
     )
 
     price = pd.to_numeric(canonical_hourly["price_eur_mwh"], errors="coerce")
@@ -215,6 +226,19 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         if COL_PSH_PUMP_STATUS in df.columns and df[COL_PSH_PUMP_STATUS].notna().any()
         else "missing"
     )
+    load_total_series = pd.to_numeric(df[COL_LOAD_TOTAL], errors="coerce")
+    load_net_series = pd.to_numeric(df[COL_LOAD_NET], errors="coerce")
+    psh_series = pd.to_numeric(df.get(COL_PSH_PUMP), errors="coerce")
+    load_identity_residual = load_total_series - (load_net_series + psh_series)
+    identity_mask = load_total_series.notna() & load_net_series.notna() & psh_series.notna()
+    if bool(identity_mask.any()):
+        load_identity_abs_max_mw = float(load_identity_residual[identity_mask].abs().max())
+        denom = load_total_series[identity_mask].abs().replace(0.0, np.nan)
+        load_identity_rel_err = float((load_identity_residual[identity_mask].abs() / denom).max())
+    else:
+        load_identity_abs_max_mw = float("nan")
+        load_identity_rel_err = float("nan")
+    load_identity_ok = bool(np.isfinite(load_identity_rel_err) and load_identity_rel_err <= 1e-3)
 
     load_energy = _safe_float(canonical_metrics.get("load_energy_mwh"), 0.0)
     gen_primary_series = pd.to_numeric(df[COL_GEN_PRIMARY], errors="coerce") if COL_GEN_PRIMARY in df.columns else pd.Series(0.0, index=df.index, dtype=float)
@@ -264,35 +288,145 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
     else:
         nrl_price_corr = float("nan")
 
+    n_hours_with_price = int(df[COL_PRICE_DA].notna().sum())
+    n_hours_with_load = int(df[COL_LOAD_TOTAL].notna().sum())
+    n_hours_with_vre = int(df[COL_GEN_VRE].notna().sum())
+    n_hours_with_must_run = int(df[COL_GEN_MUST_RUN].notna().sum())
+    n_hours_with_pv = int(pd.to_numeric(df.get(COL_GEN_SOLAR), errors="coerce").notna().sum())
+    wind_on_cov = pd.to_numeric(df.get(COL_GEN_WIND_ON), errors="coerce")
+    wind_off_cov = pd.to_numeric(df.get(COL_GEN_WIND_OFF), errors="coerce")
+    n_hours_with_wind = int((wind_on_cov.notna() | wind_off_cov.notna()).sum())
+    n_hours_with_nuclear = int(pd.to_numeric(df.get(COL_GEN_NUCLEAR), errors="coerce").notna().sum())
+    n_hours_with_biomass = int(pd.to_numeric(df.get(COL_GEN_BIOMASS), errors="coerce").notna().sum())
+    n_hours_with_ror = int(pd.to_numeric(df.get(COL_GEN_HYDRO_ROR), errors="coerce").notna().sum())
+
+    coverage_price = _safe_div(float(n_hours_with_price), float(expected))
+    coverage_load_total = _safe_div(float(n_hours_with_load), float(expected))
+    coverage_vre = _safe_div(float(n_hours_with_vre), float(expected))
+    coverage_must_run = _safe_div(float(n_hours_with_must_run), float(expected))
+    coverage_pv = _safe_div(float(n_hours_with_pv), float(expected))
+    coverage_wind = _safe_div(float(n_hours_with_wind), float(expected))
+    coverage_nuclear = _safe_div(float(n_hours_with_nuclear), float(expected))
+    coverage_biomass = _safe_div(float(n_hours_with_biomass), float(expected))
+    coverage_ror = _safe_div(float(n_hours_with_ror), float(expected))
+    coverage_net_position = 1.0 - float(df[COL_Q_MISSING_NET_POSITION].mean())
+
+    load_total_mw_avg = _safe_float(load_total_series.mean(), np.nan)
+    psh_pumping_mw_avg = _safe_float(psh_series.mean(), np.nan)
+    load_mw_avg = _safe_float(load.mean(), np.nan)
+    gen_vre_mw_avg = _safe_float(pd.to_numeric(df[COL_GEN_VRE], errors="coerce").mean(), np.nan)
+    pv_mw_avg = _safe_float(pd.to_numeric(df[COL_GEN_SOLAR], errors="coerce").mean(), np.nan)
+    wind_on_mw_avg = _safe_float(pd.to_numeric(df[COL_GEN_WIND_ON], errors="coerce").mean(), np.nan)
+    wind_off_mw_avg = _safe_float(pd.to_numeric(df[COL_GEN_WIND_OFF], errors="coerce").mean(), np.nan)
+    must_run_mw_avg = _safe_float(pd.to_numeric(df[COL_GEN_MUST_RUN], errors="coerce").mean(), np.nan)
+    must_run_nuclear_mw_avg = _safe_float(pd.to_numeric(df.get(COL_GEN_NUCLEAR), errors="coerce").mean(), np.nan)
+    must_run_biomass_mw_avg = _safe_float(pd.to_numeric(df.get(COL_GEN_BIOMASS), errors="coerce").mean(), np.nan)
+    must_run_ror_mw_avg = _safe_float(pd.to_numeric(df.get(COL_GEN_HYDRO_ROR), errors="coerce").mean(), np.nan)
+    nrl_mw_avg = _safe_float(pd.to_numeric(df.get(COL_NRL), errors="coerce").mean(), np.nan)
+    nrl_p10 = _percentile(pd.to_numeric(df.get(COL_NRL), errors="coerce"), 0.10)
+    nrl_p50 = _percentile(pd.to_numeric(df.get(COL_NRL), errors="coerce"), 0.50)
+    nrl_p90 = _percentile(pd.to_numeric(df.get(COL_NRL), errors="coerce"), 0.90)
+
+    surplus_hours_count = int((pd.to_numeric(df[COL_SURPLUS], errors="coerce") > 0).sum())
+    absorbed_hours_count = int((pd.to_numeric(df[COL_SURPLUS_ABSORBED], errors="coerce") > 0).sum())
+    far_hours = _safe_div(float(absorbed_hours_count), float(surplus_hours_count)) if surplus_hours_count > 0 else 1.0
+    sink_breakdown_json = json.dumps(
+        {
+            "exports_absorption_mwh": _safe_float(flex_sink_exports_mwh, 0.0),
+            "psh_absorption_mwh": _safe_float(flex_sink_psh_mwh, 0.0),
+            "other_flex_absorption_mwh": _safe_float(max(0.0, flex_sink_total_mwh - flex_sink_exports_mwh - flex_sink_psh_mwh), 0.0),
+        },
+        ensure_ascii=False,
+    )
+
+    core_sanity_issues = sanity_check_core_definitions(df, far_energy=far, sr_energy=sr_gen, ir=ir_p10)
+
+    data_quality_flags: list[str] = []
+    for cov_name, cov_value in [
+        ("coverage_price", coverage_price),
+        ("coverage_load_total", coverage_load_total),
+        ("coverage_net_position", coverage_net_position),
+        ("coverage_pv", coverage_pv),
+        ("coverage_wind", coverage_wind),
+        ("coverage_nuclear", coverage_nuclear),
+        ("coverage_biomass", coverage_biomass),
+        ("coverage_ror", coverage_ror),
+    ]:
+        if not np.isfinite(cov_value):
+            data_quality_flags.append(f"{cov_name.upper()}_MISSING")
+        elif cov_value < 0.95:
+            data_quality_flags.append(f"{cov_name.upper()}_LOW")
+    if not np.isfinite(psh_pumping_coverage_share):
+        data_quality_flags.append("COVERAGE_PSH_PUMPING_MISSING")
+    elif psh_pumping_coverage_share < 0.95:
+        data_quality_flags.append("COVERAGE_PSH_PUMPING_LOW")
+    if not load_identity_ok and np.isfinite(load_identity_rel_err):
+        data_quality_flags.append("LOAD_IDENTITY_FAIL")
+    if core_sanity_issues:
+        data_quality_flags.append("CORE_SANITY_WARN")
+    if str(psh_pumping_data_status).lower() in {"missing", "partial"}:
+        data_quality_flags.append("PSH_PUMPING_DATA_INCOMPLETE")
+
     completeness = float((~df[[COL_Q_MISSING_PRICE, COL_Q_MISSING_LOAD, COL_Q_MISSING_GENERATION]].any(axis=1)).mean())
     must_run_scope_coverage = compute_scope_coverage_lowload(
         load_mw=df[COL_LOAD_NET],
         must_run_mw=df[COL_GEN_MUST_RUN],
         total_generation_mw=df[COL_GEN_TOTAL],
     )
-    core_sanity_issues = sanity_check_core_definitions(df, far_energy=far, sr_energy=sr_gen, ir=ir_p10)
-
     row = {
         COL_COUNTRY: str(df[COL_COUNTRY].iloc[0]),
         COL_YEAR: year,
+        "scenario_id": scenario_id,
         "n_hours_expected": expected,
-        "n_hours_with_price": int(df[COL_PRICE_DA].notna().sum()),
-        "n_hours_with_load": int(df[COL_LOAD_TOTAL].notna().sum()),
-        "n_hours_with_vre": int(df[COL_GEN_VRE].notna().sum()),
-        "n_hours_with_must_run": int(df[COL_GEN_MUST_RUN].notna().sum()),
+        "n_hours_with_price": n_hours_with_price,
+        "n_hours_with_load": n_hours_with_load,
+        "n_hours_with_vre": n_hours_with_vre,
+        "n_hours_with_must_run": n_hours_with_must_run,
+        "n_hours_with_pv": n_hours_with_pv,
+        "n_hours_with_wind": n_hours_with_wind,
+        "n_hours_with_nuclear": n_hours_with_nuclear,
+        "n_hours_with_biomass": n_hours_with_biomass,
+        "n_hours_with_ror": n_hours_with_ror,
         "missing_share_price": float(df[COL_Q_MISSING_PRICE].mean()),
         "missing_share_load": float(df[COL_Q_MISSING_LOAD].mean()),
         "missing_share_generation": float(df[COL_Q_MISSING_GENERATION].mean()),
         "missing_share_net_position": float(df[COL_Q_MISSING_NET_POSITION].mean()),
+        "coverage_price": coverage_price,
+        "coverage_load_total": coverage_load_total,
+        "coverage_net_position": coverage_net_position,
+        "coverage_vre": coverage_vre,
+        "coverage_must_run": coverage_must_run,
+        "coverage_psh_pumping": psh_pumping_coverage_share,
+        "coverage_pv": coverage_pv,
+        "coverage_wind": coverage_wind,
+        "coverage_nuclear": coverage_nuclear,
+        "coverage_biomass": coverage_biomass,
+        "coverage_ror": coverage_ror,
         COL_LOAD_NET_MODE: str(df[COL_LOAD_NET_MODE].iloc[0]),
         COL_MUST_RUN_MODE: str(df[COL_MUST_RUN_MODE].iloc[0]),
         COL_ENTSOE_CODE_USED: str(df[COL_ENTSOE_CODE_USED].iloc[0]),
         COL_DATA_VERSION_HASH: data_version_hash,
         "load_total_twh": float(pd.to_numeric(df[COL_LOAD_TOTAL], errors="coerce").fillna(0).sum()) / 1e6,
         "load_net_twh": load_energy / 1e6,
+        "load_total_mw_avg": load_total_mw_avg,
+        "psh_pumping_mw_avg": psh_pumping_mw_avg,
+        "load_mw_avg": load_mw_avg,
+        "gen_vre_mw_avg": gen_vre_mw_avg,
+        "pv_mw_avg": pv_mw_avg,
+        "wind_on_mw_avg": wind_on_mw_avg,
+        "wind_off_mw_avg": wind_off_mw_avg,
+        "must_run_mw_avg": must_run_mw_avg,
+        "must_run_nuclear_mw_avg": must_run_nuclear_mw_avg,
+        "must_run_biomass_mw_avg": must_run_biomass_mw_avg,
+        "must_run_ror_mw_avg": must_run_ror_mw_avg,
+        "nrl_mw_avg": nrl_mw_avg,
+        "nrl_p10_mw": nrl_p10,
+        "nrl_p50_mw": nrl_p50,
+        "nrl_p90_mw": nrl_p90,
         "psh_pumping_twh": psh_pumping_mwh / 1e6,
         "psh_pumping_coverage_share": psh_pumping_coverage_share,
         "psh_pumping_data_status": psh_pumping_data_status,
+        "sink_breakdown_json": sink_breakdown_json,
         "gen_solar_twh": pv_twh,
         "gen_wind_on_twh": float(pd.to_numeric(df[COL_GEN_WIND_ON], errors="coerce").fillna(0).sum()) / 1e6,
         "gen_wind_off_twh": float(pd.to_numeric(df[COL_GEN_WIND_OFF], errors="coerce").fillna(0).sum()) / 1e6,
@@ -338,6 +472,7 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "max_daily_spread_obs": max_daily_spread,
         "surplus_twh": surplus_energy / 1e6,
         "surplus_energy_twh": surplus_energy / 1e6,
+        "surplus_mwh_total": surplus_energy,
         "absorbed_surplus_twh": surplus_absorbed / 1e6,
         "unabsorbed_surplus_twh": surplus_unabs / 1e6,
         "surplus_unabsorbed_twh": surplus_unabs / 1e6,
@@ -348,6 +483,7 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "sr_hours": float((pd.to_numeric(df[COL_SURPLUS], errors="coerce") > 0).mean()),
         "far_observed": far,
         "far_energy": far,
+        "far_hours": far_hours,
         "ir_p10": ir_p10,
         "p10_load_mw": p10_load,
         "p10_must_run_mw": p10_mr,
@@ -368,6 +504,7 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "core_sanity_issues": "; ".join(core_sanity_issues),
         "ttl_price_based_eur_mwh": ttl,
         "ttl_eur_mwh": ttl,
+        "ttl_observed_eur_mwh": ttl,
         "tca_ccgt_median_eur_mwh": float("nan"),
         "tca_method": "none",
         "h_regime_a": int((df[COL_REGIME] == "A").sum()),
@@ -382,6 +519,12 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "price_low_residual_median_eur_mwh": price_low_residual_median,
         "price_negative_hours_median_eur_mwh": price_negative_median,
         "residual_load_p50_on_negative_price_mw": residual_negative_p50,
+        "capture_ratio_pv_vs_ttl_observed": capture_ratio_pv_vs_ttl,
+        "capture_ratio_wind_vs_ttl_observed": capture_ratio_wind_vs_ttl,
+        "load_identity_abs_max_mw": load_identity_abs_max_mw,
+        "load_identity_rel_err": load_identity_rel_err,
+        "load_identity_ok": load_identity_ok,
+        "data_quality_flags": ";".join(sorted(set(data_quality_flags))),
         COL_REGIME_COHERENCE: _regime_coherence(df),
         COL_NRL_PRICE_CORR: nrl_price_corr,
         COL_COMPLETENESS: completeness,

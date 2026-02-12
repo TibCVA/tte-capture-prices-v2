@@ -114,7 +114,18 @@ def _endpoint_slope(df_xy: pd.DataFrame) -> dict[str, Any]:
 
 def _fit_slope(df_xy: pd.DataFrame, min_points: int) -> dict[str, Any]:
     n = int(len(df_xy))
-    if n >= max(4, int(min_points)) and df_xy["x"].nunique(dropna=True) > 1:
+    if n < 4:
+        return {
+            "slope": np.nan,
+            "intercept": np.nan,
+            "r2": np.nan,
+            "p_value": np.nan,
+            "n": n,
+            "slope_method": "none",
+            "insufficient_points": True,
+            "reason_code": "INSUFFICIENT_POINTS",
+        }
+    if df_xy["x"].nunique(dropna=True) > 1:
         reg = robust_linreg(df_xy["x"], df_xy["y"])
         return {
             "slope": _safe_float(reg.get("slope"), np.nan),
@@ -126,17 +137,15 @@ def _fit_slope(df_xy: pd.DataFrame, min_points: int) -> dict[str, Any]:
             "insufficient_points": False,
             "reason_code": "ok",
         }
-    if n in {2, 3}:
-        return _endpoint_slope(df_xy)
     return {
         "slope": np.nan,
         "intercept": np.nan,
         "r2": np.nan,
         "p_value": np.nan,
-        "n": n,
+        "n": int(n),
         "slope_method": "none",
         "insufficient_points": True,
-        "reason_code": "insufficient_points",
+        "reason_code": "X_CONSTANT",
     }
 
 
@@ -151,6 +160,27 @@ def _robust_flag(fit: dict[str, Any]) -> str:
     if method == "endpoint_delta":
         return "FRAGILE"
     return "NON_TESTABLE"
+
+
+def _leave_one_out_relative_variation(df_xy: pd.DataFrame, slope_ref: float) -> float:
+    if not (np.isfinite(slope_ref) and len(df_xy) >= 6):
+        return np.nan
+    if abs(slope_ref) <= 1e-12:
+        return np.nan
+    loo_slopes: list[float] = []
+    for i in range(len(df_xy)):
+        sub = df_xy.drop(df_xy.index[i])
+        if len(sub) < 4 or sub["x"].nunique(dropna=True) <= 1:
+            continue
+        reg = robust_linreg(sub["x"], sub["y"])
+        slope_i = _safe_float(reg.get("slope"), np.nan)
+        if np.isfinite(slope_i):
+            loo_slopes.append(float(slope_i))
+    if not loo_slopes:
+        return np.nan
+    ref_abs = abs(float(slope_ref))
+    rel = [abs(v - slope_ref) / ref_abs for v in loo_slopes]
+    return float(max(rel)) if rel else np.nan
 
 
 def _as_share(series: pd.Series) -> pd.Series:
@@ -298,7 +328,12 @@ def run_q2(
     for country, group in panel.groupby("country"):
         group = group.sort_values("year").copy()
         for tech in ["PV", "WIND"]:
-            phase2_mask = group.get("is_phase2_market", False).fillna(False).astype(bool)
+            if tech == "PV" and "stage2_candidate_year_pv" in group.columns:
+                phase2_mask = pd.to_numeric(group.get("stage2_candidate_year_pv"), errors="coerce").fillna(0.0) > 0.0
+            elif tech == "WIND" and "stage2_candidate_year_wind" in group.columns:
+                phase2_mask = pd.to_numeric(group.get("stage2_candidate_year_wind"), errors="coerce").fillna(0.0) > 0.0
+            else:
+                phase2_mask = pd.to_numeric(group.get("is_phase2_market"), errors="coerce").fillna(0.0) > 0.0
             phase2_scope = group[phase2_mask].copy()
             phase2_scope["quality_ok"] = phase2_scope.get("quality_ok", True).fillna(False).astype(bool)
             phase2_scope["crisis_year"] = phase2_scope.get("crisis_year", False).fillna(False).astype(bool)
@@ -323,9 +358,12 @@ def run_q2(
                         "x_axis_used": "none",
                         "x_unit": "share_of_load",
                         "slope": np.nan,
+                        "slope_per_1pp": np.nan,
+                        "slope_unit": "capture_ratio_per_share_load",
                         "intercept": np.nan,
                         "r2": np.nan,
                         "p_value": np.nan,
+                        "loo_slope_rel_var_max": np.nan,
                         "n": 0,
                         "slope_method": "none",
                         "method": "none",
@@ -345,6 +383,8 @@ def run_q2(
                         "cross_country_benchmark_r2": np.nan,
                         "cross_country_benchmark_p_value": np.nan,
                         "cross_country_benchmark_n": np.nan,
+                        "slope_quality_flag": "WARN",
+                        "slope_quality_notes": "INSUFFICIENT_POINTS",
                     }
                 )
                 continue
@@ -383,14 +423,42 @@ def run_q2(
                 }
             ).dropna()
             fit = _fit_slope(fit_df, min_points=min_points)
-            fit["robust_flag"] = _robust_flag(fit)
-            if str(fit.get("slope_method", "")) == "ols":
-                slope_quality_notes = "ols_ok" if np.isfinite(_safe_float(fit.get("r2"), np.nan)) else "ols_missing_r2"
-            elif str(fit.get("slope_method", "")) == "endpoint_delta":
-                slope_quality_notes = "ols_not_possible_n_lt_4"
+            n_points_fit = int(_safe_float(fit.get("n"), 0.0))
+            slope_value = _safe_float(fit.get("slope"), np.nan)
+            p_val_fit = _safe_float(fit.get("p_value"), np.nan)
+            loo_rel_var_max = _leave_one_out_relative_variation(fit_df, slope_value)
+            is_strict_pass = bool(
+                str(fit.get("slope_method", "")).lower() == "ols"
+                and n_points_fit >= 6
+                and np.isfinite(slope_value)
+                and np.isfinite(p_val_fit)
+                and p_val_fit <= 0.05
+                and np.isfinite(loo_rel_var_max)
+                and loo_rel_var_max <= 0.20
+            )
+            if is_strict_pass:
+                slope_quality_flag = "PASS"
+                slope_quality_notes = "OLS_STRICT_PASS"
+                fit["robust_flag"] = "ROBUST"
             else:
-                slope_quality_notes = str(fit.get("reason_code", "insufficient_points"))
-            slope_quality_flag = "PASS" if slope_quality_notes == "ols_ok" else ("WARN" if slope_quality_notes else "FAIL")
+                notes: list[str] = []
+                if n_points_fit < 4:
+                    notes.append("INSUFFICIENT_POINTS")
+                if n_points_fit < 6:
+                    notes.append("N_LT_6")
+                if str(fit.get("slope_method", "")).lower() != "ols":
+                    notes.append("METHOD_NOT_OLS")
+                if not np.isfinite(p_val_fit):
+                    notes.append("PVALUE_MISSING")
+                elif p_val_fit > 0.05:
+                    notes.append("PVALUE_GT_0_05")
+                if not np.isfinite(loo_rel_var_max):
+                    notes.append("LOO_NOT_AVAILABLE")
+                elif loo_rel_var_max > 0.20:
+                    notes.append("LOO_UNSTABLE")
+                slope_quality_flag = "WARN"
+                slope_quality_notes = "|".join(notes) if notes else str(fit.get("reason_code", "WARN"))
+                fit["robust_flag"] = "NON_TESTABLE" if n_points_fit < 4 else "FRAGILE"
 
             corr_vre_load_phase2 = np.nan
             if {"gen_vre_twh", "load_net_twh"}.issubset(set(phase2_scope.columns)):
@@ -402,6 +470,16 @@ def run_q2(
                 )
 
             years_used = ",".join([str(int(v)) for v in fit_df["year"].tolist()])
+            phase2_years_set = set(pd.to_numeric(phase2_scope.get("year"), errors="coerce").dropna().astype(int).tolist())
+            fit_years_set = set(pd.to_numeric(fit_df.get("year"), errors="coerce").dropna().astype(int).tolist())
+            if not fit_years_set.issubset(phase2_years_set):
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q2_YEARS_USED_OUTSIDE_PHASE2",
+                        "message": f"{country}-{tech}: years_used doit etre un sous-ensemble des annees phase2 Q1.",
+                    }
+                )
             phase2_start = int(fit_df["year"].min()) if not fit_df.empty else np.nan
             phase2_end = int(fit_df["year"].max()) if not fit_df.empty else np.nan
             phase2_benchmark_rows[tech].append(fit_df[["country", "x", "y"]].copy())
@@ -418,9 +496,12 @@ def run_q2(
                     "x_axis_used": x_axis,
                     "x_unit": "share_of_load",
                     "slope": fit["slope"],
+                    "slope_per_1pp": _safe_float(fit.get("slope"), np.nan) * 0.01 if np.isfinite(_safe_float(fit.get("slope"), np.nan)) else np.nan,
+                    "slope_unit": "capture_ratio_per_share_load",
                     "intercept": fit["intercept"],
                     "r2": fit["r2"],
                     "p_value": fit["p_value"],
+                    "loo_slope_rel_var_max": loo_rel_var_max,
                     "n": int(fit["n"]),
                     "slope_method": fit["slope_method"],
                     "method": fit["slope_method"],
@@ -477,16 +558,14 @@ def run_q2(
                         "message": f"{country}-{tech}: p_value doit etre NaN si n<4.",
                     }
                 )
-            if int(fit["n"]) in {2, 3}:
-                xvals = fit_df["x"].to_numpy(dtype=float)
-                if len(xvals) >= 2 and abs(float(xvals[-1] - xvals[0])) > 1e-12 and not np.isfinite(_safe_float(fit["slope"], np.nan)):
-                    checks.append(
-                        {
-                            "status": "FAIL",
-                            "code": "Q2_ENDPOINT_SLOPE_NAN",
-                            "message": f"{country}-{tech}: pente endpoint doit etre finie si x varie.",
-                        }
-                    )
+            if slope_quality_flag == "PASS" and _safe_float(fit.get("p_value"), np.nan) > 0.05:
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q2_PASS_WITH_PVALUE_GT_0_05",
+                        "message": f"{country}-{tech}: slope_quality_flag=PASS interdit si p_value>0.05.",
+                    }
+                )
 
         # Driver diagnostics use country-level phase2_market years.
         phase_mask_drv = (

@@ -616,6 +616,7 @@ def _run_scen_module(
         years = sorted(set([int(y) for y in scenario_years]))
         runs: list[ModuleResult] = []
         tech_map = selection.get("marginal_tech_by_country", {})
+        base_anchor_by_country = selection.get("base_anchor_by_country", {})
         for country in countries:
             if scenario_id == "HIGH_BOTH":
                 base_sid = "BASE"
@@ -641,6 +642,13 @@ def _run_scen_module(
                 "scenario_id": scenario_id,
                 "horizon_year": max(years) if years else None,
             }
+            if isinstance(base_anchor_by_country, dict):
+                anchor_ref = base_anchor_by_country.get(country, {})
+                if isinstance(anchor_ref, dict):
+                    if np.isfinite(_safe_float(anchor_ref.get("base_tca_eur_mwh"), np.nan)):
+                        scen_sel["base_tca_eur_mwh"] = _safe_float(anchor_ref.get("base_tca_eur_mwh"), np.nan)
+                    if np.isfinite(_safe_float(anchor_ref.get("base_ttl_observed_eur_mwh"), np.nan)):
+                        scen_sel["base_ttl_observed_eur_mwh"] = _safe_float(anchor_ref.get("base_ttl_observed_eur_mwh"), np.nan)
             runs.append(
                 run_q5(
                     hourly_df=hourly,
@@ -1540,13 +1548,35 @@ def run_question_bundle(
         if not ok:
             warnings.append(f"{sid}: {reason}")
             continue
+        scen_selection = {**selection, "run_id": run_id}
+        if qid == "Q5" and sid != "BASE" and "BASE" in scen_results:
+            base_tbl = scen_results["BASE"].tables.get("Q5_summary", pd.DataFrame())
+            if not base_tbl.empty:
+                base_map: dict[str, dict[str, float]] = {}
+                for _, brow in base_tbl.iterrows():
+                    ctry = str(brow.get("country", "")).strip()
+                    if not ctry:
+                        continue
+                    base_map[ctry] = {
+                        "base_tca_eur_mwh": _safe_float(
+                            brow.get("tca_current_eur_mwh", brow.get("ttl_anchor_formula")),
+                            np.nan,
+                        ),
+                        "base_ttl_observed_eur_mwh": _safe_float(
+                            brow.get("ttl_observed_eur_mwh", brow.get("ttl_obs")),
+                            np.nan,
+                        ),
+                    }
+                if base_map:
+                    scen_selection["base_anchor_by_country"] = base_map
+
         scen_res = _run_scen_module(
             question_id=qid,
             scenario_id=sid,
             annual_hist=annual_hist,
             assumptions_phase1=assumptions_phase1,
             assumptions_phase2=assumptions_phase2,
-            selection={**selection, "run_id": run_id},
+            selection=scen_selection,
             scenario_years=scenario_years,
         )
         if scen_res is None:

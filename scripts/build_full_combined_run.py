@@ -91,6 +91,7 @@ def main() -> None:
             "years": [int(args.hist_year_end)],
             "horizon_year": max(scenario_years),
             "objective": "LOW_PRICE_TARGET",
+            "force_recompute": True,
             "power_grid": [0.0, 250.0, 500.0, 750.0, 1000.0, 1500.0],
             "duration_grid": [2.0, 4.0, 6.0, 8.0],
             "scenario_ids": get_default_scenarios("Q4"),

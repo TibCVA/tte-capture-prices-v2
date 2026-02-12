@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
@@ -50,7 +51,8 @@ def export_module_result(result: ModuleResult, base_dir: str | None = None) -> P
     figs_dir.mkdir(parents=True, exist_ok=True)
 
     for name, df in result.tables.items():
-        df.to_csv(tables_dir / f"{name}.csv", index=False)
+        out_df = df.replace("", np.nan)
+        out_df.to_csv(tables_dir / f"{name}.csv", index=False, na_rep="NaN")
 
     (out_dir / "narrative.md").write_text(result.narrative_md, encoding="utf-8")
 
