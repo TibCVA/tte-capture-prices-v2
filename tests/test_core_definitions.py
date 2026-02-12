@@ -74,6 +74,45 @@ def test_load_mw_clamped_when_psh_exceeds_total(make_raw_panel, countries_cfg, t
     assert set(df["q_bad_load_net"].astype(bool).unique()) == {True}
 
 
+def test_flex_accounting_identity_hourly(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=96)
+    raw["net_position_mw"] = -350.0
+    df = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+
+    surplus = pd.to_numeric(df["surplus_mw"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    absorbed = pd.to_numeric(df["surplus_absorbed_mw"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    unabs = pd.to_numeric(df["surplus_unabsorbed_mw"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    flex_total = pd.to_numeric(df["flex_sink_observed_mw"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    flex_exports = pd.to_numeric(df["flex_sink_exports_mw"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    flex_psh = pd.to_numeric(df["flex_sink_psh_pump_mw"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    flex_other = pd.to_numeric(df.get("flex_sink_other_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+
+    assert ((surplus - (absorbed + unabs)).abs() <= 1e-6).all()
+    assert ((flex_total - absorbed).abs() <= 1e-6).all()
+    assert ((flex_total - (flex_exports + flex_psh + flex_other)).abs() <= 1e-6).all()
+
+
+def test_load_net_mode_depends_on_psh_coverage(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=48)
+    raw.loc[raw.index[:12], "psh_pump_mw"] = pd.NA
+    df_partial = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assert set(df_partial["load_net_mode"].astype(str).unique()) == {"entsoe_total_load_minus_psh_pumping"}
+
+    raw_missing = make_raw_panel(n=48)
+    raw_missing["psh_pump_mw"] = pd.NA
+    df_missing = build_hourly_table(raw_missing, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assert set(df_missing["load_net_mode"].astype(str).unique()) == {"entsoe_total_load_no_pumping_adjust"}
+
+
+def test_net_position_sign_auto_selects_negative_when_more_consistent(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=72)
+    raw["load_total_mw"] = 10000.0
+    raw["net_position_mw"] = -500.0
+    df = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assert set(df["net_position_sign_choice"].astype(str).unique()) == {"negative_is_export"}
+    assert (pd.to_numeric(df["exports_mw"], errors="coerce").fillna(0.0) >= 499.0).all()
+
+
 def test_invariant_codes_in_sanity_check():
     df = pd.DataFrame(
         {

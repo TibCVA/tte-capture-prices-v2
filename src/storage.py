@@ -85,9 +85,13 @@ def load_scenario_validation_findings(scenario_id: str) -> pd.DataFrame:
 def upsert_table(path: Path, df_new: pd.DataFrame, keys: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        df_old = pd.read_parquet(path)
-        all_df = pd.concat([df_old, df_new], ignore_index=True)
-        all_df = all_df.drop_duplicates(subset=keys, keep="last")
+        try:
+            df_old = pd.read_parquet(path)
+            all_df = pd.concat([df_old, df_new], ignore_index=True)
+            all_df = all_df.drop_duplicates(subset=keys, keep="last")
+        except Exception:
+            # Defensive path for partially-written/corrupted parquet files.
+            all_df = df_new.copy()
     else:
         all_df = df_new.copy()
     all_df.to_parquet(path, index=False)

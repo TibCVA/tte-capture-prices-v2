@@ -13,11 +13,12 @@ from src.modules.q1_transition import run_q1
 from src.modules.q2_slope import run_q2
 from src.modules.q3_exit import run_q3
 from src.modules.q4_bess import run_q4
-from src.modules.q5_thermal_anchor import Q5_OUTPUT_SCHEMA_VERSION, run_q5
+from src.modules.q5_thermal_anchor import run_q5
 from src.modules.result import ModuleResult
 from src.modules.test_registry import QuestionTestSpec, get_default_scenarios, get_question_tests
 from src.scenario.phase2_engine import run_phase2_scenario
 from src.storage import (
+    load_hourly,
     load_scenario_annual_metrics,
     load_scenario_hourly,
     scenario_hourly_output_path,
@@ -300,6 +301,128 @@ def _phase2_commodity_daily_high_both(assumptions_phase2: pd.DataFrame, country:
         return pd.DataFrame(columns=["date", "gas_price_eur_mwh_th", "co2_price_eur_t"])
     out = pd.concat(rows, ignore_index=True)
     return out.dropna(subset=["gas_price_eur_mwh_th", "co2_price_eur_t"])
+
+
+def _q5_base_anchor_from_row(
+    row: pd.Series,
+    *,
+    status_override: str = "ok",
+    reason_override: str = "",
+    source_year_override: float | None = None,
+) -> dict[str, Any]:
+    out = {
+        "base_tca_eur_mwh": _safe_float(
+            row.get("tca_current_eur_mwh", row.get("ttl_anchor_formula")),
+            np.nan,
+        ),
+        "base_tca_ccgt_eur_mwh": _safe_float(
+            row.get("tca_ccgt_eur_mwh", row.get("tca_current_eur_mwh", row.get("ttl_anchor_formula"))),
+            np.nan,
+        ),
+        "base_tca_coal_eur_mwh": _safe_float(row.get("tca_coal_eur_mwh"), np.nan),
+        "base_ttl_observed_eur_mwh": _safe_float(row.get("ttl_observed_eur_mwh", row.get("ttl_obs")), np.nan),
+        "base_ttl_model_eur_mwh": _safe_float(row.get("ttl_model_eur_mwh", row.get("ttl_observed_eur_mwh", row.get("ttl_obs"))), np.nan),
+        "base_gas_eur_per_mwh_th": _safe_float(row.get("assumed_gas_price_eur_mwh_th"), np.nan),
+        "base_co2_eur_per_t": _safe_float(row.get("assumed_co2_price_eur_t"), np.nan),
+        "base_year_reference": _safe_float(
+            row.get("ttl_reference_year", row.get("year")),
+            np.nan,
+        ),
+        "base_ref_status_override": str(status_override),
+        "base_ref_reason_override": str(reason_override or ""),
+    }
+    if source_year_override is not None and np.isfinite(_safe_float(source_year_override, np.nan)):
+        out["base_ref_source_year"] = float(source_year_override)
+        out["base_year_reference"] = float(source_year_override)
+    return out
+
+
+def _resolve_q5_base_anchor_for_country(
+    *,
+    country: str,
+    years: list[int],
+    annual_hist: pd.DataFrame,
+    assumptions_phase1: pd.DataFrame,
+    assumptions_phase2: pd.DataFrame,
+    selection: dict[str, Any],
+    run_id: str,
+) -> tuple[dict[str, Any], str]:
+    # 1) Preferred: derive from BASE scenario outputs for same country/years.
+    ok, reason = _ensure_scenario_outputs(
+        scenario_id="BASE",
+        countries=[country],
+        scenario_years=years,
+        assumptions_phase2=assumptions_phase2,
+        annual_hist=annual_hist,
+        hourly_hist_map={},
+    )
+    if ok:
+        hourly_map = _load_scenario_hourly_map("BASE", [country], years)
+        hourly = _concat_hourly(country, years, hourly_map)
+        commodity = _phase2_commodity_daily(assumptions_phase2, "BASE", country, years)
+        if not hourly.empty and not commodity.empty:
+            base_sel = {
+                **selection,
+                "country": country,
+                "mode": "SCEN",
+                "scenario_id": "BASE",
+                "horizon_year": max(years) if years else None,
+            }
+            base_res = run_q5(
+                hourly_df=hourly,
+                assumptions_df=assumptions_phase1,
+                selection=base_sel,
+                run_id=f"{run_id}_{country}_BASE_REF",
+                commodity_daily=commodity,
+                ttl_target_eur_mwh=_safe_float(selection.get("ttl_target_eur_mwh"), 120.0),
+                ttl_method=str(selection.get("ttl_reference_mode", "year_specific")),
+            )
+            base_tbl = base_res.tables.get("Q5_summary", pd.DataFrame())
+            if not base_tbl.empty:
+                return _q5_base_anchor_from_row(base_tbl.iloc[0], status_override="ok"), "ok"
+
+    # 2) Fallback: derive BASE from latest historical year for that country.
+    years_hist = (
+        annual_hist[annual_hist["country"].astype(str) == str(country)]["year"].dropna().astype(int).tolist()
+        if annual_hist is not None and not annual_hist.empty and {"country", "year"}.issubset(annual_hist.columns)
+        else []
+    )
+    if years_hist:
+        hist_year = int(max(years_hist))
+        try:
+            hourly_hist = load_hourly(country, hist_year)
+            hist_sel = {
+                **selection,
+                "country": country,
+                "year": hist_year,
+                "horizon_year": max(years) if years else None,
+                "mode": "HIST",
+                "scenario_id": "HIST",
+                "ttl_reference_mode": "year_specific",
+                "ttl_reference_year": hist_year,
+            }
+            hist_res = run_q5(
+                hourly_df=hourly_hist,
+                assumptions_df=assumptions_phase1,
+                selection=hist_sel,
+                run_id=f"{run_id}_{country}_HIST_REF",
+                commodity_daily=None,
+                ttl_target_eur_mwh=_safe_float(selection.get("ttl_target_eur_mwh"), 120.0),
+                ttl_method=str(selection.get("ttl_reference_mode", "year_specific")),
+            )
+            hist_tbl = hist_res.tables.get("Q5_summary", pd.DataFrame())
+            if not hist_tbl.empty:
+                anchor = _q5_base_anchor_from_row(
+                    hist_tbl.iloc[0],
+                    status_override="warn_fallback_from_hist",
+                    reason_override=f"fallback_from_hist:{hist_year}",
+                    source_year_override=float(hist_year),
+                )
+                return anchor, "warn_fallback_from_hist"
+        except Exception:
+            pass
+
+    return {}, f"missing_phase2_assumptions_or_hist_ref:{reason}"
 
 
 def _ensure_scenario_outputs(
@@ -650,68 +773,30 @@ def _run_scen_module(
         years = sorted(set([int(y) for y in scenario_years]))
         runs: list[ModuleResult] = []
         tech_map = selection.get("marginal_tech_by_country", {})
-        base_anchor_by_country = selection.get("base_anchor_by_country", {})
+        base_anchor_by_country_input = selection.get("base_anchor_by_country", {})
+        base_anchor_by_country: dict[str, dict[str, Any]] = {}
+        if isinstance(base_anchor_by_country_input, dict):
+            for c, payload in base_anchor_by_country_input.items():
+                if isinstance(payload, dict):
+                    base_anchor_by_country[str(c)] = dict(payload)
         sid_upper = str(scenario_id).upper()
         requires_base_ref = sid_upper.startswith("HIGH_") and sid_upper not in {"BASE", "HIST"}
         if requires_base_ref:
-            missing_base_countries = [
-                str(c)
-                for c in countries
-                if not (isinstance(base_anchor_by_country, dict) and isinstance(base_anchor_by_country.get(str(c), {}), dict) and base_anchor_by_country.get(str(c), {}))
-            ]
-            if missing_base_countries:
-                fail_rows: list[dict[str, Any]] = []
-                quality_rows: list[dict[str, Any]] = []
-                for c in sorted(set([str(x) for x in countries])):
-                    fail_rows.append(
-                        {
-                            "scenario_id": str(scenario_id),
-                            "country": c,
-                            "base_ref_status": "missing_base",
-                            "base_ref_reason": "missing_base_scenario_reference",
-                            "status": "FAIL",
-                            "reason": "missing_base_scenario_reference",
-                            "delta_tca_vs_base": np.nan,
-                            "delta_ttl_model_vs_base": np.nan,
-                            "delta_capture_ratio_vs_base": np.nan,
-                            "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
-                        }
+            for c in countries:
+                c_key = str(c)
+                anchor_ref = base_anchor_by_country.get(c_key, {})
+                if not (isinstance(anchor_ref, dict) and anchor_ref):
+                    resolved_anchor, _ = _resolve_q5_base_anchor_for_country(
+                        country=c_key,
+                        years=years,
+                        annual_hist=annual_hist,
+                        assumptions_phase1=assumptions_phase1,
+                        assumptions_phase2=assumptions_phase2,
+                        selection=selection,
+                        run_id=run_id,
                     )
-                    quality_rows.append(
-                        {
-                            "module_id": "Q5",
-                            "country": c,
-                            "year": max(years) if years else np.nan,
-                            "scenario_id": str(scenario_id),
-                            "quality_status": "FAIL",
-                            "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
-                        }
-                    )
-                msg = (
-                    "Q5 scenario requires BASE reference for all countries: "
-                    + ", ".join(sorted(set(missing_base_countries)))
-                )
-                return ModuleResult(
-                    module_id="Q5",
-                    run_id=run_id,
-                    selection={**selection, "countries": countries, "mode": "SCEN", "scenario_id": scenario_id},
-                    assumptions_used=[],
-                    kpis={"n_runs": 0, "n_countries": int(len(countries)), "compute_time_sec_total": 0.0},
-                    tables={"Q5_summary": pd.DataFrame(fail_rows), "q5_quality_summary": pd.DataFrame(quality_rows)},
-                    figures=[],
-                    narrative_md="Q5 scenario non execute: base reference missing.",
-                    checks=[
-                        {
-                            "status": "FAIL",
-                            "code": "Q5_BASE_SCENARIO_MISSING",
-                            "message": msg,
-                        }
-                    ],
-                    warnings=[msg],
-                    mode="SCEN",
-                    scenario_id=scenario_id,
-                    horizon_year=max(years) if years else None,
-                )
+                    if resolved_anchor:
+                        base_anchor_by_country[c_key] = resolved_anchor
         for country in countries:
             if scenario_id == "HIGH_BOTH":
                 base_sid = "BASE"
@@ -737,22 +822,31 @@ def _run_scen_module(
                 "scenario_id": scenario_id,
                 "horizon_year": max(years) if years else None,
             }
-            if isinstance(base_anchor_by_country, dict):
-                anchor_ref = base_anchor_by_country.get(country, {})
-                if isinstance(anchor_ref, dict):
-                    for key in [
-                        "base_tca_eur_mwh",
-                        "base_tca_ccgt_eur_mwh",
-                        "base_tca_coal_eur_mwh",
-                        "base_ttl_observed_eur_mwh",
-                        "base_ttl_model_eur_mwh",
-                        "base_gas_eur_per_mwh_th",
-                        "base_co2_eur_per_t",
-                        "base_year_reference",
-                    ]:
-                        value = _safe_float(anchor_ref.get(key), np.nan)
-                        if np.isfinite(value):
-                            scen_sel[key] = value
+            anchor_ref = base_anchor_by_country.get(str(country), {}) if isinstance(base_anchor_by_country, dict) else {}
+            if requires_base_ref and not (isinstance(anchor_ref, dict) and anchor_ref):
+                scen_sel["base_ref_status_override"] = "missing_base"
+                scen_sel["base_ref_reason_override"] = "missing_phase2_assumptions_table_for_this_year"
+            elif isinstance(anchor_ref, dict):
+                for key in [
+                    "base_tca_eur_mwh",
+                    "base_tca_ccgt_eur_mwh",
+                    "base_tca_coal_eur_mwh",
+                    "base_ttl_observed_eur_mwh",
+                    "base_ttl_model_eur_mwh",
+                    "base_gas_eur_per_mwh_th",
+                    "base_co2_eur_per_t",
+                    "base_year_reference",
+                    "base_ref_source_year",
+                ]:
+                    value = _safe_float(anchor_ref.get(key), np.nan)
+                    if np.isfinite(value):
+                        scen_sel[key] = value
+                status_override = str(anchor_ref.get("base_ref_status_override", "")).strip()
+                reason_override = str(anchor_ref.get("base_ref_reason_override", "")).strip()
+                if status_override:
+                    scen_sel["base_ref_status_override"] = status_override
+                if reason_override:
+                    scen_sel["base_ref_reason_override"] = reason_override
             runs.append(
                 run_q5(
                     hourly_df=hourly,
@@ -766,7 +860,7 @@ def _run_scen_module(
             )
         if not runs:
             return None
-        return _merge_module_results(
+        merged = _merge_module_results(
             runs,
             module_id="Q5",
             run_id=run_id,
@@ -776,6 +870,35 @@ def _run_scen_module(
             horizon_year=max(years) if years else None,
             narrative_title=f"Q5 scenario {scenario_id}",
         )
+        if requires_base_ref:
+            q5_tbl = merged.tables.get("Q5_summary", pd.DataFrame())
+            if not q5_tbl.empty and "base_ref_status" in q5_tbl.columns:
+                status_series = q5_tbl["base_ref_status"].astype(str).str.lower()
+                missing_mask = ~status_series.isin(["ok", "warn_fallback_from_hist"])
+                if bool(missing_mask.any()):
+                    missing_countries = sorted(set(q5_tbl.loc[missing_mask, "country"].astype(str).tolist()))
+                    msg = (
+                        "Q5 base reference unresolved for countries: "
+                        + ", ".join(missing_countries)
+                        + ". Action: provide phase2 BASE assumptions for this year or historical fallback inputs."
+                    )
+                    merged.checks.append(
+                        {
+                            "status": "FAIL",
+                            "code": "Q5_BASE_SCENARIO_MISSING",
+                            "message": msg,
+                        }
+                    )
+                    merged.warnings.append(msg)
+                else:
+                    merged.checks.append(
+                        {
+                            "status": "PASS",
+                            "code": "Q5_BASE_SCENARIO_MISSING",
+                            "message": "BASE reference resolved (ok or warn_fallback_from_hist) for all countries.",
+                        }
+                    )
+        return merged
 
     return None
 
@@ -1219,10 +1342,12 @@ def _evaluate_test_ledger(
                         "Q4_DISCHARGE_ABOVE_PMAX",
                         "Q4_FREE_ENERGY_NO_CHARGE",
                         "Q4_ENERGY_BALANCE",
+                        "Q4_ENERGY_BALANCE_RESIDUAL",
                         "Q4_SIMULTANEOUS_CHARGE_DISCHARGE",
                         "Q4_CHARGE_EXCEEDS_SURPLUS",
                         "Q4_ZERO_SIZE_NOT_ZERO_FLOW",
                         "Q4_ZERO_SIZE_AFTER_DIFFERS_FROM_BEFORE",
+                        "Q4_NO_IMPACT_WITHOUT_DISPATCH",
                         "Q4_SOC_END_BOUNDARY",
                     }
                     hist_fails = [c for c in hist_result.checks if str(c.get("status", "")).upper() == "FAIL"]

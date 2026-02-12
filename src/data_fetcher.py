@@ -215,10 +215,17 @@ def _extract_generation(raw_gen: pd.DataFrame) -> pd.DataFrame:
 
             values = pd.to_numeric(raw_gen[(gen_label, flow_label)], errors="coerce")
             if mapped == "_psh_dispatch":
-                if "Consumption" in flow:
+                flow_l = flow.lower()
+                label_l = label.lower()
+                # Preferred path: explicit ENTSO-E pumped-storage consumption flow.
+                if ("consumption" in flow_l) or ("consumption" in label_l):
                     out[COL_PSH_PUMP] = out[COL_PSH_PUMP].add(values.abs(), fill_value=0.0)
                 else:
-                    out[COL_GEN_HYDRO_PSH_GEN] = out[COL_GEN_HYDRO_PSH_GEN].add(values.abs(), fill_value=0.0)
+                    # Fallback path: some zones expose pumping as negative PSH generation.
+                    psh_from_negative = (-values.clip(upper=0.0)).fillna(0.0)
+                    psh_generation = values.clip(lower=0.0).fillna(0.0)
+                    out[COL_PSH_PUMP] = out[COL_PSH_PUMP].add(psh_from_negative, fill_value=0.0)
+                    out[COL_GEN_HYDRO_PSH_GEN] = out[COL_GEN_HYDRO_PSH_GEN].add(psh_generation, fill_value=0.0)
                 continue
 
             if "Actual Aggregated" in flow or flow == "Actual":
@@ -229,10 +236,14 @@ def _extract_generation(raw_gen: pd.DataFrame) -> pd.DataFrame:
             mapped = mapping.get(label, COL_GEN_OTHER)
             values = pd.to_numeric(raw_gen[c], errors="coerce")
             if mapped == "_psh_dispatch":
-                if "Consumption" in label:
+                label_l = label.lower()
+                if "consumption" in label_l:
                     out[COL_PSH_PUMP] = out[COL_PSH_PUMP].add(values.abs(), fill_value=0.0)
                 else:
-                    out[COL_GEN_HYDRO_PSH_GEN] = out[COL_GEN_HYDRO_PSH_GEN].add(values.abs(), fill_value=0.0)
+                    psh_from_negative = (-values.clip(upper=0.0)).fillna(0.0)
+                    psh_generation = values.clip(lower=0.0).fillna(0.0)
+                    out[COL_PSH_PUMP] = out[COL_PSH_PUMP].add(psh_from_negative, fill_value=0.0)
+                    out[COL_GEN_HYDRO_PSH_GEN] = out[COL_GEN_HYDRO_PSH_GEN].add(psh_generation, fill_value=0.0)
             else:
                 out[mapped] = out[mapped].add(values, fill_value=0.0)
 
@@ -241,6 +252,8 @@ def _extract_generation(raw_gen: pd.DataFrame) -> pd.DataFrame:
         s = pd.to_numeric(out[c], errors="coerce")
         s = s.where(~(s < -0.1), np.nan)
         s = s.where(~((s >= -0.1) & (s < 0.0)), 0.0)
+        if c == COL_PSH_PUMP:
+            s = s.clip(lower=0.0)
         out[c] = s
 
     return out

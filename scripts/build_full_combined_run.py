@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,7 +17,7 @@ from src.modules.bundle_result import export_question_bundle
 from src.modules.question_bundle_runner import run_question_bundle
 from src.modules.test_registry import get_default_scenarios
 from src.pipeline import load_assumptions_table
-from src.storage import load_hourly
+from src.storage import load_hourly, load_scenario_hourly
 
 
 DEFAULT_COUNTRIES = ["FR", "DE", "ES", "NL", "BE", "CZ", "IT_NORD"]
@@ -34,7 +35,47 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--q5-countries", default="", help="Comma-separated countries for Q5 (default: all --countries)")
     parser.add_argument("--q5-marginal-tech", default="CCGT")
     parser.add_argument("--q5-ttl-target", type=float, default=160.0)
+    parser.add_argument("--debug-country", default="", help="Optional country for flex debug export (single country).")
+    parser.add_argument("--debug-year", type=int, default=0, help="Optional year for flex debug export.")
+    parser.add_argument("--debug-scenario-id", default="HIST", help="Scenario id for debug export (HIST for historical).")
     return parser.parse_args()
+
+
+def _export_flex_debug(run_id: str, *, country: str, year: int, scenario_id: str = "HIST") -> Path:
+    scenario = str(scenario_id or "HIST").upper()
+    if scenario == "HIST":
+        hourly = load_hourly(country, year)
+    else:
+        hourly = load_scenario_hourly(scenario, country, year)
+
+    nrl = pd.to_numeric(hourly.get("nrl_mw"), errors="coerce")
+    surplus_raw = (
+        pd.to_numeric(hourly.get("surplus_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+        if "surplus_mw" in hourly.columns
+        else (-nrl).fillna(0.0).clip(lower=0.0)
+    )
+    export_sink = pd.to_numeric(hourly.get("exports_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+    psh = pd.to_numeric(hourly.get("psh_pump_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+    sink_non_bess = export_sink + psh
+    absorbed_non_bess = np.minimum(surplus_raw, sink_non_bess)
+    unabsorbed_surplus = (surplus_raw - absorbed_non_bess).clip(lower=0.0)
+
+    out = pd.DataFrame(
+        {
+            "timestamp_utc": hourly.index,
+            "net_position_mw": pd.to_numeric(hourly.get("net_position_mw"), errors="coerce"),
+            "export_sink_mw": export_sink,
+            "surplus_raw_mw": surplus_raw,
+            "psh_pumping_mw": psh,
+            "sink_non_bess_mw": sink_non_bess,
+            "unabsorbed_surplus_mw": unabsorbed_surplus,
+        }
+    )
+    debug_dir = Path("outputs/combined") / run_id / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    out_path = debug_dir / f"flex_debug_{country}_{year}_{scenario}.csv"
+    out.to_csv(out_path, index=False)
+    return out_path
 
 
 def main() -> None:
@@ -126,6 +167,20 @@ def main() -> None:
         export_question_bundle(bundle)
         status_counts = bundle.test_ledger["status"].astype(str).value_counts().to_dict() if not bundle.test_ledger.empty else {}
         print(f"{qid}: {status_counts}")
+
+    debug_country = str(args.debug_country).strip().upper()
+    debug_year = int(args.debug_year) if int(args.debug_year) > 0 else 0
+    if debug_country and debug_year:
+        try:
+            debug_path = _export_flex_debug(
+                run_id=run_id,
+                country=debug_country,
+                year=debug_year,
+                scenario_id=str(args.debug_scenario_id),
+            )
+            print(f"FLEX_DEBUG {debug_path}")
+        except Exception as exc:
+            print(f"FLEX_DEBUG_ERROR country={debug_country} year={debug_year}: {exc}")
 
     print(f"RUN_ID {run_id}")
 

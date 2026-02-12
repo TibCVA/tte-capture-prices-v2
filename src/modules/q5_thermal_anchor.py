@@ -492,6 +492,9 @@ def run_q5(
     base_tca_coal_ref = _safe_float(selection.get("base_tca_coal_eur_mwh"), np.nan)
     base_gas_ref = _safe_float(selection.get("base_gas_eur_per_mwh_th", selection.get("base_gas_price_eur_mwh_th")), np.nan)
     base_co2_ref = _safe_float(selection.get("base_co2_eur_per_t", selection.get("base_co2_price_eur_t")), np.nan)
+    base_ref_status_override = str(selection.get("base_ref_status_override", "")).strip().lower()
+    base_ref_reason_override = str(selection.get("base_ref_reason_override", "")).strip()
+    base_ref_source_year = _safe_float(selection.get("base_ref_source_year", base_year_reference), np.nan)
     base_ref_status = "ok"
     base_ref_reason = ""
     if str(scenario_id_effective).upper() in {"HIST", "BASE"}:
@@ -511,6 +514,19 @@ def run_q5(
         if not (np.isfinite(base_tca_ref) and np.isfinite(base_ttl_model_ref)):
             base_ref_status = "missing_base"
             base_ref_reason = "base_reference_not_provided"
+    if base_ref_status_override in {"ok", "warn_fallback_from_hist", "missing_base"}:
+        base_ref_status = base_ref_status_override
+        if base_ref_reason_override:
+            base_ref_reason = base_ref_reason_override
+    if base_ref_status in {"ok", "warn_fallback_from_hist"} and not (np.isfinite(base_tca_ref) and np.isfinite(base_ttl_model_ref)):
+        base_ref_status = "missing_base"
+        if not base_ref_reason:
+            base_ref_reason = "base_reference_not_provided"
+    if base_ref_status == "warn_fallback_from_hist" and not base_ref_reason:
+        source_txt = int(base_ref_source_year) if np.isfinite(base_ref_source_year) else "hist"
+        base_ref_reason = f"fallback_from_hist:{source_txt}"
+    if base_ref_status == "missing_base" and not base_ref_reason:
+        base_ref_reason = "missing_phase2_assumptions_table_for_this_year"
     if base_ref_status == "missing_base":
         ttl_model_eur_mwh = ttl_anchor_formula
         delta_tca_vs_base = np.nan
@@ -557,6 +573,7 @@ def run_q5(
             )
             else "WARN"
         )
+    has_base_reference = base_ref_status in {"ok", "warn_fallback_from_hist"}
     ttl_proxy_method = (
         "observed_from_prices"
         if np.isfinite(ttl_obs)
@@ -574,6 +591,22 @@ def run_q5(
 
     checks: list[dict[str, str]] = []
     warnings: list[str] = []
+    if base_ref_status == "warn_fallback_from_hist":
+        checks.append(
+            {
+                "status": "WARN",
+                "code": "Q5_BASE_REF_FALLBACK_HIST",
+                "message": f"Base reference fallback depuis historique ({base_ref_reason}).",
+            }
+        )
+    if base_ref_status == "missing_base" and str(scenario_id_effective).upper() not in {"HIST", "BASE"}:
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q5_BASE_SCENARIO_MISSING",
+                "message": f"Base reference manquante ({base_ref_reason}).",
+            }
+        )
     if not (np.isfinite(dco2) and dco2 > 0):
         checks.append({"status": "FAIL", "code": "Q5_DCO2_SIGN", "message": "dTCA/dCO2 doit etre strictement positif."})
     if not (np.isfinite(dfuel) and dfuel > 0):
@@ -660,7 +693,7 @@ def run_q5(
     if np.isfinite(ttl_model_eur_mwh) and ttl_model_eur_mwh < 0.0:
         checks.append({"status": "FAIL", "code": "Q5_TTL_MODEL_NEGATIVE", "message": "ttl_model_eur_mwh doit etre >= 0."})
     if (
-        base_ref_status == "ok"
+        has_base_reference
         and str(scenario_id_effective).upper() not in {"HIST", "BASE"}
         and np.isfinite(base_co2_ref)
         and np.isfinite(assumed_co2)
@@ -677,7 +710,7 @@ def run_q5(
             }
         )
     if (
-        base_ref_status == "ok"
+        has_base_reference
         and str(scenario_id_effective).upper() not in {"HIST", "BASE"}
         and np.isfinite(base_gas_ref)
         and np.isfinite(assumed_gas)
@@ -694,7 +727,7 @@ def run_q5(
             }
         )
     if (
-        base_ref_status == "ok"
+        has_base_reference
         and str(scenario_id_effective).upper() not in {"HIST", "BASE"}
         and not np.isfinite(_safe_float(delta_capture_ratio_vs_base, np.nan))
     ):
@@ -784,6 +817,7 @@ def run_q5(
                 "pass_through_factor": pass_through_factor,
                 "base_scenario_id": base_scenario_id,
                 "base_year_reference": base_year_reference,
+                "base_ref_source_year": base_ref_source_year,
                 "base_ref_status": base_ref_status,
                 "base_ref_reason": base_ref_reason,
                 "base_tca_ref_eur_mwh": base_tca_ref,
@@ -823,6 +857,7 @@ def run_q5(
                 "ttl_model_eur_mwh": ttl_model_eur_mwh,
                 "base_scenario_id": base_scenario_id,
                 "base_year_reference": base_year_reference,
+                "base_ref_source_year": base_ref_source_year,
                 "base_ref_status": base_ref_status,
                 "base_ref_reason": base_ref_reason,
                 "base_tca_ref_eur_mwh": base_tca_ref,

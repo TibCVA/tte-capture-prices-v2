@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.constants import (
     COL_EXPORTS,
+    COL_FLEX_OTHER,
     COL_FLEX_OBS,
     COL_GEN_MUST_RUN,
     COL_GEN_PRIMARY,
@@ -98,9 +99,13 @@ def build_canonical_hourly_panel(hourly_df: pd.DataFrame) -> pd.DataFrame:
         imports_net = (-net_position).clip(lower=0.0).fillna(0.0)
 
     flex_obs = _coalesce_numeric(df, [COL_FLEX_OBS, "flex_sink_observed_mw"], index=index, default=np.nan)
-    other_flex = pd.Series(0.0, index=index, dtype=float)
-    if flex_obs.notna().sum() > 0:
-        other_flex = (flex_obs.fillna(0.0) - exports_net - psh).clip(lower=0.0)
+    other_flex = _coalesce_numeric(df, [COL_FLEX_OTHER, "flex_sink_other_mw", "other_flex_sinks_mw"], index=index, default=np.nan)
+    if other_flex.notna().sum() == 0:
+        other_flex = pd.Series(0.0, index=index, dtype=float)
+        if flex_obs.notna().sum() > 0:
+            other_flex = (flex_obs.fillna(0.0) - exports_net - psh).clip(lower=0.0)
+    else:
+        other_flex = other_flex.fillna(0.0).clip(lower=0.0)
 
     nrl = _coalesce_numeric(df, [COL_NRL, "nrl_mw"], index=index, default=np.nan)
     if nrl.notna().sum() == 0:
@@ -115,7 +120,10 @@ def build_canonical_hourly_panel(hourly_df: pd.DataFrame) -> pd.DataFrame:
 
     absorbed_hourly = _coalesce_numeric(df, [COL_SURPLUS_ABSORBED, "surplus_absorbed_mw"], index=index, default=np.nan)
     if absorbed_hourly.notna().sum() == 0:
-        absorbed_hourly = np.minimum(surplus, exports_net + psh + other_flex)
+        if flex_obs.notna().sum() > 0:
+            absorbed_hourly = flex_obs.fillna(0.0).clip(lower=0.0)
+        else:
+            absorbed_hourly = np.minimum(surplus, exports_net + psh + other_flex)
     absorbed_hourly = absorbed_hourly.fillna(0.0).clip(lower=0.0)
     absorbed_hourly = np.minimum(absorbed_hourly, surplus)
 
@@ -294,4 +302,3 @@ def canonical_metrics_dictionary(
         year=year,
         scenario_id=scenario_id,
     )
-

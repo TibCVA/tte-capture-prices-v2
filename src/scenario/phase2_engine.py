@@ -14,7 +14,9 @@ from src.constants import (
     COL_BESS_SOC,
     COL_EXPORTS,
     COL_FLEX_EFFECTIVE,
+    COL_FLEX_EXPORTS,
     COL_FLEX_OBS,
+    COL_FLEX_OTHER,
     COL_FLEX_PSH,
     COL_GEN_BIOMASS,
     COL_GEN_COAL,
@@ -430,6 +432,8 @@ def run_phase2_scenario(
         remaining = (remaining - psh_sink).clip(lower=0.0)
 
         built[COL_FLEX_PSH] = psh_sink
+        built[COL_FLEX_EXPORTS] = exports_sink
+        built[COL_FLEX_OTHER] = 0.0
         built[COL_FLEX_OBS] = exports_sink + psh_sink
         built[COL_SURPLUS_UNABS] = remaining
 

@@ -24,6 +24,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--q5-countries", default="")
     parser.add_argument("--q5-marginal-tech", default="CCGT")
     parser.add_argument("--q5-ttl-target", type=float, default=160.0)
+    parser.add_argument("--debug-country", default="")
+    parser.add_argument("--debug-year", type=int, default=0)
+    parser.add_argument("--debug-scenario-id", default="HIST")
     return parser.parse_args()
 
 
@@ -71,6 +74,17 @@ def main() -> None:
         build_cmd.extend(["--q4-countries", str(args.q4_countries)])
     if str(args.q5_countries).strip():
         build_cmd.extend(["--q5-countries", str(args.q5_countries)])
+    if str(args.debug_country).strip() and int(args.debug_year) > 0:
+        build_cmd.extend(
+            [
+                "--debug-country",
+                str(args.debug_country),
+                "--debug-year",
+                str(int(args.debug_year)),
+                "--debug-scenario-id",
+                str(args.debug_scenario_id),
+            ]
+        )
 
     _run(build_cmd)
 

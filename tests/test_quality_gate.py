@@ -168,7 +168,7 @@ def test_q4_delta_reduction_bound_by_charge_hours(make_raw_panel, countries_cfg,
     assert ((-delta_h5) <= (charge_hours + 5.0)).fillna(True).all()
 
 
-def test_q5_runner_fails_when_base_missing(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):
+def test_q5_runner_uses_hist_fallback_when_base_missing(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):
     assumptions_phase1 = _assumptions()
     assumptions_phase2 = load_phase2_assumptions()
     hourly_hist_map = _hourly_map_for_fixture(
@@ -193,7 +193,11 @@ def test_q5_runner_fails_when_base_missing(annual_panel_fixture, make_raw_panel,
         run_id="quality_gate_q5_missing_base",
     )
     fail_codes = {str(c.get("code")) for c in bundle.checks if str(c.get("status", "")).upper() == "FAIL"}
-    assert "Q5_BASE_SCENARIO_MISSING" in fail_codes
+    assert "Q5_BASE_SCENARIO_MISSING" not in fail_codes
     q5_quality = bundle.scen_results.get("HIGH_CO2").tables.get("q5_quality_summary", pd.DataFrame())
+    q5_anchor = bundle.scen_results.get("HIGH_CO2").tables.get("q5_anchor_sensitivity", pd.DataFrame())
     assert not q5_quality.empty
-    assert (q5_quality["quality_status"].astype(str) == "FAIL").all()
+    assert (q5_quality["quality_status"].astype(str).isin(["PASS", "WARN"])).all()
+    assert not q5_anchor.empty
+    statuses = set(q5_anchor["base_ref_status"].astype(str).str.lower().unique().tolist())
+    assert statuses.issubset({"ok", "warn_fallback_from_hist"})

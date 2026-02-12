@@ -18,6 +18,7 @@ from src.constants import (
     COL_ENTSOE_CODE_USED,
     COL_EXPORTS,
     COL_FLEX_EXPORTS,
+    COL_FLEX_OTHER,
     COL_FLEX_OBS,
     COL_FLEX_PSH,
     COL_GEN_BIOMASS,
@@ -37,6 +38,9 @@ from src.constants import (
     COL_LOW_RESIDUAL_THRESHOLD,
     COL_MUST_RUN_MODE,
     COL_NET_POSITION,
+    COL_NET_POSITION_SCORE_NEG,
+    COL_NET_POSITION_SCORE_POS,
+    COL_NET_POSITION_SIGN_CHOICE,
     COL_NRL,
     COL_NRL_PRICE_CORR,
     COL_PRICE_DA,
@@ -207,7 +211,7 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
     residual_negative_p50 = _safe_float(nrl_series[neg_mask].median(), np.nan) if neg_count > 0 else np.nan
 
     surplus_energy = _safe_float(canonical_metrics.get("surplus_energy_mwh"), 0.0)
-    surplus_absorbed = _safe_float(canonical_metrics.get("absorbed_surplus_energy_mwh"), 0.0)
+    surplus_absorbed = float(pd.to_numeric(df.get(COL_SURPLUS_ABSORBED), errors="coerce").fillna(0.0).clip(lower=0.0).sum())
     surplus_unabs = float(pd.to_numeric(df[COL_SURPLUS_UNABS], errors="coerce").fillna(0).clip(lower=0.0).sum())
     psh_pumping_mwh = _safe_float(canonical_metrics.get("psh_pumping_energy_mwh"), 0.0)
     flex_sink_exports_mwh = float(
@@ -215,6 +219,9 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
     )
     flex_sink_psh_mwh = float(
         pd.to_numeric(df.get(COL_FLEX_PSH, df.get(COL_PSH_PUMP)), errors="coerce").fillna(0.0).clip(lower=0.0).sum()
+    )
+    flex_sink_other_mwh = float(
+        pd.to_numeric(df.get(COL_FLEX_OTHER), errors="coerce").fillna(0.0).clip(lower=0.0).sum()
     )
     flex_sink_total_mwh = float(pd.to_numeric(df.get(COL_FLEX_OBS), errors="coerce").fillna(0.0).clip(lower=0.0).sum())
     psh_pumping_coverage_share = _safe_float(
@@ -226,6 +233,19 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         if COL_PSH_PUMP_STATUS in df.columns and df[COL_PSH_PUMP_STATUS].notna().any()
         else "missing"
     )
+    net_position_sign_choice = (
+        str(df[COL_NET_POSITION_SIGN_CHOICE].dropna().iloc[0])
+        if COL_NET_POSITION_SIGN_CHOICE in df.columns and df[COL_NET_POSITION_SIGN_CHOICE].notna().any()
+        else "unknown"
+    )
+    net_position_score_pos = _safe_float(
+        pd.to_numeric(df.get(COL_NET_POSITION_SCORE_POS), errors="coerce").dropna().iloc[0],
+        np.nan,
+    ) if COL_NET_POSITION_SCORE_POS in df.columns and pd.to_numeric(df.get(COL_NET_POSITION_SCORE_POS), errors="coerce").notna().any() else np.nan
+    net_position_score_neg = _safe_float(
+        pd.to_numeric(df.get(COL_NET_POSITION_SCORE_NEG), errors="coerce").dropna().iloc[0],
+        np.nan,
+    ) if COL_NET_POSITION_SCORE_NEG in df.columns and pd.to_numeric(df.get(COL_NET_POSITION_SCORE_NEG), errors="coerce").notna().any() else np.nan
     load_total_series = pd.to_numeric(df[COL_LOAD_TOTAL], errors="coerce")
     load_net_series = pd.to_numeric(df[COL_LOAD_NET], errors="coerce")
     psh_series = pd.to_numeric(df.get(COL_PSH_PUMP), errors="coerce")
@@ -334,12 +354,20 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         {
             "exports_absorption_mwh": _safe_float(flex_sink_exports_mwh, 0.0),
             "psh_absorption_mwh": _safe_float(flex_sink_psh_mwh, 0.0),
-            "other_flex_absorption_mwh": _safe_float(max(0.0, flex_sink_total_mwh - flex_sink_exports_mwh - flex_sink_psh_mwh), 0.0),
+            "other_flex_absorption_mwh": _safe_float(flex_sink_other_mwh, 0.0),
         },
         ensure_ascii=False,
     )
 
     core_sanity_issues = sanity_check_core_definitions(df, far_energy=far, sr_energy=sr_gen, ir=ir_p10)
+
+    flex_identity_tol = max(1e-6, 1e-4 * max(surplus_energy, 0.0))
+    flex_identity_abs_err = abs(float(flex_sink_total_mwh) - float(surplus_absorbed))
+    flex_identity_ok = bool(flex_identity_abs_err <= flex_identity_tol)
+    flex_components_sum = float(flex_sink_exports_mwh + flex_sink_psh_mwh + flex_sink_other_mwh)
+    flex_components_abs_err = abs(flex_sink_total_mwh - flex_components_sum)
+    flex_components_ok = bool(flex_components_abs_err <= flex_identity_tol)
+    use_psh_pumping = bool(country_cfg.get("flex", {}).get("use_psh_pump", True)) if isinstance(country_cfg, dict) else True
 
     data_quality_flags: list[str] = []
     for cov_name, cov_value in [
@@ -362,10 +390,22 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         data_quality_flags.append("COVERAGE_PSH_PUMPING_LOW")
     if not load_identity_ok and np.isfinite(load_identity_rel_err):
         data_quality_flags.append("LOAD_IDENTITY_FAIL")
+    if not flex_identity_ok:
+        data_quality_flags.append("FLEX_IDENTITY_FAIL")
+    if not flex_components_ok:
+        data_quality_flags.append("FLEX_COMPONENTS_SUM_FAIL")
     if core_sanity_issues:
         data_quality_flags.append("CORE_SANITY_WARN")
-    if str(psh_pumping_data_status).lower() in {"missing", "partial"}:
+    if use_psh_pumping and str(psh_pumping_data_status).lower() in {"missing", "partial"}:
         data_quality_flags.append("PSH_PUMPING_DATA_INCOMPLETE")
+    if use_psh_pumping and str(psh_pumping_data_status).lower() == "missing":
+        data_quality_flags.append("PSH_PUMPING_REQUIRED_BUT_MISSING")
+    if (
+        surplus_energy > 1e-6
+        and float(pd.to_numeric(df.get(COL_EXPORTS), errors="coerce").fillna(0.0).clip(lower=0.0).sum()) > 1e-6
+        and flex_sink_exports_mwh <= 1e-9
+    ):
+        data_quality_flags.append("EXPORT_SINK_SIGN_SUSPECT")
 
     completeness = float((~df[[COL_Q_MISSING_PRICE, COL_Q_MISSING_LOAD, COL_Q_MISSING_GENERATION]].any(axis=1)).mean())
     must_run_scope_coverage = compute_scope_coverage_lowload(
@@ -404,6 +444,7 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "coverage_ror": coverage_ror,
         COL_LOAD_NET_MODE: str(df[COL_LOAD_NET_MODE].iloc[0]),
         COL_MUST_RUN_MODE: str(df[COL_MUST_RUN_MODE].iloc[0]),
+        "use_psh_pumping_config": use_psh_pumping,
         COL_ENTSOE_CODE_USED: str(df[COL_ENTSOE_CODE_USED].iloc[0]),
         COL_DATA_VERSION_HASH: data_version_hash,
         "load_total_twh": float(pd.to_numeric(df[COL_LOAD_TOTAL], errors="coerce").fillna(0).sum()) / 1e6,
@@ -434,8 +475,12 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "gen_primary_twh": gen_primary_twh,
         "gen_must_run_twh": float(pd.to_numeric(df[COL_GEN_MUST_RUN], errors="coerce").fillna(0).sum()) / 1e6,
         "exports_twh": float(pd.to_numeric(df[COL_EXPORTS], errors="coerce").fillna(0).sum()) / 1e6,
+        "net_position_sign_choice": net_position_sign_choice,
+        "net_position_score_pos": net_position_score_pos,
+        "net_position_score_neg": net_position_score_neg,
         "flex_sink_exports_twh": flex_sink_exports_mwh / 1e6,
         "flex_sink_psh_twh": flex_sink_psh_mwh / 1e6,
+        "flex_sink_other_twh": flex_sink_other_mwh / 1e6,
         "flex_sink_total_twh": flex_sink_total_mwh / 1e6,
         "vre_penetration_share_gen": vre_pen_share,
         "pv_penetration_share_gen": pv_pen_share,
@@ -524,6 +569,11 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "load_identity_abs_max_mw": load_identity_abs_max_mw,
         "load_identity_rel_err": load_identity_rel_err,
         "load_identity_ok": load_identity_ok,
+        "flex_identity_abs_err_mwh": flex_identity_abs_err,
+        "flex_identity_tol_mwh": flex_identity_tol,
+        "flex_identity_ok": flex_identity_ok,
+        "flex_components_abs_err_mwh": flex_components_abs_err,
+        "flex_components_ok": flex_components_ok,
         "data_quality_flags": ";".join(sorted(set(data_quality_flags))),
         COL_REGIME_COHERENCE: _regime_coherence(df),
         COL_NRL_PRICE_CORR: nrl_price_corr,

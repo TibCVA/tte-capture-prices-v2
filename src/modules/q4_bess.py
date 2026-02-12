@@ -10,6 +10,7 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
+from src.bess_dispatch import run_bess_dispatch
 from src.core.market_proxy import MarketProxyBucketModel
 from src.hash_utils import hash_object
 from src.modules.common import assumptions_subset
@@ -125,115 +126,31 @@ def _simulate_dispatch_arrays(
     cfg: BessConfig,
     dispatch_mode: str,
 ) -> dict[str, np.ndarray | float]:
-    n = len(price)
-    charge = np.zeros(n, dtype=np.float64)
-    discharge = np.zeros(n, dtype=np.float64)
-    soc_series = np.zeros(n, dtype=np.float64)
+    n = int(len(price))
+    day_ids = np.zeros(n, dtype=int)
+    for didx, (start, end) in enumerate(day_ranges):
+        day_ids[start:end] = int(didx)
 
-    low_mask, high_mask = masks_by_duration.get(
-        float(cfg.duration_h),
-        (np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)),
+    charge, discharge, soc_series, diagnostics = run_bess_dispatch(
+        surplus_raw_mw=np.maximum(0.0, np.asarray(surplus, dtype=float)),
+        deficit_raw_mw=np.maximum(0.0, np.asarray(nrl, dtype=float)),
+        pv_mw=np.maximum(0.0, np.asarray(pv, dtype=float)),
+        price_proxy=np.asarray(price, dtype=float),
+        bess_power_mw=float(cfg.power_mw),
+        bess_energy_mwh=float(cfg.energy_mwh),
+        eta_roundtrip=float(cfg.eta_roundtrip),
+        dispatch_mode=str(dispatch_mode),
+        objective=None,
+        params={
+            "max_cycles_per_day": float(cfg.max_cycles_per_day),
+            "soc_start_mwh": float(cfg.soc_start_mwh),
+            "soc_end_target_mwh": float(cfg.soc_end_target_mwh),
+            "n_days": max(1, len(day_ranges)),
+            "day_ids": day_ids,
+        },
     )
-    nrl_valid = nrl[np.isfinite(nrl)]
-    low_residual_thr = float(np.nanquantile(nrl_valid, 0.20)) if len(nrl_valid) else np.nan
 
-    soc = float(cfg.soc_start_mwh)
-    soc_start = float(cfg.soc_start_mwh)
-    soc_target = float(cfg.soc_end_target_mwh)
-    eta_c = float(cfg.eta_charge)
-    eta_d = float(cfg.eta_discharge)
-    pmax = float(cfg.power_mw)
-    emax = float(cfg.energy_mwh)
-    max_daily_throughput = max(0.0, float(cfg.max_cycles_per_day)) * emax
-    tol = 1e-12
-    charge_vs_surplus_violation_hours = 0.0
-
-    for start, end in day_ranges:
-        daily_charge = 0.0
-        daily_discharge = 0.0
-
-        for i in range(start, end):
-            desired_charge = 0.0
-            desired_discharge = 0.0
-            boundary_forced_discharge = False
-
-            if dispatch_mode == "SURPLUS_FIRST":
-                # Strict physical mode: charge only against available unabsorbed surplus.
-                if surplus_unabs[i] > 0.0:
-                    desired_charge = min(pmax, surplus_unabs[i])
-                desired_discharge = 0.0
-            elif dispatch_mode == "PRICE_ARBITRAGE_SIMPLE":
-                if low_mask[i]:
-                    desired_charge = pmax
-                elif high_mask[i]:
-                    desired_discharge = pmax
-            elif dispatch_mode == "LOW_RESIDUAL_FIRST":
-                if np.isfinite(low_residual_thr) and np.isfinite(nrl[i]) and nrl[i] <= low_residual_thr:
-                    desired_charge = pmax
-                elif high_mask[i]:
-                    desired_discharge = pmax
-            elif dispatch_mode == "PV_COLOCATED":
-                if pv[i] > 0.0:
-                    desired_charge = min(pmax, pv[i])
-                if high_mask[i]:
-                    desired_discharge = pmax
-            else:
-                raise ValueError(f"Unknown dispatch_mode={dispatch_mode}")
-
-            # No simultaneous charge/discharge by design.
-            if desired_discharge > 0.0:
-                desired_charge = 0.0
-
-            # Enforce terminal SOC boundary (default: SOC_end=0).
-            remaining_future_hours = max(0, n - i - 1)
-            max_soc_if_no_discharge_now = soc_target + (remaining_future_hours * pmax / eta_d if eta_d > 0 else 0.0)
-            max_soc_if_no_discharge_now = min(emax, max(0.0, max_soc_if_no_discharge_now))
-            if soc > max_soc_if_no_discharge_now + tol:
-                desired_discharge = max(desired_discharge, (soc - max_soc_if_no_discharge_now) * eta_d)
-                desired_charge = 0.0
-                boundary_forced_discharge = True
-
-            if max_daily_throughput > 0:
-                remaining_charge = max(0.0, max_daily_throughput - daily_charge)
-                remaining_discharge = max(0.0, max_daily_throughput - daily_discharge)
-                if boundary_forced_discharge:
-                    # Never let cycle caps violate annual SOC boundary.
-                    remaining_discharge = max(remaining_discharge, desired_discharge)
-            else:
-                remaining_charge = 0.0
-                remaining_discharge = 0.0
-
-            soc_headroom = max(0.0, max_soc_if_no_discharge_now - soc)
-            ch = min(
-                pmax,
-                desired_charge,
-                max(0.0, soc_headroom / eta_c) if eta_c > 0 else 0.0,
-                remaining_charge,
-            )
-            soc += ch * eta_c
-            daily_charge += ch
-
-            dis = min(
-                pmax,
-                desired_discharge,
-                max(0.0, soc * eta_d),
-                remaining_discharge,
-            )
-            soc -= dis / eta_d
-            daily_discharge += dis
-
-            if soc < 0.0:
-                soc = 0.0
-            elif soc > emax:
-                soc = emax
-
-            charge[i] = ch
-            discharge[i] = dis
-            soc_series[i] = soc
-            if dispatch_mode == "SURPLUS_FIRST" and ch > surplus_unabs[i] + tol:
-                charge_vs_surplus_violation_hours += 1.0
-
-    flex_after = flex_sink_observed + charge
+    flex_after = np.asarray(flex_sink_observed, dtype=float) + charge
     absorbed_after = np.minimum(surplus, flex_after)
     unabs_after = np.maximum(0.0, surplus - absorbed_after)
     price_clean = np.where(np.isfinite(price), price, 0.0)
@@ -246,17 +163,20 @@ def _simulate_dispatch_arrays(
         "absorbed_after": absorbed_after,
         "unabs_after": unabs_after,
         "revenue": revenue,
-        "soc_min": float(np.min(soc_series)) if len(soc_series) else 0.0,
-        "soc_max": float(np.max(soc_series)) if len(soc_series) else 0.0,
-        "charge_max": float(np.max(charge)) if len(charge) else 0.0,
-        "discharge_max": float(np.max(discharge)) if len(discharge) else 0.0,
-        "charge_sum": float(np.sum(charge)),
-        "discharge_sum": float(np.sum(discharge)),
-        "charge_hours": float(np.sum(charge > tol)),
-        "soc_start": soc_start,
-        "soc_end": float(soc),
-        "simultaneous_charge_discharge_hours": float(np.sum((charge > tol) & (discharge > tol))),
-        "charge_vs_surplus_violation_hours": float(charge_vs_surplus_violation_hours),
+        "soc_min": float(diagnostics.get("soc_min", 0.0)),
+        "soc_max": float(diagnostics.get("soc_max", 0.0)),
+        "charge_max": float(diagnostics.get("charge_max", 0.0)),
+        "discharge_max": float(diagnostics.get("discharge_max", 0.0)),
+        "charge_sum": float(diagnostics.get("charge_sum", 0.0)),
+        "discharge_sum": float(diagnostics.get("discharge_sum", 0.0)),
+        "charge_hours": float(diagnostics.get("charge_hours", 0.0)),
+        "discharge_hours": float(diagnostics.get("discharge_hours", 0.0)),
+        "soc_start": float(diagnostics.get("soc_start", 0.0)),
+        "soc_end": float(diagnostics.get("soc_end", 0.0)),
+        "simultaneous_charge_discharge_hours": float(diagnostics.get("simultaneous_charge_discharge_hours", 0.0)),
+        "charge_vs_surplus_violation_hours": float(diagnostics.get("charge_vs_surplus_violation_hours", 0.0)),
+        "energy_balance_residual": float(diagnostics.get("energy_balance_residual", 0.0)),
+        "cycles_realized_per_day": float(diagnostics.get("cycles_realized_per_day", 0.0)),
     }
 
 
@@ -999,16 +919,10 @@ def run_q4(
                     else np.nan
                 )
 
-                neg_mask_before = np.where(np.isfinite(price), price < 0.0, False)
-                reducible_upper_bound_hours = _negative_price_reducible_upper_bound_hours(
-                    neg_mask=neg_mask_before,
-                    surplus_unabs_before=surplus_unabs_model,
-                    power_mw=cfg.power_mw,
-                    energy_mwh=cfg.energy_mwh,
-                    max_cycles_per_day=cfg.max_cycles_per_day,
-                    day_ranges=day_ranges,
-                )
-                h_negative_upper_bound_after = int(max(0, h_negative_before - reducible_upper_bound_hours))
+                charge_hours = float(sim.get("charge_hours", 0.0))
+                reducible_upper_bound_hours = int(max(0.0, min(float(h_negative_est_before), charge_hours)))
+                h_below_5_reducible_upper_bound = int(max(0.0, min(float(h_below_5_est_before), charge_hours)))
+                h_negative_upper_bound_after = int(max(0.0, float(h_negative_est_before) - float(reducible_upper_bound_hours)))
                 load_after = load_arr + sim["charge"] - sim["discharge"]
                 residual_after = nrl_after
                 ir_hour_after = must_run_arr / np.maximum(load_after, 1e-6)
@@ -1028,7 +942,8 @@ def run_q4(
                 est_after = market_proxy_model.estimate_from_features(features_after)
                 h_negative_est_after_raw = _safe_float(est_after.get("h_negative_est"), np.nan)
                 h_below_5_est_after_raw = _safe_float(est_after.get("h_below_5_est"), np.nan)
-                if cfg.power_mw <= 0.0 or cfg.energy_mwh <= 0.0:
+                no_dispatch = bool(abs(float(sim.get("charge_sum", 0.0))) <= 1e-9 and abs(float(sim.get("discharge_sum", 0.0))) <= 1e-9)
+                if cfg.power_mw <= 0.0 or cfg.energy_mwh <= 0.0 or no_dispatch:
                     h_negative_est_after_raw = float(h_negative_est_before)
                     h_below_5_est_after_raw = float(h_below_5_est_before)
                     h_negative_est_after = float(h_negative_est_before)
@@ -1039,14 +954,20 @@ def run_q4(
                     capture_ratio_pv_est_after = float(capture_ratio_pv_est_before)
                     capture_ratio_wind_est_after = float(capture_ratio_wind_est_before)
                 else:
-                    h_negative_est_after = min(float(h_negative_est_before), float(h_negative_est_after_raw))
-                    h_below_5_est_after = min(float(h_below_5_est_before), float(h_below_5_est_after_raw))
+                    if not np.isfinite(h_negative_est_after_raw):
+                        h_negative_est_after_raw = float(h_negative_est_before)
+                    if not np.isfinite(h_below_5_est_after_raw):
+                        h_below_5_est_after_raw = float(h_below_5_est_before)
+                    hneg_reduction_raw = max(0.0, float(h_negative_est_before) - float(h_negative_est_after_raw))
+                    h5_reduction_raw = max(0.0, float(h_below_5_est_before) - float(h_below_5_est_after_raw))
+                    h_negative_est_after = float(h_negative_est_before) - min(hneg_reduction_raw, float(reducible_upper_bound_hours))
+                    h_below_5_est_after = float(h_below_5_est_before) - min(h5_reduction_raw, float(h_below_5_reducible_upper_bound))
                     h_below_5_est_after = max(h_below_5_est_after, h_negative_est_after)
-                    baseload_price_est_after = _safe_float(est_after.get("baseload_price_est"), np.nan)
-                    pv_capture_price_est_after = _safe_float(est_after.get("pv_capture_price_est"), np.nan)
-                    wind_capture_price_est_after = _safe_float(est_after.get("wind_capture_price_est"), np.nan)
-                    capture_ratio_pv_est_after = _safe_float(est_after.get("capture_ratio_pv_est"), np.nan)
-                    capture_ratio_wind_est_after = _safe_float(est_after.get("capture_ratio_wind_est"), np.nan)
+                    baseload_price_est_after = _safe_float(est_after.get("baseload_price_est"), baseload_price_est_before)
+                    pv_capture_price_est_after = _safe_float(est_after.get("pv_capture_price_est"), pv_capture_price_est_before)
+                    wind_capture_price_est_after = _safe_float(est_after.get("wind_capture_price_est"), wind_capture_price_est_before)
+                    capture_ratio_pv_est_after = _safe_float(est_after.get("capture_ratio_pv_est"), capture_ratio_pv_est_before)
+                    capture_ratio_wind_est_after = _safe_float(est_after.get("capture_ratio_wind_est"), capture_ratio_wind_est_before)
 
                 nrl_after_pos = nrl_after[nrl_after > 0.0]
                 low_residual_thr_after = float(np.nanquantile(nrl_after_pos, 0.10)) if len(nrl_after_pos) else np.nan
@@ -1077,7 +998,7 @@ def run_q4(
                 turned_off_any = bool(any(turned_off_family.values()))
                 n_days = max(1, len(day_ranges))
                 if cfg.energy_mwh > 0.0 and cfg.max_cycles_per_day > 0.0:
-                    cycles_realized_per_day = float(sim["discharge_sum"]) / (cfg.energy_mwh * n_days)
+                    cycles_realized_per_day = float(sim["charge_sum"]) / (cfg.energy_mwh * n_days)
                     cycles_realized_per_day = float(np.clip(cycles_realized_per_day, 0.0, cfg.max_cycles_per_day))
                 else:
                     cycles_realized_per_day = 0.0
@@ -1109,6 +1030,7 @@ def run_q4(
                         "h_negative_proxy_raw_after": h_negative_est_after_raw,
                         "h_negative_reducible_upper_bound": reducible_upper_bound_hours,
                         "h_negative_upper_bound_after": h_negative_upper_bound_after,
+                        "h_below_5_reducible_upper_bound": h_below_5_reducible_upper_bound,
                         "h_below_5_obs_before": h_below_5_obs_before,
                         "h_below_5_est_before": h_below_5_est_before,
                         "h_below_5_est_after": h_below_5_est_after,
@@ -1188,14 +1110,17 @@ def run_q4(
                         "charge_sum_mwh": float(sim["charge_sum"]),
                         "discharge_sum_mwh": float(sim["discharge_sum"]),
                         "charge_hours": float(sim.get("charge_hours", 0.0)),
+                        "discharge_hours": float(sim.get("discharge_hours", 0.0)),
                         "cycles_assumed_per_day": float(cfg.max_cycles_per_day),
                         "cycles_realized_per_day": float(cycles_realized_per_day),
                         "simultaneous_charge_discharge_hours": float(sim["simultaneous_charge_discharge_hours"]),
+                        "energy_balance_residual": float(sim.get("energy_balance_residual", 0.0)),
                         "eta_roundtrip": float(cfg.eta_roundtrip),
                         "eta_charge": float(cfg.eta_charge),
                         "eta_discharge": float(cfg.eta_discharge),
                         "soc_boundary_mode": soc_boundary_mode,
                         "charge_vs_surplus_violation_hours": float(sim.get("charge_vs_surplus_violation_hours", 0.0)),
+                        "no_dispatch": bool(no_dispatch),
                         "proxy_quality_status": proxy_quality_status,
                         "proxy_quality_reasons": proxy_quality_reasons,
                         "output_schema_version": Q4_OUTPUT_SCHEMA_VERSION,
@@ -1376,6 +1301,9 @@ def run_q4(
         "turned_off_family_value_wind": False,
         "turned_off_family_any": False,
         "charge_vs_surplus_violation_hours": 0.0,
+        "energy_balance_residual": 0.0,
+        "h_below_5_reducible_upper_bound": 0.0,
+        "no_dispatch": True,
         "cycles_assumed_per_day": max_cycles_day,
         "cycles_realized_per_day": 0.0,
     }
@@ -1430,6 +1358,17 @@ def run_q4(
                 "message": "Energie dechargee > energie chargee*eta + variation SOC.",
             }
         )
+    if "energy_balance_residual" in frontier.columns:
+        residual = pd.to_numeric(frontier["energy_balance_residual"], errors="coerce").fillna(0.0)
+        residual_tol = np.maximum(1e-6, e_mwh * 1e-6)
+        if bool((residual.abs() > residual_tol).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q4_ENERGY_BALANCE_RESIDUAL",
+                    "message": "Residual du bilan d'energie non nul au-dela de la tolerance.",
+                }
+            )
 
     if "simultaneous_charge_discharge_hours" in frontier.columns:
         simultaneous = pd.to_numeric(frontier["simultaneous_charge_discharge_hours"], errors="coerce").fillna(0.0)
@@ -1471,17 +1410,18 @@ def run_q4(
                 }
             )
         metric_pairs = [
-            ("h_negative_after", "h_negative_before"),
-            ("h_below_5_after", "h_below_5_before"),
-            ("capture_ratio_pv_after", "capture_ratio_pv_before"),
-            ("capture_ratio_wind_after", "capture_ratio_wind_before"),
-            ("surplus_unabs_energy_after", "surplus_unabs_energy_before"),
-            ("far_after", "far_before"),
+            ("h_negative_after", "h_negative_proxy_before", "h_negative_before"),
+            ("h_below_5_after", "h_below_5_proxy_before", "h_below_5_before"),
+            ("capture_ratio_pv_after", "capture_ratio_pv_before", "capture_ratio_pv_before"),
+            ("capture_ratio_wind_after", "capture_ratio_wind_before", "capture_ratio_wind_before"),
+            ("surplus_unabs_energy_after", "surplus_unabs_energy_before", "surplus_unabs_energy_before"),
+            ("far_after", "far_before", "far_before"),
         ]
         mismatch = pd.Series(False, index=frontier.index)
-        for after_col, before_col in metric_pairs:
+        for after_col, before_col, fallback_before_col in metric_pairs:
             after_v = pd.to_numeric(frontier.get(after_col), errors="coerce")
-            before_v = pd.to_numeric(frontier.get(before_col), errors="coerce")
+            before_raw = frontier.get(before_col) if before_col in frontier.columns else frontier.get(fallback_before_col)
+            before_v = pd.to_numeric(before_raw, errors="coerce")
             both = after_v.notna() & before_v.notna()
             mismatch = mismatch | (both & ((after_v - before_v).abs() > 1e-9))
         if bool((mismatch & zero_size).any()):
@@ -1490,6 +1430,29 @@ def run_q4(
                     "status": "FAIL",
                     "code": "Q4_ZERO_SIZE_AFTER_DIFFERS_FROM_BEFORE",
                     "message": "Invariance violee: avec P=0 ou E=0, les metriques after doivent egaler before.",
+                }
+            )
+
+    no_dispatch = (charge_sum.abs() <= tol) & (discharge_sum.abs() <= tol)
+    if bool(no_dispatch.any()):
+        mismatch_no_dispatch = pd.Series(False, index=frontier.index)
+        for after_col, before_col, fallback_before_col in [
+            ("h_negative_after", "h_negative_proxy_before", "h_negative_before"),
+            ("h_below_5_after", "h_below_5_proxy_before", "h_below_5_before"),
+            ("pv_capture_price_after", "pv_capture_price_before", "pv_capture_price_before"),
+            ("capture_ratio_pv_after", "capture_ratio_pv_before", "capture_ratio_pv_before"),
+        ]:
+            after_v = pd.to_numeric(frontier.get(after_col), errors="coerce")
+            before_raw = frontier.get(before_col) if before_col in frontier.columns else frontier.get(fallback_before_col)
+            before_v = pd.to_numeric(before_raw, errors="coerce")
+            both = after_v.notna() & before_v.notna()
+            mismatch_no_dispatch = mismatch_no_dispatch | (both & ((after_v - before_v).abs() > 1e-9))
+        if bool((mismatch_no_dispatch & no_dispatch).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q4_NO_IMPACT_WITHOUT_DISPATCH",
+                    "message": "Impact detecte sur les metriques prix sans dispatch effectif.",
                 }
             )
 
@@ -1970,10 +1933,12 @@ def run_q4(
         "Q4_DISCHARGE_ABOVE_PMAX",
         "Q4_FREE_ENERGY_NO_CHARGE",
         "Q4_ENERGY_BALANCE",
+        "Q4_ENERGY_BALANCE_RESIDUAL",
         "Q4_SIMULTANEOUS_CHARGE_DISCHARGE",
         "Q4_CHARGE_EXCEEDS_SURPLUS",
         "Q4_ZERO_SIZE_NOT_ZERO_FLOW",
         "Q4_ZERO_SIZE_AFTER_DIFFERS_FROM_BEFORE",
+        "Q4_NO_IMPACT_WITHOUT_DISPATCH",
         "Q4_SOC_END_BOUNDARY",
     }
     monotonic_fail_codes = {
@@ -2032,12 +1997,16 @@ def run_q4(
             "bess_energy_gwh": pd.to_numeric(frontier_out.get("bess_energy_mwh_test"), errors="coerce") / 1000.0,
             "cycles_assumed_per_day": pd.to_numeric(frontier_out.get("cycles_assumed_per_day"), errors="coerce"),
             "cycles_realized_per_day": pd.to_numeric(frontier_out.get("cycles_realized_per_day"), errors="coerce"),
+            "charge_sum_mwh": pd.to_numeric(frontier_out.get("charge_sum_mwh"), errors="coerce"),
+            "discharge_sum_mwh": pd.to_numeric(frontier_out.get("discharge_sum_mwh"), errors="coerce"),
             "eta_roundtrip": pd.to_numeric(frontier_out.get("eta_roundtrip"), errors="coerce"),
             "far_energy_after": pd.to_numeric(frontier_out.get("far_after"), errors="coerce"),
             "surplus_unabsorbed_twh_after": pd.to_numeric(frontier_out.get("surplus_unabs_energy_after"), errors="coerce"),
             "h_negative_proxy_after": pd.to_numeric(frontier_out.get("h_negative_proxy_after", frontier_out.get("h_negative_after")), errors="coerce"),
             "h_negative_reducible_upper_bound": pd.to_numeric(frontier_out.get("h_negative_reducible_upper_bound"), errors="coerce"),
+            "h_below_5_reducible_upper_bound": pd.to_numeric(frontier_out.get("h_below_5_reducible_upper_bound"), errors="coerce"),
             "h_negative_upper_bound_after": pd.to_numeric(frontier_out.get("h_negative_upper_bound_after"), errors="coerce"),
+            "energy_balance_residual": pd.to_numeric(frontier_out.get("energy_balance_residual"), errors="coerce"),
             "on_efficient_frontier": frontier_out.get("on_efficient_frontier"),
             "monotonicity_check_flag": monotonicity_check_flag,
             "physics_check_flag": physics_check_flag,

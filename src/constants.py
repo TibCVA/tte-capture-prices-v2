@@ -20,6 +20,9 @@ COL_LOAD_TOTAL = "load_total_mw"
 COL_LOAD_NET = "load_mw"
 COL_NET_POSITION = "net_position_mw"
 COL_EXPORTS = "exports_mw"
+COL_NET_POSITION_SIGN_CHOICE = "net_position_sign_choice"
+COL_NET_POSITION_SCORE_POS = "net_position_score_pos"
+COL_NET_POSITION_SCORE_NEG = "net_position_score_neg"
 
 COL_GEN_SOLAR = "gen_solar_mw"
 COL_GEN_PV_ALIAS = "gen_pv_mw"
@@ -54,6 +57,7 @@ COL_LOW_RESIDUAL_THRESHOLD = "low_residual_threshold_mw"
 COL_SURPLUS = "surplus_mw"
 COL_FLEX_EXPORTS = "flex_sink_exports_mw"
 COL_FLEX_PSH = "flex_sink_psh_pump_mw"
+COL_FLEX_OTHER = "flex_sink_other_mw"
 COL_FLEX_OBS = "flex_sink_observed_mw"
 COL_SINK_NON_BESS_ALIAS = "sink_non_bess_mw"
 COL_BESS_CHARGE = "bess_charge_mw"
@@ -95,7 +99,7 @@ CANONICAL_ALIAS_COLUMNS = {
     COL_PSH_PUMP: COL_PSH_PUMP_ALIAS,
     COL_SURPLUS_UNABS: COL_SURPLUS_UNABS_ALIAS,
     COL_REGIME: COL_REGIME_ALIAS,
-    COL_FLEX_OBS: COL_SINK_NON_BESS_ALIAS,
+    COL_FLEX_EFFECTIVE: COL_SINK_NON_BESS_ALIAS,
 }
 
 GEN_COLUMNS = [
@@ -131,6 +135,9 @@ REQUIRED_HOURLY_COLUMNS = [
     COL_NRL,
     COL_SURPLUS,
     COL_PSH_PUMP,
+    COL_FLEX_EXPORTS,
+    COL_FLEX_PSH,
+    COL_FLEX_OTHER,
     COL_FLEX_OBS,
     COL_BESS_CHARGE,
     COL_FLEX_EFFECTIVE,

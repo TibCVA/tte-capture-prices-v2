@@ -266,7 +266,7 @@ def _top_risk_bucket_ids(model: MarketProxyBucketModel, top_n: int = 4) -> set[i
 def _compute_hourly_proxy_metrics(
     hourly: pd.DataFrame,
     *,
-    market_proxy_model: MarketProxyBucketModel,
+    market_proxy_model: MarketProxyBucketModel | None = None,
     risk_bucket_ids: set[int] | None = None,
     demand_uplift: float = 0.0,
     demand_uplift_mw: float | None = None,
@@ -275,12 +275,18 @@ def _compute_hourly_proxy_metrics(
     flex_mw_additional: float = 0.0,
     export_coincidence_factor: float = 1.0,
 ) -> dict[str, float]:
-    if hourly is None or hourly.empty or market_proxy_model is None:
+    if hourly is None or hourly.empty:
         return {"status": "missing_data"}
 
     canonical = build_canonical_hourly_panel(hourly)
     if canonical.empty:
         return {"status": "missing_data"}
+
+    if market_proxy_model is None:
+        try:
+            market_proxy_model = MarketProxyBucketModel.fit_baseline(hourly, eps=1e-6)
+        except Exception:
+            return {"status": "missing_data", "reason": "market_proxy_invalid"}
 
     features_before = market_proxy_model._extract_features(hourly, eps=1e-6)
     load = pd.to_numeric(canonical.get("load_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)

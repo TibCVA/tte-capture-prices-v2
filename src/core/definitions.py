@@ -12,7 +12,9 @@ from src.constants import (
     COL_BESS_CHARGE,
     COL_EXPORTS,
     COL_FLEX_EFFECTIVE,
+    COL_FLEX_EXPORTS,
     COL_FLEX_OBS,
+    COL_FLEX_OTHER,
     COL_FLEX_PSH,
     COL_GEN_BIOMASS,
     COL_GEN_COAL,
@@ -29,6 +31,9 @@ from src.constants import (
     COL_LOAD_NET_MODE,
     COL_LOAD_TOTAL,
     COL_NET_POSITION,
+    COL_NET_POSITION_SCORE_NEG,
+    COL_NET_POSITION_SCORE_POS,
+    COL_NET_POSITION_SIGN_CHOICE,
     COL_NRL,
     COL_PSH_PUMP,
     COL_PSH_PUMP_ALIAS,
@@ -114,17 +119,33 @@ def resolve_load_and_pump(
     psh_raw = pd.to_numeric(psh_pump_mw, errors="coerce")
     psh_negative_input_mask = psh_raw < 0.0
     psh = psh_raw.clip(lower=0.0)
-    # Non-negotiable definition:
-    # load_mw = load_total_mw - psh_pumping_mw, with explicit zero-fill when PSH is missing.
     psh_effective = psh.fillna(0.0)
-    load_net_raw = load_total - psh_effective
+    psh_coverage_share = float(psh_raw.notna().mean()) if len(psh_raw) else 0.0
+    if psh_coverage_share <= 0.0:
+        psh_status = "missing"
+    elif psh_coverage_share >= 1.0:
+        psh_status = "ok"
+    else:
+        psh_status = "partial"
+
+    # Mandatory identity when PSH data exists (ok/partial):
+    # load_mw = load_total_mw - psh_pumping_mw
+    if prefer_net_of_psh_pump and psh_status in {"ok", "partial"}:
+        load_net_raw = load_total - psh_effective
+        load_net_mode = "entsoe_total_load_minus_psh_pumping"
+    else:
+        load_net_raw = load_total
+        load_net_mode = "entsoe_total_load_no_pumping_adjust"
+
     load_net_clamped_mask = load_net_raw < 0.0
     load_net = load_net_raw.mask(load_net_clamped_mask, 0.0)
-    load_net_mode = "net_of_psh_pump"
     diagnostics = {
         "load_net_clamped_mask": load_net_clamped_mask.fillna(False).astype(bool),
         "load_net_clamped_count": int(load_net_clamped_mask.fillna(False).sum()),
         "psh_negative_input_count": int(psh_negative_input_mask.fillna(False).sum()),
+        "psh_pumping_coverage_share": psh_coverage_share,
+        "psh_pumping_data_status": psh_status,
+        "psh_missing_above_threshold": bool(psh_coverage_share < (1.0 - float(max(0.0, psh_missing_share_threshold)))),
     }
     return load_net, psh_effective, load_net_mode, diagnostics
 
@@ -260,12 +281,45 @@ def compute_scope_coverage_lowload(
     return float(np.clip(cov, 0.0, 1.0))
 
 
+def _resolve_export_sink(
+    df: pd.DataFrame,
+    surplus_raw_mw: pd.Series,
+    *,
+    net_position_sign_mode: str | None = None,
+    net_position_positive_is_export: bool | None = None,
+) -> tuple[pd.Series, str, float, float]:
+    exports_raw = _numeric_series(df, COL_EXPORTS, np.nan)
+    if exports_raw.notna().any():
+        exports_pos = exports_raw.fillna(0.0).clip(lower=0.0)
+        return exports_pos, "exports_mw_direct", float("nan"), float("nan")
+
+    net_position = _numeric_series(df, COL_NET_POSITION, 0.0).fillna(0.0)
+    candidate_export_pos = net_position.clip(lower=0.0)
+    candidate_export_neg = (-net_position).clip(lower=0.0)
+    score_pos = float(np.minimum(candidate_export_pos, surplus_raw_mw).sum())
+    score_neg = float(np.minimum(candidate_export_neg, surplus_raw_mw).sum())
+
+    mode = (str(net_position_sign_mode or "auto").strip().lower() if net_position_sign_mode is not None else "auto")
+    if net_position_positive_is_export is not None:
+        mode = "positive_is_export" if bool(net_position_positive_is_export) else "negative_is_export"
+
+    if mode in {"positive", "positive_is_export", "pos"}:
+        return candidate_export_pos, "positive_is_export", score_pos, score_neg
+    if mode in {"negative", "negative_is_export", "neg"}:
+        return candidate_export_neg, "negative_is_export", score_pos, score_neg
+    if score_pos >= score_neg:
+        return candidate_export_pos, "positive_is_export", score_pos, score_neg
+    return candidate_export_neg, "negative_is_export", score_pos, score_neg
+
+
 def compute_core_hourly_definitions(
     df: pd.DataFrame,
     *,
     prefer_net_of_psh_pump: bool = True,
     psh_missing_share_threshold: float = 0.05,
-    net_position_positive_is_export: bool = True,
+    net_position_sign_mode: str | None = "auto",
+    net_position_positive_is_export: bool | None = None,
+    use_psh_pumping: bool = True,
     must_run_floor_quantile: float = 0.10,
     must_run_candidates: list[str] | tuple[str, ...] | None = None,
     fallback_must_run_profile_mw: pd.Series | None = None,
@@ -274,25 +328,21 @@ def compute_core_hourly_definitions(
     """Compute canonical load/VRE/must-run/NRL/surplus/flex definitions on an hourly panel."""
 
     load_total = _numeric_series(df, COL_LOAD_TOTAL, np.nan)
-    if COL_PSH_PUMP in df.columns:
+    if bool(use_psh_pumping) and COL_PSH_PUMP in df.columns:
         psh_pump_raw = _numeric_series(df, COL_PSH_PUMP, np.nan)
-    elif COL_PSH_PUMP_ALIAS in df.columns:
+    elif bool(use_psh_pumping) and COL_PSH_PUMP_ALIAS in df.columns:
         psh_pump_raw = _numeric_series(df, COL_PSH_PUMP_ALIAS, np.nan)
     else:
         psh_pump_raw = pd.Series(np.nan, index=df.index, dtype=float)
-    psh_coverage_share = float(psh_pump_raw.notna().mean()) if len(psh_pump_raw) else 0.0
-    if psh_coverage_share <= 0.0:
-        psh_status = "missing"
-    elif psh_coverage_share >= 1.0:
-        psh_status = "ok"
-    else:
-        psh_status = "partial"
+
     load_mw, psh_pump_effective, load_mode, load_psh_diag = resolve_load_and_pump(
         load_total_mw=load_total,
         psh_pump_mw=psh_pump_raw,
         prefer_net_of_psh_pump=prefer_net_of_psh_pump,
         psh_missing_share_threshold=psh_missing_share_threshold,
     )
+    psh_coverage_share = float(_safe_ratio(float(psh_pump_raw.notna().sum()), float(len(psh_pump_raw)))) if len(psh_pump_raw) else 0.0
+    psh_status = str(load_psh_diag.get("psh_pumping_data_status", "missing"))
 
     vre_mw = build_vre_mw(df).clip(lower=0.0)
     must_run = compute_must_run_floor(
@@ -304,33 +354,35 @@ def compute_core_hourly_definitions(
     )
 
     nrl_mw = load_mw - vre_mw - must_run.must_run_mw
-    surplus_mw = (-nrl_mw).clip(lower=0.0)
-
-    exports_raw = _numeric_series(df, COL_EXPORTS, np.nan)
-    if exports_raw.notna().any():
-        exports_pos = exports_raw.fillna(0.0).clip(lower=0.0)
-        export_sign_convention = "exports_mw_direct"
-    else:
-        net_position = _numeric_series(df, COL_NET_POSITION, 0.0).fillna(0.0)
-        if net_position_positive_is_export:
-            exports_pos = net_position.clip(lower=0.0)
-            export_sign_convention = "net_position_mw_positive_is_export"
-        else:
-            exports_pos = (-net_position).clip(lower=0.0)
-            export_sign_convention = "net_position_mw_negative_is_export"
-    psh_absorption = psh_pump_effective.fillna(0.0).clip(lower=0.0)
+    surplus_raw_mw = (-nrl_mw).clip(lower=0.0).fillna(0.0)
+    export_sink_mw, net_position_sign_choice, score_pos, score_neg = _resolve_export_sink(
+        df=df,
+        surplus_raw_mw=surplus_raw_mw,
+        net_position_sign_mode=net_position_sign_mode,
+        net_position_positive_is_export=net_position_positive_is_export,
+    )
+    psh_pumping_mw = psh_pump_effective.fillna(0.0).clip(lower=0.0)
 
     flex_obs_raw = _numeric_series(df, COL_FLEX_OBS, np.nan)
     if flex_obs_raw.notna().any():
-        other_flex_obs = (flex_obs_raw.fillna(0.0).clip(lower=0.0) - exports_pos - psh_absorption).clip(lower=0.0)
+        other_flex_sink_mw = (
+            flex_obs_raw.fillna(0.0).clip(lower=0.0) - export_sink_mw - psh_pumping_mw
+        ).clip(lower=0.0)
     else:
-        other_flex_obs = pd.Series(0.0, index=df.index, dtype=float)
-    bess_charge = _numeric_series(df, COL_BESS_CHARGE, 0.0).fillna(0.0).clip(lower=0.0)
-    additional_flex_absorption = (other_flex_obs + bess_charge).clip(lower=0.0)
-    flex_obs = (exports_pos + psh_absorption + other_flex_obs).clip(lower=0.0)
-    flex_sinks = (exports_pos + psh_absorption + additional_flex_absorption).clip(lower=0.0)
-    absorbed_mw = np.minimum(surplus_mw.fillna(0.0), flex_sinks.fillna(0.0))
-    unabsorbed_mw = (surplus_mw.fillna(0.0) - absorbed_mw).clip(lower=0.0)
+        other_flex_sink_mw = pd.Series(0.0, index=df.index, dtype=float)
+
+    sink_non_bess_mw = (export_sink_mw + psh_pumping_mw + other_flex_sink_mw).clip(lower=0.0)
+    absorbed_non_bess_mw = np.minimum(surplus_raw_mw, sink_non_bess_mw)
+    unabsorbed_surplus_mw = (surplus_raw_mw - absorbed_non_bess_mw).clip(lower=0.0)
+
+    ratio_denom = sink_non_bess_mw.replace(0.0, np.nan)
+    export_absorb_mw = (absorbed_non_bess_mw * (export_sink_mw / ratio_denom)).fillna(0.0).clip(lower=0.0)
+    psh_absorb_mw = (absorbed_non_bess_mw * (psh_pumping_mw / ratio_denom)).fillna(0.0).clip(lower=0.0)
+    other_absorb_mw = (absorbed_non_bess_mw * (other_flex_sink_mw / ratio_denom)).fillna(0.0).clip(lower=0.0)
+
+    # Keep explicit non-BESS sinks in observed flex; BESS dispatch is handled by Q4/phase2 layers.
+    flex_obs = absorbed_non_bess_mw.clip(lower=0.0)
+    flex_sinks = sink_non_bess_mw
 
     if COL_GEN_PRIMARY in df.columns:
         gen_primary_mw = _numeric_series(df, COL_GEN_PRIMARY, 0.0).fillna(0.0).clip(lower=0.0)
@@ -340,8 +392,8 @@ def compute_core_hourly_definitions(
     balances = compute_balance_metrics(
         load_mw=load_mw,
         must_run_mw=must_run.must_run_mw,
-        surplus_mw=surplus_mw,
-        absorbed_mw=absorbed_mw,
+        surplus_mw=surplus_raw_mw,
+        absorbed_mw=absorbed_non_bess_mw,
         gen_primary_mw=gen_primary_mw,
     )
     scope_cov = compute_scope_coverage_lowload(
@@ -351,10 +403,10 @@ def compute_core_hourly_definitions(
     )
 
     load_energy = float(pd.to_numeric(load_mw, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
-    surplus_energy = float(pd.to_numeric(surplus_mw, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
-    unabsorbed_energy = float(pd.to_numeric(unabsorbed_mw, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    surplus_energy = float(pd.to_numeric(surplus_raw_mw, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    unabsorbed_energy = float(pd.to_numeric(unabsorbed_surplus_mw, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
     sr_energy_share_load = float(np.clip(_safe_ratio(unabsorbed_energy, load_energy), 0.0, 1.0)) if load_energy > 0.0 else np.nan
-    sr_hours_share_unabsorbed = float(np.clip((pd.to_numeric(unabsorbed_mw, errors="coerce").fillna(0.0) > 0.0).mean(), 0.0, 1.0))
+    sr_hours_share_unabsorbed = float(np.clip((pd.to_numeric(unabsorbed_surplus_mw, errors="coerce").fillna(0.0) > 0.0).mean(), 0.0, 1.0))
     far_energy_from_unabsorbed = (
         1.0
         if surplus_energy <= 0.0
@@ -373,16 +425,23 @@ def compute_core_hourly_definitions(
         "must_run_mode": must_run.mode,
         "must_run_mw": must_run.must_run_mw,
         COL_NRL: nrl_mw,
-        COL_SURPLUS: surplus_mw,
+        COL_SURPLUS: surplus_raw_mw,
+        COL_EXPORTS: export_sink_mw,
+        COL_FLEX_EXPORTS: export_absorb_mw,
+        COL_FLEX_PSH: psh_absorb_mw,
+        COL_FLEX_OTHER: other_absorb_mw,
         COL_FLEX_OBS: flex_obs,
-        COL_FLEX_PSH: psh_absorption,
         COL_FLEX_EFFECTIVE: flex_sinks,
-        "export_absorption_mw": exports_pos,
-        "psh_absorption_mw": psh_absorption,
-        "additional_flex_absorption_mw": additional_flex_absorption,
+        "surplus_raw_mw": surplus_raw_mw,
+        "export_sink_mw": export_sink_mw,
+        "psh_pumping_mw": psh_pumping_mw,
+        "sink_non_bess_mw": sink_non_bess_mw,
+        "export_absorption_mw": export_absorb_mw,
+        "psh_absorption_mw": psh_absorb_mw,
+        "other_flex_absorption_mw": other_absorb_mw,
         "flex_sinks_mw": flex_sinks,
-        COL_SURPLUS_ABSORBED: pd.Series(absorbed_mw, index=df.index, dtype=float),
-        COL_SURPLUS_UNABS: pd.Series(unabsorbed_mw, index=df.index, dtype=float),
+        COL_SURPLUS_ABSORBED: pd.Series(absorbed_non_bess_mw, index=df.index, dtype=float),
+        COL_SURPLUS_UNABS: pd.Series(unabsorbed_surplus_mw, index=df.index, dtype=float),
         "sr_energy": balances.sr_energy,
         "far_energy": balances.far_energy,
         "sr_energy_share_load": sr_energy_share_load,
@@ -392,7 +451,10 @@ def compute_core_hourly_definitions(
         "p10_load_mw": balances.p10_load_mw,
         "p10_must_run_mw": balances.p10_must_run_mw,
         "must_run_scope_coverage": scope_cov,
-        "export_sign_convention": export_sign_convention,
+        "export_sign_convention": f"net_position_mw_{net_position_sign_choice}",
+        COL_NET_POSITION_SIGN_CHOICE: net_position_sign_choice,
+        COL_NET_POSITION_SCORE_POS: score_pos,
+        COL_NET_POSITION_SCORE_NEG: score_neg,
         "load_net_clamped_mask": load_psh_diag["load_net_clamped_mask"],
         "load_net_clamped_count": load_psh_diag["load_net_clamped_count"],
         "psh_negative_input_count": load_psh_diag["psh_negative_input_count"],
@@ -405,6 +467,13 @@ def sanity_check_core_definitions(df: pd.DataFrame, far_energy: float, sr_energy
     issues: list[str] = []
     tol = 1e-8
 
+    def _series(name: str) -> pd.Series:
+        if name in df.columns:
+            raw = df[name]
+        else:
+            raw = pd.Series(np.nan, index=df.index, dtype=float)
+        return pd.to_numeric(raw, errors="coerce")
+
     if np.isfinite(far_energy) and not (-tol <= float(far_energy) <= 1.0 + tol):
         issues.append("FAR outside [0,1]")
     if np.isfinite(sr_energy) and not (-tol <= float(sr_energy) <= 1.0 + tol):
@@ -412,22 +481,42 @@ def sanity_check_core_definitions(df: pd.DataFrame, far_energy: float, sr_energy
     if np.isfinite(ir) and float(ir) < -tol:
         issues.append("IR negative")
 
-    surplus = pd.to_numeric(df.get(COL_SURPLUS), errors="coerce").fillna(0.0)
-    absorbed = pd.to_numeric(df.get(COL_SURPLUS_ABSORBED), errors="coerce").fillna(0.0)
-    unabs = pd.to_numeric(df.get(COL_SURPLUS_UNABS), errors="coerce").fillna(0.0)
-    mr = pd.to_numeric(df.get("gen_must_run_mw"), errors="coerce")
-    load = pd.to_numeric(df.get(COL_LOAD_NET), errors="coerce")
-    load_total = pd.to_numeric(df.get(COL_LOAD_TOTAL), errors="coerce")
-    exports = pd.to_numeric(df.get(COL_EXPORTS), errors="coerce").fillna(0.0).clip(lower=0.0)
-    psh_raw = pd.to_numeric(df.get(COL_PSH_PUMP), errors="coerce")
+    surplus = _series(COL_SURPLUS).fillna(0.0)
+    absorbed = _series(COL_SURPLUS_ABSORBED).fillna(0.0)
+    unabs = _series(COL_SURPLUS_UNABS).fillna(0.0)
+    flex_exports_raw = _series(COL_FLEX_EXPORTS)
+    flex_psh_raw = _series(COL_FLEX_PSH)
+    flex_other_raw = _series(COL_FLEX_OTHER)
+    flex_total_raw = _series(COL_FLEX_OBS)
+    flex_exports = flex_exports_raw.fillna(0.0).clip(lower=0.0)
+    flex_psh = flex_psh_raw.fillna(0.0).clip(lower=0.0)
+    flex_other = flex_other_raw.fillna(0.0).clip(lower=0.0)
+    flex_total = flex_total_raw.fillna(0.0).clip(lower=0.0)
+    mr = _series("gen_must_run_mw")
+    load = _series(COL_LOAD_NET)
+    load_total = _series(COL_LOAD_TOTAL)
+    exports = _series(COL_EXPORTS).fillna(0.0).clip(lower=0.0)
+    psh_raw = _series(COL_PSH_PUMP)
     psh = psh_raw.fillna(0.0).clip(lower=0.0)
-    curtailment_proxy = pd.to_numeric(df.get(COL_SURPLUS_UNABS), errors="coerce").fillna(0.0).clip(lower=0.0)
-    total_gen = pd.to_numeric(df.get(COL_GEN_TOTAL), errors="coerce")
+    curtailment_proxy = _series(COL_SURPLUS_UNABS).fillna(0.0).clip(lower=0.0)
+    total_gen = _series(COL_GEN_TOTAL)
 
     if ((absorbed - surplus) > tol).any():
         issues.append("absorbed_mw > surplus_mw")
     if (unabs < -tol).any():
         issues.append("unabsorbed_mw < 0")
+    if ((absorbed + unabs - surplus).abs() > 1e-6).any():
+        issues.append("INV_SURPLUS_001: surplus_mw != absorbed_mw + unabsorbed_mw")
+    if ((flex_total - absorbed).abs() > 1e-6).any():
+        issues.append("INV_FLEX_001: flex_sink_observed_mw != surplus_absorbed_mw")
+    if ((flex_exports + flex_psh + flex_other - flex_total).abs() > 1e-6).any():
+        issues.append("INV_FLEX_002: flex components do not sum to flex total")
+    if flex_exports_raw.notna().any() and (flex_exports_raw < -tol).any():
+        issues.append("INV_FLEX_003: flex_sink_exports_mw < 0")
+    if flex_psh_raw.notna().any() and (flex_psh_raw < -tol).any():
+        issues.append("INV_FLEX_004: flex_sink_psh_pump_mw < 0")
+    if flex_total_raw.notna().any() and (flex_total_raw < -tol).any():
+        issues.append("INV_FLEX_005: flex_sink_observed_mw < 0")
 
     if total_gen.notna().any() and mr.notna().any() and ((mr - total_gen) > tol).any():
         issues.append("must_run_mw > total_generation_mw")

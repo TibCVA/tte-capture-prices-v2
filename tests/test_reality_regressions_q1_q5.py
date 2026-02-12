@@ -31,8 +31,8 @@ def test_core_export_sign_convention_from_net_position():
     out_pos = compute_core_hourly_definitions(df, net_position_positive_is_export=True)
     out_neg = compute_core_hourly_definitions(df, net_position_positive_is_export=False)
 
-    exp_pos = pd.to_numeric(out_pos["export_absorption_mw"], errors="coerce")
-    exp_neg = pd.to_numeric(out_neg["export_absorption_mw"], errors="coerce")
+    exp_pos = pd.to_numeric(out_pos["export_sink_mw"], errors="coerce")
+    exp_neg = pd.to_numeric(out_neg["export_sink_mw"], errors="coerce")
     assert float(exp_pos.iloc[0]) == 200.0
     assert float(exp_pos.iloc[1]) == 0.0
     assert float(exp_neg.iloc[0]) == 0.0

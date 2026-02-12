@@ -18,6 +18,7 @@ from src.constants import (
     COL_FLEX_EFFECTIVE,
     COL_FLEX_EXPORTS,
     COL_FLEX_OBS,
+    COL_FLEX_OTHER,
     COL_FLEX_PSH,
     COL_GEN_BIOMASS,
     COL_GEN_COAL,
@@ -42,6 +43,9 @@ from src.constants import (
     COL_LOAD_TOTAL,
     COL_MUST_RUN_MODE,
     COL_NET_POSITION,
+    COL_NET_POSITION_SCORE_NEG,
+    COL_NET_POSITION_SCORE_POS,
+    COL_NET_POSITION_SIGN_CHOICE,
     COL_NRL,
     COL_NRL_POS,
     COL_LOW_RESIDUAL_HOUR,
@@ -190,21 +194,25 @@ def build_hourly_table(
 
     df[COL_GEN_PRIMARY] = df[COL_GEN_TOTAL] - _safe_series(df, COL_GEN_HYDRO_PSH_GEN, 0).fillna(0)
 
-    df[COL_EXPORTS] = _safe_series(df, COL_NET_POSITION, np.nan).clip(lower=0.0)
-
     # Canonical load / must-run / NRL / surplus / flex definitions.
     fallback_profile = _safe_series(df, "must_run_profile_override_mw", np.nan)
     fallback_scale = float(pd.to_numeric(df.get("must_run_scale_scenario"), errors="coerce").dropna().iloc[0]) if "must_run_scale_scenario" in df.columns and pd.to_numeric(df.get("must_run_scale_scenario"), errors="coerce").notna().any() else 1.0
     floor_q = float(country_cfg.get("must_run", {}).get("floor_quantile", 0.10))
+    flex_cfg = country_cfg.get("flex", {}) if isinstance(country_cfg, dict) else {}
+    use_psh_pumping = bool(flex_cfg.get("use_psh_pump", True))
+    net_position_sign_mode = str(flex_cfg.get("net_position_sign", "auto"))
     core = compute_core_hourly_definitions(
         df=df,
         prefer_net_of_psh_pump=True,
         psh_missing_share_threshold=0.05,
+        net_position_sign_mode=net_position_sign_mode,
+        use_psh_pumping=use_psh_pumping,
         must_run_floor_quantile=floor_q,
         must_run_candidates=_must_run_candidates(country_cfg),
         fallback_must_run_profile_mw=fallback_profile if fallback_profile.notna().any() else None,
         fallback_must_run_scale=fallback_scale,
     )
+    df[COL_EXPORTS] = core[COL_EXPORTS]
     df[COL_LOAD_NET] = core[COL_LOAD_NET]
     df[COL_LOAD_NET_MODE] = core[COL_LOAD_NET_MODE]
     df[COL_PSH_PUMP] = core[COL_PSH_PUMP]
@@ -216,12 +224,16 @@ def build_hourly_table(
     df[COL_NRL] = core[COL_NRL]
     df[COL_SURPLUS] = core[COL_SURPLUS]
     df[COL_NRL_POS] = df[COL_NRL].clip(lower=0.0)
-    df[COL_FLEX_EXPORTS] = _safe_series(df, COL_EXPORTS, 0.0).fillna(0.0).clip(lower=0.0)
+    df[COL_FLEX_EXPORTS] = core.get(COL_FLEX_EXPORTS, pd.Series(0.0, index=df.index, dtype=float))
     df[COL_FLEX_PSH] = core[COL_FLEX_PSH]
+    df[COL_FLEX_OTHER] = core.get(COL_FLEX_OTHER, pd.Series(0.0, index=df.index, dtype=float))
     df[COL_FLEX_OBS] = core[COL_FLEX_OBS]
     df[COL_FLEX_EFFECTIVE] = core[COL_FLEX_EFFECTIVE]
     df[COL_SURPLUS_ABSORBED] = core[COL_SURPLUS_ABSORBED]
     df[COL_SURPLUS_UNABS] = core[COL_SURPLUS_UNABS]
+    df[COL_NET_POSITION_SIGN_CHOICE] = core.get(COL_NET_POSITION_SIGN_CHOICE, "positive_is_export")
+    df[COL_NET_POSITION_SCORE_POS] = core.get(COL_NET_POSITION_SCORE_POS, np.nan)
+    df[COL_NET_POSITION_SCORE_NEG] = core.get(COL_NET_POSITION_SCORE_NEG, np.nan)
     df[COL_BESS_CHARGE] = _safe_series(df, COL_BESS_CHARGE, 0.0).fillna(0.0).clip(lower=0.0)
     df[COL_BESS_DISCHARGE] = _safe_series(df, COL_BESS_DISCHARGE, 0.0).fillna(0.0).clip(lower=0.0)
     df[COL_BESS_SOC] = _safe_series(df, COL_BESS_SOC, 0.0).fillna(0.0).clip(lower=0.0)
@@ -229,7 +241,7 @@ def build_hourly_table(
         df[COL_Q_BAD_LOAD_NET] = pd.Series(core["load_net_clamped_mask"], index=df.index).fillna(False).astype(bool)
     else:
         df[COL_Q_BAD_LOAD_NET] = df[COL_LOAD_NET] < 0
-    df[COL_Q_MISSING_PSH_PUMP] = df[COL_PSH_PUMP_STATUS].astype(str).str.lower().isin(["missing", "partial"])
+    df[COL_Q_MISSING_PSH_PUMP] = use_psh_pumping & df[COL_PSH_PUMP_STATUS].astype(str).str.lower().isin(["missing", "partial"])
 
     model_cfg = thresholds_cfg.get("model", {})
     regime, threshold = _classify_regime(

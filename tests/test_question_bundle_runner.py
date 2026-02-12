@@ -436,3 +436,102 @@ def test_run_question_bundle_q5_adds_market_coherence_checks(monkeypatch) -> Non
     q5_002 = [c for c in bundle.checks if str(c.get("code")) == "TEST_Q5_002"]
     assert q5_001 and any(str(c.get("status")) == "PASS" for c in q5_001)
     assert q5_002 and any(str(c.get("status")) == "PASS" for c in q5_002)
+
+
+def test_q5_high_scenario_uses_fallback_base_anchor_when_base_missing(monkeypatch) -> None:
+    assumptions_phase1 = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    assumptions_phase2 = load_phase2_assumptions()
+    annual_hist = pd.DataFrame([{"country": "FR", "year": 2024}])
+    idx = pd.date_range("2035-01-01", periods=48, freq="h", tz="UTC")
+    hourly = pd.DataFrame(
+        {
+            "price_da_eur_mwh": 60.0,
+            "load_mw": 1000.0,
+            "gen_vre_mw": 500.0,
+            "gen_must_run_mw": 450.0,
+            "nrl_mw": 50.0,
+            "surplus_mw": 0.0,
+            "surplus_unabsorbed_mw": 0.0,
+            "gen_solar_mw": 200.0,
+        },
+        index=idx,
+    )
+
+    monkeypatch.setattr(
+        qbundle_runner,
+        "_load_scenario_hourly_map",
+        lambda scenario_id, countries, years: {(str(countries[0]), int(years[0])): hourly.copy()},
+    )
+    monkeypatch.setattr(
+        qbundle_runner,
+        "_phase2_commodity_daily",
+        lambda assumptions_phase2, scenario_id, country, years: pd.DataFrame(
+            {
+                "date": pd.date_range("2035-01-01", periods=10, freq="D"),
+                "gas_price_eur_mwh_th": 45.0,
+                "co2_price_eur_t": 120.0,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        qbundle_runner,
+        "_resolve_q5_base_anchor_for_country",
+        lambda **kwargs: (
+            {
+                "base_tca_eur_mwh": 100.0,
+                "base_tca_ccgt_eur_mwh": 100.0,
+                "base_tca_coal_eur_mwh": 90.0,
+                "base_ttl_model_eur_mwh": 120.0,
+                "base_ttl_observed_eur_mwh": 120.0,
+                "base_gas_eur_per_mwh_th": 35.0,
+                "base_co2_eur_per_t": 80.0,
+                "base_year_reference": 2024.0,
+                "base_ref_source_year": 2024.0,
+                "base_ref_status_override": "warn_fallback_from_hist",
+                "base_ref_reason_override": "fallback_from_hist:2024",
+            },
+            "warn_fallback_from_hist",
+        ),
+    )
+
+    def _fake_run_q5(hourly_df, assumptions_df, selection, run_id, **kwargs):
+        row = {
+            "country": str(selection.get("country", "")),
+            "scenario_id": str(selection.get("scenario_id", "")),
+            "base_ref_status": str(selection.get("base_ref_status_override", "ok")),
+            "status": str(selection.get("base_ref_status_override", "ok")),
+            "base_ref_reason": str(selection.get("base_ref_reason_override", "")),
+        }
+        return ModuleResult(
+            module_id="Q5",
+            run_id=run_id,
+            selection=selection,
+            assumptions_used=[],
+            kpis={},
+            tables={"Q5_summary": pd.DataFrame([row]), "q5_quality_summary": pd.DataFrame([{"quality_status": "WARN"}])},
+            figures=[],
+            narrative_md="",
+            checks=[],
+            warnings=[],
+            mode="SCEN",
+            scenario_id=str(selection.get("scenario_id", "")),
+            horizon_year=selection.get("horizon_year"),
+        )
+
+    monkeypatch.setattr(qbundle_runner, "run_q5", _fake_run_q5)
+
+    res = qbundle_runner._run_scen_module(
+        question_id="Q5",
+        scenario_id="HIGH_CO2",
+        annual_hist=annual_hist,
+        assumptions_phase1=assumptions_phase1,
+        assumptions_phase2=assumptions_phase2,
+        selection={"countries": ["FR"], "ttl_target_eur_mwh": 160.0},
+        scenario_years=[2035],
+    )
+    assert res is not None
+    q5_summary = res.tables.get("Q5_summary", pd.DataFrame())
+    assert not q5_summary.empty
+    assert set(q5_summary["base_ref_status"].astype(str).unique()) == {"warn_fallback_from_hist"}
+    base_checks = [c for c in res.checks if str(c.get("code")) == "Q5_BASE_SCENARIO_MISSING"]
+    assert base_checks and any(str(c.get("status")) == "PASS" for c in base_checks)
