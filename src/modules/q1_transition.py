@@ -16,7 +16,7 @@ from src.modules.reality_checks import build_common_checks
 from src.modules.result import ModuleResult
 
 Q1_RULE_VERSION = "q1_rule_v5_2026_02_12"
-Q1_OUTPUT_SCHEMA_VERSION = "2.0.0"
+Q1_OUTPUT_SCHEMA_VERSION = "2.0.1"
 DEFAULT_CRISIS_YEARS = {2022}
 Q1_UNEXPLAINED_NEGATIVE_PRICES_MAX = 0.35
 Q1_REASON_CODE_REQUIRED_METRICS = {
@@ -90,6 +90,41 @@ def _safe_ratio(a: Any, b: Any) -> float:
     if not (np.isfinite(aa) and np.isfinite(bb)) or bb == 0:
         return float("nan")
     return float(aa / bb)
+
+
+def _compute_neg_price_explained_by_surplus_ratio(
+    negative_hours: Any,
+    share_regime_a: Any,
+    share_regime_b: Any,
+) -> float:
+    hneg = _safe_float(negative_hours, np.nan)
+    if not np.isfinite(hneg) or hneg <= 0.0:
+        return float("nan")
+    share_a = _safe_float(share_regime_a, np.nan)
+    share_b = _safe_float(share_regime_b, np.nan)
+    if not (np.isfinite(share_a) and np.isfinite(share_b)):
+        return float("nan")
+    return float(share_a + share_b)
+
+
+def _q1_end_year_quality_status(row: pd.Series) -> str:
+    hneg = _safe_float(row.get("h_negative_at_end_year"), np.nan)
+    explained = _safe_float(row.get("neg_price_explained_by_surplus_ratio_at_end_year"), np.nan)
+    unexplained = _safe_float(row.get("neg_price_unexplained_share_at_end_year"), np.nan)
+
+    if not np.isfinite(hneg):
+        return "FAIL"
+    if hneg <= 0.0:
+        return "PASS"
+    if not np.isfinite(explained):
+        return "FAIL"
+    if explained < -1e-9 or explained > 1.0 + 1e-9:
+        return "FAIL"
+    if explained < 0.5:
+        return "WARN"
+    if np.isfinite(unexplained) and unexplained > 0.2:
+        return "WARN"
+    return "PASS"
 
 
 def _quantile(series: pd.Series, q: float) -> float:
@@ -1063,25 +1098,34 @@ def _build_negative_price_explainability(
             neg_count = int(neg.sum())
             neg_hours = float(neg_count)
             if neg_count > 0:
-                share_a = float((neg & reg.eq("A")).sum()) / float(neg_count)
-                share_b = float((neg & reg.eq("B")).sum()) / float(neg_count)
-                share_low = float((neg & low_residual).sum()) / float(neg_count)
-                share_union = float((neg & (reg.isin(["A", "B"]) | low_residual)).sum()) / float(neg_count)
+                neg_reg_a = neg & reg.eq("A")
+                neg_reg_b = neg & reg.eq("B")
+                neg_in_ab = neg & reg.isin(["A", "B"])
+                neg_low_only = neg & (~neg_in_ab) & low_residual
+                share_a = float(neg_reg_a.sum()) / float(neg_count)
+                share_b = float(neg_reg_b.sum()) / float(neg_count)
+                share_low = float(neg_low_only.sum()) / float(neg_count)
+                share_union = float((neg_in_ab | neg_low_only).sum()) / float(neg_count)
 
-        if not np.isfinite(share_union):
+        if not (np.isfinite(share_union) and np.isfinite(share_low)):
             p_row = panel[(panel["country"].astype(str) == country) & (pd.to_numeric(panel["year"], errors="coerce") == year)]
             if not p_row.empty:
                 r0 = p_row.iloc[0]
-                share_union = _safe_float(r0.get("share_neg_price_hours_in_AB_OR_LOW_RESIDUAL"), np.nan)
-                share_low = _safe_float(r0.get("share_neg_price_hours_in_low_residual"), np.nan)
-                if np.isfinite(_safe_float(r0.get("share_neg_price_hours_in_AB"), np.nan)):
-                    share_ab = _safe_float(r0.get("share_neg_price_hours_in_AB"), np.nan)
+                if not np.isfinite(neg_hours):
+                    neg_hours = _safe_float(r0.get("h_negative_obs", r0.get("h_negative")), np.nan)
+                if not np.isfinite(share_union):
+                    share_union = _safe_float(r0.get("share_neg_price_hours_in_AB_OR_LOW_RESIDUAL"), np.nan)
+                if not np.isfinite(share_low):
+                    share_low = _safe_float(r0.get("share_neg_price_hours_in_low_residual"), np.nan)
+                share_ab = _safe_float(r0.get("share_neg_price_hours_in_AB"), np.nan)
+                if np.isfinite(share_ab):
                     share_a = share_ab
                     share_b = 0.0
 
+        share_explained = _compute_neg_price_explained_by_surplus_ratio(neg_hours, share_a, share_b)
+        if not np.isfinite(share_union) and np.isfinite(share_explained) and np.isfinite(share_low):
+            share_union = share_explained + share_low
         share_unexplained = (1.0 - share_union) if np.isfinite(share_union) else np.nan
-        if np.isfinite(share_unexplained):
-            share_unexplained = float(np.clip(share_unexplained, 0.0, 1.0))
         rows.append(
             {
                 "country": country,
@@ -1090,6 +1134,7 @@ def _build_negative_price_explainability(
                 "share_neg_hours_in_regime_A": share_a,
                 "share_neg_hours_in_regime_B": share_b,
                 "share_neg_hours_in_low_residual_bucket": share_low,
+                "neg_price_explained_by_surplus_ratio": share_explained,
                 "share_neg_hours_explained_union": share_union,
                 "share_neg_hours_unexplained": share_unexplained,
                 "flag_unexplained_negative_prices": bool(
@@ -1130,15 +1175,28 @@ def run_q1(
     )
     _ensure_reason_code_metrics_available(panel)
     q1_negative_price_explainability = _build_negative_price_explainability(panel, hourly_by_country_year)
+    q1_explainability_by_key: dict[tuple[str, int], dict[str, float]] = {}
     if not q1_negative_price_explainability.empty:
         panel = panel.merge(
             q1_negative_price_explainability[
-                ["country", "year", "share_neg_hours_unexplained", "flag_unexplained_negative_prices"]
+                [
+                    "country",
+                    "year",
+                    "neg_price_explained_by_surplus_ratio",
+                    "share_neg_hours_unexplained",
+                    "flag_unexplained_negative_prices",
+                ]
             ],
             on=["country", "year"],
             how="left",
             suffixes=("", "_expl"),
         )
+        if "neg_price_explained_by_surplus_ratio_expl" in panel.columns:
+            panel["neg_price_explained_by_surplus_ratio"] = pd.to_numeric(
+                panel["neg_price_explained_by_surplus_ratio_expl"],
+                errors="coerce",
+            )
+            panel = panel.drop(columns=["neg_price_explained_by_surplus_ratio_expl"])
         if "flag_unexplained_negative_prices_expl" in panel.columns:
             panel["flag_unexplained_negative_prices"] = (
                 panel["flag_unexplained_negative_prices"].fillna(False)
@@ -1150,6 +1208,23 @@ def run_q1(
                 panel["share_neg_hours_unexplained"]
             )
             panel = panel.drop(columns=["share_neg_hours_unexplained_expl"])
+        for _, erow in q1_negative_price_explainability[
+            [
+                "country",
+                "year",
+                "negative_hours",
+                "neg_price_explained_by_surplus_ratio",
+                "share_neg_hours_unexplained",
+            ]
+        ].iterrows():
+            eyear = _safe_float(erow.get("year"), np.nan)
+            if not np.isfinite(eyear):
+                continue
+            q1_explainability_by_key[(str(erow.get("country", "")), int(eyear))] = {
+                "negative_hours": _safe_float(erow.get("negative_hours"), np.nan),
+                "explained": _safe_float(erow.get("neg_price_explained_by_surplus_ratio"), np.nan),
+                "unexplained": _safe_float(erow.get("share_neg_hours_unexplained"), np.nan),
+            }
     panel["quality_flag_unexplained_neg_prices"] = panel.get("flag_unexplained_negative_prices", False).fillna(False).astype(bool)
     panel["quality_flags"] = panel.apply(_quality_flags_from_row, axis=1)
 
@@ -1248,6 +1323,15 @@ def run_q1(
             rationale = "Phase2 deja active au debut de fenetre: transition anterieure au scope observe."
         else:
             rationale = "Pas de bascule persistante sur la fenetre."
+        explained_at_bascule = np.nan
+        unexplained_at_bascule = np.nan
+        h_negative_at_bascule = _safe_float(at.get("h_negative_obs"), np.nan)
+        if np.isfinite(bascule_year):
+            explain_row = q1_explainability_by_key.get((str(country), int(bascule_year)))
+            if explain_row is not None:
+                explained_at_bascule = _safe_float(explain_row.get("explained"), np.nan)
+                unexplained_at_bascule = _safe_float(explain_row.get("unexplained"), np.nan)
+                h_negative_at_bascule = _safe_float(explain_row.get("negative_hours"), h_negative_at_bascule)
 
         summary_rows.append(
             {
@@ -1290,8 +1374,9 @@ def run_q1(
                 "capture_ratio_pv_at_bascule": at.get("capture_ratio_pv", np.nan),
                 "capture_ratio_wind_at_bascule": at.get("capture_ratio_wind", np.nan),
                 "market_physical_gap_at_bascule": bool(at.get("market_physical_gap_flag", False)),
-                "neg_price_explained_by_surplus_ratio_at_bascule": _safe_float(at.get("neg_price_explained_by_surplus_ratio"), np.nan),
-                "h_negative_at_bascule": at.get("h_negative_obs", np.nan),
+                "neg_price_explained_by_surplus_ratio_at_bascule": explained_at_bascule,
+                "neg_price_unexplained_share_at_bascule": unexplained_at_bascule,
+                "h_negative_at_bascule": h_negative_at_bascule,
                 "notes_quality": "coherence_low"
                 if float(at.get("regime_coherence", 1.0)) < _safe_param(params, "regime_coherence_min_for_causality", 0.55)
                 else "ok",
@@ -1451,12 +1536,37 @@ def run_q1(
                 "capture_ratio_pv_at_end_year": pd.to_numeric(end_rows.get("capture_ratio_pv"), errors="coerce"),
                 "capture_ratio_wind_at_end_year": pd.to_numeric(end_rows.get("capture_ratio_wind"), errors="coerce"),
                 "market_physical_gap_at_end_year": end_rows.get("market_physical_gap_flag", pd.Series(False, index=end_rows.index)).fillna(False).astype(bool),
-                "neg_price_explained_by_surplus_ratio_at_end_year": pd.to_numeric(
-                    end_rows.get("neg_price_explained_by_surplus_ratio"), errors="coerce"
-                ),
                 "h_negative_at_end_year": pd.to_numeric(end_rows.get("h_negative_obs"), errors="coerce"),
             }
         )
+        if not q1_negative_price_explainability.empty:
+            explain_end = q1_negative_price_explainability[
+                [
+                    "country",
+                    "year",
+                    "negative_hours",
+                    "neg_price_explained_by_surplus_ratio",
+                    "share_neg_hours_unexplained",
+                ]
+            ].rename(
+                columns={
+                    "year": "end_year",
+                    "negative_hours": "h_negative_at_end_year_explainability",
+                    "neg_price_explained_by_surplus_ratio": "neg_price_explained_by_surplus_ratio_at_end_year",
+                    "share_neg_hours_unexplained": "neg_price_unexplained_share_at_end_year",
+                }
+            )
+            explain_end["country"] = explain_end["country"].astype(str)
+            explain_end["end_year"] = pd.to_numeric(explain_end["end_year"], errors="coerce")
+            end_fields = end_fields.merge(explain_end, on=["country", "end_year"], how="left")
+            end_fields["h_negative_at_end_year"] = pd.to_numeric(
+                end_fields.get("h_negative_at_end_year_explainability"),
+                errors="coerce",
+            ).combine_first(pd.to_numeric(end_fields.get("h_negative_at_end_year"), errors="coerce"))
+            end_fields = end_fields.drop(columns=["h_negative_at_end_year_explainability"])
+        else:
+            end_fields["neg_price_explained_by_surplus_ratio_at_end_year"] = np.nan
+            end_fields["neg_price_unexplained_share_at_end_year"] = np.nan
         summary = summary.merge(end_fields, on="country", how="left")
         no_bascule_mask = pd.to_numeric(summary.get("bascule_year_market"), errors="coerce").isna()
         bascule_value_cols = [c for c in summary.columns if c.endswith("_at_bascule")]
@@ -1530,18 +1640,79 @@ def run_q1(
     q1_rule_application = panel[[c for c in q1_rule_application_cols if c in panel.columns]].copy()
     q1_before_after_bascule = _build_before_after_bascule(panel, summary)
     if not q1_negative_price_explainability.empty:
-        invalid_share = q1_negative_price_explainability[
-            pd.to_numeric(q1_negative_price_explainability["share_neg_hours_explained_union"], errors="coerce")
-            > 1.000001
+        explain_df = q1_negative_price_explainability.copy()
+        neg_hours = pd.to_numeric(explain_df.get("negative_hours"), errors="coerce")
+        share_a = pd.to_numeric(explain_df.get("share_neg_hours_in_regime_A"), errors="coerce")
+        share_b = pd.to_numeric(explain_df.get("share_neg_hours_in_regime_B"), errors="coerce")
+        explained = pd.to_numeric(explain_df.get("neg_price_explained_by_surplus_ratio"), errors="coerce")
+        share_low = pd.to_numeric(explain_df.get("share_neg_hours_in_low_residual_bucket"), errors="coerce")
+        unexplained = pd.to_numeric(explain_df.get("share_neg_hours_unexplained"), errors="coerce")
+        has_negative_hours = neg_hours > 0.0
+        computed_explained = share_a + share_b
+
+        formula_invalid = explain_df[
+            has_negative_hours
+            & share_a.notna()
+            & share_b.notna()
+            & explained.notna()
+            & ((explained - computed_explained).abs() > 1e-9)
         ]
-        for _, irow in invalid_share.iterrows():
+        for _, frow in formula_invalid.iterrows():
             checks.append(
                 {
                     "status": "FAIL",
-                    "code": "Q1_NEG_EXPLAINABILITY_SUM_INVALID",
+                    "code": "Q1_NEG_EXPLAINABILITY_FORMULA_INVALID",
                     "message": (
-                        f"{irow['country']}-{int(irow['year'])}: share_neg_hours_explained_union>1 "
-                        f"({ _safe_float(irow.get('share_neg_hours_explained_union'), np.nan):.3f})."
+                        f"{frow['country']}-{int(frow['year'])}: explained "
+                        "!= share_A + share_B."
+                    ),
+                }
+            )
+
+        missing_explained = explain_df[has_negative_hours & explained.isna()]
+        for _, mrow in missing_explained.iterrows():
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q1_NEG_EXPLAINABILITY_MISSING",
+                    "message": (
+                        f"{mrow['country']}-{int(mrow['year'])}: h_negative>0 mais "
+                        "neg_price_explained_by_surplus_ratio manquant."
+                    ),
+                }
+            )
+        explained_out_of_range = explain_df[
+            has_negative_hours
+            & explained.notna()
+            & ((explained < -1e-6) | (explained > 1.000001))
+        ]
+        for _, erow in explained_out_of_range.iterrows():
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q1_NEG_EXPLAINABILITY_RANGE_INVALID",
+                    "message": (
+                        f"{erow['country']}-{int(erow['year'])}: explained="
+                        f"{_safe_float(erow.get('neg_price_explained_by_surplus_ratio'), np.nan):.6f} hors [0,1]."
+                    ),
+                }
+            )
+        partition_mask = has_negative_hours & explained.notna() & share_low.notna() & unexplained.notna()
+        partition_total = explained + share_low + unexplained
+        partition_invalid = explain_df[partition_mask & ((partition_total - 1.0).abs() > 1e-6)]
+        for _, prow in partition_invalid.iterrows():
+            ptotal = (
+                _safe_float(prow.get("neg_price_explained_by_surplus_ratio"), np.nan)
+                + _safe_float(prow.get("share_neg_hours_in_low_residual_bucket"), np.nan)
+                + _safe_float(prow.get("share_neg_hours_unexplained"), np.nan)
+            )
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q1_NEG_EXPLAINABILITY_PARTITION_INVALID",
+                    "message": (
+                        f"{prow['country']}-{int(prow['year'])}: explained + low_residual + unexplained "
+                        f"= {ptotal:.6f} (attendu 1.000000)."
                     ),
                 }
             )
@@ -1606,20 +1777,26 @@ def run_q1(
     checks.extend(build_common_checks(panel, hourly_by_key=hourly_by_country_year))
     if not checks:
         checks.append({"status": "PASS", "code": "Q1_PASS", "message": "Q1 checks pass."})
-    has_fail = any(str(c.get("status", "")).upper() == "FAIL" for c in checks)
-    has_warn = any(str(c.get("status", "")).upper() == "WARN" for c in checks)
-    module_quality_status = "FAIL" if has_fail else ("WARN" if has_warn else "PASS")
+    quality_cols = [
+        "country",
+        "end_year",
+        "h_negative_at_end_year",
+        "neg_price_explained_by_surplus_ratio_at_end_year",
+        "neg_price_unexplained_share_at_end_year",
+    ]
     q1_quality_summary = (
-        summary[["country", "end_year"]].rename(columns={"end_year": "year"}).copy()
-        if not summary.empty and "end_year" in summary.columns
-        else pd.DataFrame({"country": summary.get("country", pd.Series(dtype=object)), "year": np.nan})
+        summary[[c for c in quality_cols if c in summary.columns]]
+        .rename(columns={"end_year": "year"})
+        .copy()
+        if not summary.empty
+        else pd.DataFrame({"country": pd.Series(dtype=object), "year": pd.Series(dtype=float)})
     )
     if q1_quality_summary.empty and not summary.empty:
         q1_quality_summary = pd.DataFrame({"country": summary["country"].astype(str), "year": np.nan})
     if not q1_quality_summary.empty:
         q1_quality_summary["module_id"] = "Q1"
         q1_quality_summary["scenario_id"] = str(selection.get("scenario_id") or "")
-        q1_quality_summary["quality_status"] = module_quality_status
+        q1_quality_summary["quality_status"] = q1_quality_summary.apply(_q1_end_year_quality_status, axis=1)
         q1_quality_summary["output_schema_version"] = Q1_OUTPUT_SCHEMA_VERSION
 
     kpis = {
