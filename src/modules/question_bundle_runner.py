@@ -13,7 +13,7 @@ from src.modules.q1_transition import run_q1
 from src.modules.q2_slope import run_q2
 from src.modules.q3_exit import run_q3
 from src.modules.q4_bess import run_q4
-from src.modules.q5_thermal_anchor import run_q5
+from src.modules.q5_thermal_anchor import Q5_OUTPUT_SCHEMA_VERSION, run_q5
 from src.modules.result import ModuleResult
 from src.modules.test_registry import QuestionTestSpec, get_default_scenarios, get_question_tests
 from src.scenario.phase2_engine import run_phase2_scenario
@@ -573,6 +573,40 @@ def _run_scen_module(
             return run_q1(annual_scen, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map)
         if qid == "Q2":
             hourly_map = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
+            hist_ref = run_q2(
+                annual_hist[annual_hist["country"].astype(str).isin(countries)].copy(),
+                assumptions_phase1,
+                {**selection, "countries": countries, "mode": "HIST"},
+                run_id=f"{run_id}_HIST_PHASE2_REF",
+                hourly_by_country_year=None,
+            )
+            slopes_ref = hist_ref.tables.get("Q2_country_slopes", pd.DataFrame()).copy()
+            phase2_years_by_country_tech: dict[str, list[int]] = {}
+            phase2_start_year_by_country_tech: dict[str, int] = {}
+            if not slopes_ref.empty:
+                for _, r in slopes_ref.iterrows():
+                    c = str(r.get("country", "")).strip()
+                    t = str(r.get("tech", "")).strip().upper()
+                    if not c or not t:
+                        continue
+                    key = f"{c}|{t}"
+                    years_used_raw = str(r.get("years_used", "")).strip()
+                    years_used_vals: list[int] = []
+                    if years_used_raw:
+                        for tok in years_used_raw.split(","):
+                            yv = _safe_float(tok.strip(), np.nan)
+                            if np.isfinite(yv):
+                                years_used_vals.append(int(yv))
+                    if years_used_vals:
+                        phase2_years_by_country_tech[key] = sorted(set(years_used_vals))
+                    y_start = _safe_float(r.get("phase2_start_year_for_slope"), np.nan)
+                    if np.isfinite(y_start):
+                        phase2_start_year_by_country_tech[key] = int(y_start)
+            scen_sel = {
+                **scen_sel,
+                "phase2_years_by_country_tech": phase2_years_by_country_tech,
+                "phase2_start_year_by_country_tech": phase2_start_year_by_country_tech,
+            }
             return run_q2(annual_scen, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map)
         hourly_map = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
         assumptions_q3 = assumptions_phase1.copy()
@@ -617,6 +651,67 @@ def _run_scen_module(
         runs: list[ModuleResult] = []
         tech_map = selection.get("marginal_tech_by_country", {})
         base_anchor_by_country = selection.get("base_anchor_by_country", {})
+        sid_upper = str(scenario_id).upper()
+        requires_base_ref = sid_upper.startswith("HIGH_") and sid_upper not in {"BASE", "HIST"}
+        if requires_base_ref:
+            missing_base_countries = [
+                str(c)
+                for c in countries
+                if not (isinstance(base_anchor_by_country, dict) and isinstance(base_anchor_by_country.get(str(c), {}), dict) and base_anchor_by_country.get(str(c), {}))
+            ]
+            if missing_base_countries:
+                fail_rows: list[dict[str, Any]] = []
+                quality_rows: list[dict[str, Any]] = []
+                for c in sorted(set([str(x) for x in countries])):
+                    fail_rows.append(
+                        {
+                            "scenario_id": str(scenario_id),
+                            "country": c,
+                            "base_ref_status": "missing_base",
+                            "base_ref_reason": "missing_base_scenario_reference",
+                            "status": "FAIL",
+                            "reason": "missing_base_scenario_reference",
+                            "delta_tca_vs_base": np.nan,
+                            "delta_ttl_model_vs_base": np.nan,
+                            "delta_capture_ratio_vs_base": np.nan,
+                            "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
+                        }
+                    )
+                    quality_rows.append(
+                        {
+                            "module_id": "Q5",
+                            "country": c,
+                            "year": max(years) if years else np.nan,
+                            "scenario_id": str(scenario_id),
+                            "quality_status": "FAIL",
+                            "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
+                        }
+                    )
+                msg = (
+                    "Q5 scenario requires BASE reference for all countries: "
+                    + ", ".join(sorted(set(missing_base_countries)))
+                )
+                return ModuleResult(
+                    module_id="Q5",
+                    run_id=run_id,
+                    selection={**selection, "countries": countries, "mode": "SCEN", "scenario_id": scenario_id},
+                    assumptions_used=[],
+                    kpis={"n_runs": 0, "n_countries": int(len(countries)), "compute_time_sec_total": 0.0},
+                    tables={"Q5_summary": pd.DataFrame(fail_rows), "q5_quality_summary": pd.DataFrame(quality_rows)},
+                    figures=[],
+                    narrative_md="Q5 scenario non execute: base reference missing.",
+                    checks=[
+                        {
+                            "status": "FAIL",
+                            "code": "Q5_BASE_SCENARIO_MISSING",
+                            "message": msg,
+                        }
+                    ],
+                    warnings=[msg],
+                    mode="SCEN",
+                    scenario_id=scenario_id,
+                    horizon_year=max(years) if years else None,
+                )
         for country in countries:
             if scenario_id == "HIGH_BOTH":
                 base_sid = "BASE"
@@ -1528,6 +1623,8 @@ def run_question_bundle(
     years = _selection_years(selection, annual_hist)
     scenario_ids = [str(s) for s in selection.get("scenario_ids", get_default_scenarios(qid))]
     scenario_ids = [s for s in scenario_ids if s]
+    if qid == "Q5" and "BASE" in scenario_ids:
+        scenario_ids = ["BASE"] + [s for s in scenario_ids if s != "BASE"]
     scenario_years = _selection_scenario_years(selection, assumptions_phase2, [s for s in scenario_ids if s != "HIGH_BOTH"], countries)
 
     hist_sel = {**selection, "countries": countries, "years": years, "mode": "HIST", "run_id": run_id}

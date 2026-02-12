@@ -18,6 +18,8 @@ Q2_PARAMS = [
     "exclude_year_2022",
 ]
 
+Q2_OUTPUT_SCHEMA_VERSION = "2.0.0"
+
 
 def _safe_float(value: Any, default: float = np.nan) -> float:
     try:
@@ -307,12 +309,26 @@ def run_q2(
     load_twh = _as_numeric_series(panel, "load_net_twh", np.nan)
     pv_twh = _as_numeric_series(panel, "gen_solar_twh", np.nan)
     wind_twh = _as_numeric_series(panel, "gen_wind_on_twh", 0.0).fillna(0.0) + _as_numeric_series(panel, "gen_wind_off_twh", 0.0).fillna(0.0)
+    gen_total_twh = _as_numeric_series(panel, "gen_total_twh", np.nan)
+    if gen_total_twh.notna().sum() == 0:
+        gen_total_twh = load_twh.copy()
+    panel["pv_penetration_share_generation"] = pv_twh / gen_total_twh.replace(0.0, np.nan)
+    panel["wind_penetration_share_generation"] = wind_twh / gen_total_twh.replace(0.0, np.nan)
+    panel["pv_penetration_share_generation"] = panel["pv_penetration_share_generation"].fillna(
+        _as_share(panel.get("pv_penetration_pct_gen", pd.Series(np.nan, index=panel.index)))
+    )
+    panel["wind_penetration_share_generation"] = panel["wind_penetration_share_generation"].fillna(
+        _as_share(panel.get("wind_penetration_pct_gen", pd.Series(np.nan, index=panel.index)))
+    )
     panel["pv_penetration_share_load"] = pv_twh / load_twh.replace(0.0, np.nan)
     panel["wind_penetration_share_load"] = wind_twh / load_twh.replace(0.0, np.nan)
     panel["pv_penetration_share_load"] = panel["pv_penetration_share_load"].fillna(_as_share(panel.get("pv_penetration_pct_gen", pd.Series(np.nan, index=panel.index))))
     panel["wind_penetration_share_load"] = panel["wind_penetration_share_load"].fillna(
         _as_share(panel.get("wind_penetration_pct_gen", pd.Series(np.nan, index=panel.index)))
     )
+
+    phase2_years_ref_raw = selection.get("phase2_years_by_country_tech", {})
+    phase2_start_ref_raw = selection.get("phase2_start_year_by_country_tech", {})
 
     rows: list[dict[str, Any]] = []
     checks: list[dict[str, str]] = []
@@ -337,13 +353,34 @@ def run_q2(
             else pd.DataFrame()
         )
         for tech in ["PV", "WIND"]:
-            phase2_start_year, phase2_start_reason = _phase2_start_year(c_summary, tech=tech)
             years_num = pd.to_numeric(group.get("year"), errors="coerce")
-            if np.isfinite(phase2_start_year):
-                phase2_scope = group[years_num >= float(phase2_start_year)].copy()
+            ref_key = f"{str(country)}|{str(tech).upper()}"
+            ref_years: list[int] = []
+            if isinstance(phase2_years_ref_raw, dict):
+                raw_vals = phase2_years_ref_raw.get(ref_key, [])
+                if isinstance(raw_vals, (list, tuple, set, np.ndarray, pd.Series)):
+                    for yv in raw_vals:
+                        yy = _safe_float(yv, np.nan)
+                        if np.isfinite(yy):
+                            ref_years.append(int(yy))
+                else:
+                    ref_years = _years_from_csv(raw_vals)
+            ref_years = sorted(set(ref_years))
+            if ref_years:
+                phase2_start_year = float(min(ref_years))
+                if isinstance(phase2_start_ref_raw, dict):
+                    phase2_start_override = _safe_float(phase2_start_ref_raw.get(ref_key), np.nan)
+                    if np.isfinite(phase2_start_override):
+                        phase2_start_year = float(int(phase2_start_override))
+                phase2_start_reason = "hist_phase2_reference"
+                phase2_scope = group[years_num.isin(ref_years)].copy()
             else:
-                phase2_mask = pd.to_numeric(group.get("is_phase2_market"), errors="coerce").fillna(0.0) > 0.0
-                phase2_scope = group[phase2_mask].copy()
+                phase2_start_year, phase2_start_reason = _phase2_start_year(c_summary, tech=tech)
+                if np.isfinite(phase2_start_year):
+                    phase2_scope = group[years_num >= float(phase2_start_year)].copy()
+                else:
+                    phase2_mask = pd.to_numeric(group.get("is_phase2_market"), errors="coerce").fillna(0.0) > 0.0
+                    phase2_scope = group[phase2_mask].copy()
             phase2_scope["quality_ok"] = phase2_scope.get("quality_ok", True).fillna(False).astype(bool)
             phase2_scope["crisis_year"] = phase2_scope.get("crisis_year", False).fillna(False).astype(bool)
             phase2_scope["year_num"] = pd.to_numeric(phase2_scope.get("year"), errors="coerce")
@@ -366,10 +403,11 @@ def run_q2(
                         "years_used": "",
                         "n_points": 0,
                         "x_axis_used": "none",
-                        "x_unit": "share_of_load",
+                        "x_axis_default": f"{str(tech).lower()}_penetration_share_generation",
+                        "x_unit": "share_of_generation",
                         "slope": np.nan,
                         "slope_per_1pp": np.nan,
-                        "slope_unit": "capture_ratio_per_share_load",
+                        "slope_unit": "capture_ratio_per_share_generation",
                         "intercept": np.nan,
                         "r2": np.nan,
                         "p_value": np.nan,
@@ -393,6 +431,8 @@ def run_q2(
                         "cross_country_benchmark_r2": np.nan,
                         "cross_country_benchmark_p_value": np.nan,
                         "cross_country_benchmark_n": np.nan,
+                        "penetration_share_generation_mean_phase2": np.nan,
+                        "penetration_share_load_mean_phase2": np.nan,
                         "slope_quality_flag": "WARN",
                         "slope_quality_notes": "INSUFFICIENT_POINTS",
                     }
@@ -400,29 +440,33 @@ def run_q2(
                 continue
 
             if tech == "PV":
-                x = (
-                    pd.to_numeric(phase2_scope["pv_penetration_share_load"], errors="coerce")
-                    if "pv_penetration_share_load" in phase2_scope.columns
-                    else pd.Series(np.nan, index=phase2_scope.index)
-                )
+                x_gen = pd.to_numeric(phase2_scope.get("pv_penetration_share_generation"), errors="coerce")
+                x_load = pd.to_numeric(phase2_scope.get("pv_penetration_share_load"), errors="coerce")
+                x = x_gen.copy()
+                x_axis = "pv_penetration_share_generation"
+                if x.notna().sum() == 0:
+                    x = x_load
+                    x_axis = "pv_penetration_share_load"
                 y = (
                     pd.to_numeric(phase2_scope["capture_ratio_pv"], errors="coerce")
                     if "capture_ratio_pv" in phase2_scope.columns
                     else pd.Series(np.nan, index=phase2_scope.index)
                 )
-                x_axis = "pv_penetration_share_load"
+                x_unit = "share_of_generation" if x_axis.endswith("_generation") else "share_of_load"
             else:
-                x = (
-                    pd.to_numeric(phase2_scope["wind_penetration_share_load"], errors="coerce")
-                    if "wind_penetration_share_load" in phase2_scope.columns
-                    else pd.Series(np.nan, index=phase2_scope.index)
-                )
+                x_gen = pd.to_numeric(phase2_scope.get("wind_penetration_share_generation"), errors="coerce")
+                x_load = pd.to_numeric(phase2_scope.get("wind_penetration_share_load"), errors="coerce")
+                x = x_gen.copy()
+                x_axis = "wind_penetration_share_generation"
+                if x.notna().sum() == 0:
+                    x = x_load
+                    x_axis = "wind_penetration_share_load"
                 y = (
                     pd.to_numeric(phase2_scope["capture_ratio_wind"], errors="coerce")
                     if "capture_ratio_wind" in phase2_scope.columns
                     else pd.Series(np.nan, index=phase2_scope.index)
                 )
-                x_axis = "wind_penetration_share_load"
+                x_unit = "share_of_generation" if x_axis.endswith("_generation") else "share_of_load"
 
             fit_df = pd.DataFrame(
                 {
@@ -505,10 +549,11 @@ def run_q2(
                     "years_used": years_used,
                     "n_points": int(fit["n"]),
                     "x_axis_used": x_axis,
-                    "x_unit": "share_of_load",
+                    "x_axis_default": f"{str(tech).lower()}_penetration_share_generation",
+                    "x_unit": x_unit,
                     "slope": fit["slope"],
                     "slope_per_1pp": _safe_float(fit.get("slope"), np.nan) * 0.01 if np.isfinite(_safe_float(fit.get("slope"), np.nan)) else np.nan,
-                    "slope_unit": "capture_ratio_per_share_load",
+                    "slope_unit": "capture_ratio_per_share_generation" if x_unit == "share_of_generation" else "capture_ratio_per_share_load",
                     "intercept": fit["intercept"],
                     "r2": fit["r2"],
                     "p_value": fit["p_value"],
@@ -532,6 +577,8 @@ def run_q2(
                     "cross_country_benchmark_r2": np.nan,
                     "cross_country_benchmark_p_value": np.nan,
                     "cross_country_benchmark_n": np.nan,
+                    "penetration_share_generation_mean_phase2": _safe_float(pd.to_numeric(phase2_scope.get(f"{str(tech).lower()}_penetration_share_generation"), errors="coerce").mean(), np.nan),
+                    "penetration_share_load_mean_phase2": _safe_float(pd.to_numeric(phase2_scope.get(f"{str(tech).lower()}_penetration_share_load"), errors="coerce").mean(), np.nan),
                     "slope_quality_flag": slope_quality_flag,
                     "slope_quality_notes": slope_quality_notes,
                     "corr_vre_load_phase2": corr_vre_load_phase2,
@@ -749,6 +796,30 @@ def run_q2(
         checks.append({"status": "WARN", "code": "Q2_NO_SLOPE", "message": "Aucune pente Q2 calculee."})
     if not checks:
         checks.append({"status": "PASS", "code": "Q2_PASS", "message": "Q2 checks pass."})
+    has_fail = any(str(c.get("status", "")).upper() == "FAIL" for c in checks)
+    has_warn = any(str(c.get("status", "")).upper() == "WARN" for c in checks)
+    module_quality_status = "FAIL" if has_fail else ("WARN" if has_warn else "PASS")
+
+    if not slopes.empty:
+        q2_quality_summary = (
+            slopes[["country", "scenario_id", "phase2_end_year"]]
+            .rename(columns={"phase2_end_year": "year"})
+            .copy()
+        )
+        q2_quality_summary["year"] = pd.to_numeric(q2_quality_summary["year"], errors="coerce")
+        q2_quality_summary = q2_quality_summary.groupby(["country", "scenario_id"], as_index=False, dropna=False)["year"].max()
+    else:
+        q2_quality_summary = pd.DataFrame(
+            {
+                "country": [str(c) for c in sorted(set([str(c) for c in countries]))],
+                "scenario_id": scenario_id_effective,
+                "year": np.nan,
+            }
+        )
+    if not q2_quality_summary.empty:
+        q2_quality_summary["module_id"] = "Q2"
+        q2_quality_summary["quality_status"] = module_quality_status
+        q2_quality_summary["output_schema_version"] = Q2_OUTPUT_SCHEMA_VERSION
 
     kpis = {
         "n_slopes": int(len(slopes)),
@@ -771,6 +842,7 @@ def run_q2(
             "Q2_country_slopes": slopes,
             "Q2_driver_correlations": driver_corr,
             "Q2_driver_diagnostics": drivers_country,
+            "q2_quality_summary": q2_quality_summary,
         },
         figures=[],
         narrative_md=narrative,

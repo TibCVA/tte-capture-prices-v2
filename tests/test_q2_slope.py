@@ -166,3 +166,13 @@ def test_q2_warns_on_positive_slope_with_strong_negative_vre_load_corr():
     warn_checks = [c for c in res.checks if str(c.get("code")) == "TEST_Q2_002"]
     assert warn_checks
     assert any(str(c.get("status")) == "WARN" for c in warn_checks)
+
+
+def test_q2_emits_quality_summary_table(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q2(annual_panel_fixture, assumptions, {"countries": ["FR", "DE"]}, "test")
+    summary = res.tables.get("q2_quality_summary", pd.DataFrame())
+    assert not summary.empty
+    assert {"module_id", "country", "year", "scenario_id", "quality_status", "output_schema_version"}.issubset(summary.columns)
+    assert set(summary["module_id"].astype(str).unique()) == {"Q2"}
+    assert set(summary["quality_status"].astype(str).unique()).issubset({"PASS", "WARN", "FAIL"})

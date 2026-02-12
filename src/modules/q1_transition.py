@@ -16,6 +16,7 @@ from src.modules.reality_checks import build_common_checks
 from src.modules.result import ModuleResult
 
 Q1_RULE_VERSION = "q1_rule_v5_2026_02_12"
+Q1_OUTPUT_SCHEMA_VERSION = "2.0.0"
 DEFAULT_CRISIS_YEARS = {2022}
 Q1_UNEXPLAINED_NEGATIVE_PRICES_MAX = 0.35
 Q1_REASON_CODE_REQUIRED_METRICS = {
@@ -1426,6 +1427,45 @@ def run_q1(
     }.items():
         if col not in summary.columns:
             summary[col] = default
+    if not summary.empty:
+        end_rows = (
+            panel.sort_values(["country", "year"])
+            .groupby("country", as_index=False, group_keys=False)
+            .tail(1)
+            .copy()
+        )
+        end_fields = pd.DataFrame(
+            {
+                "country": end_rows["country"].astype(str),
+                "end_year": pd.to_numeric(end_rows.get("year"), errors="coerce"),
+                "low_price_flags_count_at_end_year": pd.to_numeric(end_rows.get("low_price_flags_count"), errors="coerce"),
+                "physical_flags_count_at_end_year": pd.to_numeric(end_rows.get("physical_flags_count"), errors="coerce"),
+                "capture_flags_count_at_end_year": pd.to_numeric(end_rows.get("capture_flags_count"), errors="coerce"),
+                "stage2_market_score_at_end_year": pd.to_numeric(end_rows.get("stage2_market_score"), errors="coerce"),
+                "score_breakdown_at_end_year": end_rows.get("score_breakdown", pd.Series("", index=end_rows.index)).astype(str),
+                "sr_energy_at_end_year": pd.to_numeric(end_rows.get("sr_energy"), errors="coerce"),
+                "far_energy_at_end_year": pd.to_numeric(end_rows.get("far_observed", end_rows.get("far_energy")), errors="coerce"),
+                "ir_p10_at_end_year": pd.to_numeric(end_rows.get("ir_p10"), errors="coerce"),
+                "ttl_at_end_year": pd.to_numeric(end_rows.get("ttl_eur_mwh"), errors="coerce"),
+                "capture_ratio_pv_vs_ttl_at_end_year": pd.to_numeric(end_rows.get("capture_ratio_pv_vs_ttl"), errors="coerce"),
+                "capture_ratio_pv_at_end_year": pd.to_numeric(end_rows.get("capture_ratio_pv"), errors="coerce"),
+                "capture_ratio_wind_at_end_year": pd.to_numeric(end_rows.get("capture_ratio_wind"), errors="coerce"),
+                "market_physical_gap_at_end_year": end_rows.get("market_physical_gap_flag", pd.Series(False, index=end_rows.index)).fillna(False).astype(bool),
+                "neg_price_explained_by_surplus_ratio_at_end_year": pd.to_numeric(
+                    end_rows.get("neg_price_explained_by_surplus_ratio"), errors="coerce"
+                ),
+                "h_negative_at_end_year": pd.to_numeric(end_rows.get("h_negative_obs"), errors="coerce"),
+            }
+        )
+        summary = summary.merge(end_fields, on="country", how="left")
+        no_bascule_mask = pd.to_numeric(summary.get("bascule_year_market"), errors="coerce").isna()
+        bascule_value_cols = [c for c in summary.columns if c.endswith("_at_bascule")]
+        if bascule_value_cols:
+            for col in bascule_value_cols:
+                if pd.api.types.is_bool_dtype(summary[col]):
+                    summary[col] = summary[col].astype(object)
+            summary.loc[no_bascule_mask, bascule_value_cols] = np.nan
+        summary.loc[no_bascule_mask, "bascule_status_market"] = "not_reached_in_window"
     q1_rule_definition = _build_rule_definition(params, crisis_years=crisis_years_global)
     q1_rule_application_cols = [
         "country",
@@ -1566,6 +1606,21 @@ def run_q1(
     checks.extend(build_common_checks(panel, hourly_by_key=hourly_by_country_year))
     if not checks:
         checks.append({"status": "PASS", "code": "Q1_PASS", "message": "Q1 checks pass."})
+    has_fail = any(str(c.get("status", "")).upper() == "FAIL" for c in checks)
+    has_warn = any(str(c.get("status", "")).upper() == "WARN" for c in checks)
+    module_quality_status = "FAIL" if has_fail else ("WARN" if has_warn else "PASS")
+    q1_quality_summary = (
+        summary[["country", "end_year"]].rename(columns={"end_year": "year"}).copy()
+        if not summary.empty and "end_year" in summary.columns
+        else pd.DataFrame({"country": summary.get("country", pd.Series(dtype=object)), "year": np.nan})
+    )
+    if q1_quality_summary.empty and not summary.empty:
+        q1_quality_summary = pd.DataFrame({"country": summary["country"].astype(str), "year": np.nan})
+    if not q1_quality_summary.empty:
+        q1_quality_summary["module_id"] = "Q1"
+        q1_quality_summary["scenario_id"] = str(selection.get("scenario_id") or "")
+        q1_quality_summary["quality_status"] = module_quality_status
+        q1_quality_summary["output_schema_version"] = Q1_OUTPUT_SCHEMA_VERSION
 
     kpis = {
         "n_countries": int(summary["country"].nunique()) if not summary.empty else 0,
@@ -1597,6 +1652,7 @@ def run_q1(
             "Q1_scope_audit": q1_scope_audit,
             "Q1_residual_diagnostics": q1_residual_diagnostics,
             "Q1_ir_diagnostics": q1_ir_diagnostics,
+            "q1_quality_summary": q1_quality_summary,
         },
         figures=[],
         narrative_md=narrative,

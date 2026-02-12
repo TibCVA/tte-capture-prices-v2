@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from src.core.canonical_metrics import build_canonical_hourly_panel
-from src.core.market_proxy import fit_market_proxy, predict_event_counts, predict_prices
+from src.core.market_proxy import MarketProxyBucketModel
 from src.modules.common import assumptions_subset
 from src.modules.q1_transition import run_q1
 from src.modules.q2_slope import run_q2
@@ -31,6 +31,8 @@ Q3_PARAMS = [
     "demand_k_max",
     "slope_capture_target",
 ]
+
+Q3_OUTPUT_SCHEMA_VERSION = "2.0.0"
 
 
 def _safe_float(value: Any, default: float = np.nan) -> float:
@@ -249,32 +251,48 @@ def _safe_series(df: pd.DataFrame, col: str, default: float = 0.0) -> pd.Series:
     return pd.Series(default, index=df.index, dtype=float)
 
 
+def _top_risk_bucket_ids(model: MarketProxyBucketModel, top_n: int = 4) -> set[int]:
+    stats = model.bucket_stats.copy()
+    if stats.empty:
+        return set()
+    stats["risk_score"] = (
+        0.7 * pd.to_numeric(stats.get("p_neg"), errors="coerce").fillna(0.0)
+        + 0.3 * pd.to_numeric(stats.get("p_low"), errors="coerce").fillna(0.0)
+    )
+    ranked = stats.sort_values(["risk_score", "p_neg", "p_low"], ascending=[False, False, False]).head(max(1, int(top_n)))
+    return set(pd.to_numeric(ranked.get("bucket_id"), errors="coerce").dropna().astype(int).tolist())
+
+
 def _compute_hourly_proxy_metrics(
     hourly: pd.DataFrame,
     *,
+    market_proxy_model: MarketProxyBucketModel,
+    risk_bucket_ids: set[int] | None = None,
     demand_uplift: float = 0.0,
     demand_uplift_mw: float | None = None,
     export_uplift: float = 0.0,
     export_uplift_mw: float | None = None,
     flex_mw_additional: float = 0.0,
     export_coincidence_factor: float = 1.0,
-    mapping: pd.DataFrame | None = None,
-    ttl_shift_eur_mwh: float = 0.0,
 ) -> dict[str, float]:
-    if hourly is None or hourly.empty:
+    if hourly is None or hourly.empty or market_proxy_model is None:
         return {"status": "missing_data"}
 
     canonical = build_canonical_hourly_panel(hourly)
     if canonical.empty:
         return {"status": "missing_data"}
 
+    features_before = market_proxy_model._extract_features(hourly, eps=1e-6)
     load = pd.to_numeric(canonical.get("load_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
     vre = pd.to_numeric(canonical.get("gen_vre_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
     must_run = pd.to_numeric(canonical.get("must_run_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
-    nrl_base = pd.to_numeric(canonical.get("nrl_mw"), errors="coerce").fillna(0.0)
+    residual_base = pd.to_numeric(features_before.get("residual_load_mw"), errors="coerce").fillna(0.0)
     export_base = pd.to_numeric(canonical.get("exports_net_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
-    psh_absorption = pd.to_numeric(canonical.get("psh_pumping_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
-    other_flex_absorption = pd.to_numeric(canonical.get("other_flex_sinks_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+    assigned_before = market_proxy_model.assign_buckets(features_before)
+    if risk_bucket_ids is None:
+        risk_bucket_ids = _top_risk_bucket_ids(market_proxy_model, top_n=4)
+    stress_mask = assigned_before["bucket_id"].isin(risk_bucket_ids).fillna(False).astype(float)
+    surplus_base = (-residual_base).clip(lower=0.0)
 
     avg_load = _safe_float(load.mean(), 0.0)
     export_ref = _safe_float(export_base.quantile(0.95), np.nan)
@@ -296,44 +314,43 @@ def _compute_hourly_proxy_metrics(
     flex_mw = max(0.0, _safe_float(flex_mw_additional, 0.0))
     coincidence = max(0.0, _safe_float(export_coincidence_factor, 1.0))
 
-    load_after = load + demand_mw
-    nrl_after = load_after - vre - must_run
-    surplus_after = (-nrl_after).clip(lower=0.0)
+    demand_series = pd.Series(demand_mw, index=load.index, dtype=float)
+    export_series = ((surplus_base > 0.0).astype(float) * export_mw * coincidence).astype(float)
+    if export_base.notna().any():
+        export_series = export_series.where((export_base > 0.0) | (surplus_base > 0.0), 0.0)
+    flex_series = (stress_mask * flex_mw).astype(float)
 
-    export_after = export_base + (surplus_after > 0.0).astype(float) * export_mw * coincidence
-    additional_flex_after = other_flex_absorption + (surplus_after > 0.0).astype(float) * flex_mw
-    absorbed_after = np.minimum(surplus_after, export_after + psh_absorption + additional_flex_after)
-    unabsorbed_after = (surplus_after - absorbed_after).clip(lower=0.0)
+    load_after = (load + demand_series + export_series + flex_series).clip(lower=0.0)
+    residual_after = load_after - vre - must_run
+    ir_after = must_run / np.maximum(load_after, 1e-6)
+    surplus_after = (-residual_after).clip(lower=0.0)
 
-    surplus_energy = float(pd.to_numeric(surplus_after, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
-    unabsorbed_energy = float(pd.to_numeric(unabsorbed_after, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    unabsorbed_energy = float(pd.to_numeric(surplus_after, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    surplus_energy_before = float(pd.to_numeric(surplus_base, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
     load_energy = float(pd.to_numeric(load_after, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
     sr_energy_after = (unabsorbed_energy / load_energy) if load_energy > 0.0 else np.nan
     sr_energy_after = float(np.clip(sr_energy_after, 0.0, 1.0)) if np.isfinite(sr_energy_after) else np.nan
-    sr_hours_after = float((pd.to_numeric(unabsorbed_after, errors="coerce").fillna(0.0) > 0.0).mean())
-    far_after = 1.0 if surplus_energy <= 0.0 else float(np.clip(1.0 - (unabsorbed_energy / max(surplus_energy, 1e-12)), 0.0, 1.0))
+    sr_hours_after = float((pd.to_numeric(surplus_after, errors="coerce").fillna(0.0) > 0.0).mean())
+    far_after = 1.0 if surplus_energy_before <= 0.0 else float(np.clip(1.0 - (unabsorbed_energy / max(surplus_energy_before, 1e-12)), 0.0, 1.0))
 
-    if mapping is None or mapping.empty:
-        mapping = fit_market_proxy(
-            pd.DataFrame(
-                {
-                    "nrl_mw": nrl_base,
-                    "price_da_eur_mwh": pd.to_numeric(hourly.get("price_da_eur_mwh"), errors="coerce"),
-                }
-            )
-        )
-
-    predicted_price_after = predict_prices(
-        mapping,
-        nrl_after,
-        ttl_shift_eur_mwh=_safe_float(ttl_shift_eur_mwh, 0.0),
-        shift_top_nrl_quantile=0.90,
+    features_after = pd.DataFrame(
+        {
+            "spot_price_eur_mwh": pd.to_numeric(features_before.get("spot_price_eur_mwh"), errors="coerce"),
+            "load_mw": load_after,
+            "vre_gen_mw": vre,
+            "must_run_mw": must_run,
+            "residual_load_mw": residual_after,
+            "ir_hour": ir_after,
+            "pv_gen_mw": pd.to_numeric(features_before.get("pv_gen_mw"), errors="coerce").fillna(0.0).clip(lower=0.0),
+            "wind_gen_mw": pd.to_numeric(features_before.get("wind_gen_mw"), errors="coerce").fillna(0.0).clip(lower=0.0),
+        },
+        index=features_before.index,
     )
-    counts = predict_event_counts(predicted_price_after)
-    h_negative_proxy_after = _safe_float(counts.get("h_negative_pred"), np.nan)
-    h_below5_proxy_after = _safe_float(counts.get("h_below5_pred"), np.nan)
-    if np.isfinite(h_negative_proxy_after) and np.isfinite(h_below5_proxy_after) and h_below5_proxy_after < h_negative_proxy_after:
-        h_below5_proxy_after = h_negative_proxy_after
+    est_after = market_proxy_model.estimate_from_features(features_after)
+    h_negative_est_after = _safe_float(est_after.get("h_negative_est"), np.nan)
+    h_below5_est_after = _safe_float(est_after.get("h_below_5_est"), np.nan)
+    if np.isfinite(h_negative_est_after) and np.isfinite(h_below5_est_after) and h_below5_est_after < h_negative_est_after:
+        h_below5_est_after = h_negative_est_after
 
     return {
         "status": "ok",
@@ -343,8 +360,16 @@ def _compute_hourly_proxy_metrics(
         "sr_energy_after": sr_energy_after,
         "sr_hours_after": sr_hours_after,
         "far_after": far_after,
-        "h_negative_proxy_after": h_negative_proxy_after,
-        "h_below_5_proxy_after": h_below5_proxy_after,
+        "h_negative_est_after": h_negative_est_after,
+        "h_below_5_est_after": h_below5_est_after,
+        "baseload_price_est_after": _safe_float(est_after.get("baseload_price_est"), np.nan),
+        "pv_capture_price_est_after": _safe_float(est_after.get("pv_capture_price_est"), np.nan),
+        "wind_capture_price_est_after": _safe_float(est_after.get("wind_capture_price_est"), np.nan),
+        "capture_ratio_pv_est_after": _safe_float(est_after.get("capture_ratio_pv_est"), np.nan),
+        "capture_ratio_wind_est_after": _safe_float(est_after.get("capture_ratio_wind_est"), np.nan),
+        # Legacy aliases.
+        "h_negative_proxy_after": h_negative_est_after,
+        "h_below_5_proxy_after": h_below5_est_after,
         "surplus_unabsorbed_twh_after": unabsorbed_energy / 1e6,
     }
 
@@ -355,17 +380,20 @@ def _solve_lever_binary_search(
     min_value: float,
     max_value: float,
     target_sr_energy: float,
-    target_h_negative_proxy: float,
+    target_h_negative_est: float,
     target_h_below_5: float,
+    require_sr_target: bool = True,
 ) -> dict[str, Any]:
     base = eval_fn(min_value)
     if str(base.get("status", "")).lower() != "ok":
         return {**base, "status": "missing_data", "required_uplift": np.nan}
 
     def _objective_ok(metrics: dict[str, Any]) -> bool:
-        sr_ok = _safe_float(metrics.get("sr_energy_after"), np.nan) <= float(target_sr_energy)
-        h_ok = _safe_float(metrics.get("h_negative_proxy_after"), np.nan) <= float(target_h_negative_proxy)
-        h5_ok = _safe_float(metrics.get("h_below_5_proxy_after"), np.nan) <= float(target_h_below_5)
+        sr_ok = True
+        if require_sr_target:
+            sr_ok = _safe_float(metrics.get("sr_energy_after"), np.nan) <= float(target_sr_energy)
+        h_ok = _safe_float(metrics.get("h_negative_est_after", metrics.get("h_negative_proxy_after")), np.nan) <= float(target_h_negative_est)
+        h5_ok = _safe_float(metrics.get("h_below_5_est_after", metrics.get("h_below_5_proxy_after")), np.nan) <= float(target_h_below_5)
         return bool(sr_ok and h_ok and h5_ok)
 
     if _objective_ok(base):
@@ -384,7 +412,7 @@ def _solve_lever_binary_search(
             **hi_metrics,
             "status": "not_achievable",
             "within_bounds": False,
-            "required_uplift": np.nan,
+            "required_uplift": float(max_value),
         }
 
     lo = float(min_value)
@@ -430,7 +458,8 @@ def run_q3(
     trend_window = max(2, int(params.get("trend_window_years", 3)))
     sr_energy_target = float(params.get("sr_energy_target", 0.01))
     target_sr_energy = float(selection.get("target_sr_energy", selection.get("target_sr", all_params.get("stage1_sr_energy_max", sr_energy_target))))
-    target_h_negative_proxy = float(selection.get("target_h_negative", all_params.get("stage1_h_negative_max", 200.0)))
+    target_h_negative_est = float(selection.get("target_h_negative", all_params.get("stage1_h_negative_max", 200.0)))
+    target_h_negative_proxy = target_h_negative_est  # Legacy alias
     target_h_below_5 = float(selection.get("target_h_below_5", all_params.get("stage1_h_below_5_max", 500.0)))
     slope_capture_target = float(params.get("slope_capture_target", params.get("trend_capture_ratio_min", 0.0)))
     mode = str(selection.get("mode", "HIST")).upper()
@@ -558,13 +587,13 @@ def run_q3(
                         "required_uplift_twh_per_year": 0.0,
                         "within_bounds": False,
                         "target_sr": target_sr_energy,
-                        "target_h_negative": target_h_negative_proxy,
+                        "target_h_negative": target_h_negative_est,
                         "target_h_below_5": target_h_below_5,
                         "predicted_sr_after": np.nan,
                         "predicted_far_after": np.nan,
                         "predicted_h_negative_after": np.nan,
                         "predicted_h_below_5_after": np.nan,
-                        "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
+                        "predicted_h_negative_metric": "MARKET_PROXY_BUCKET_MODEL_EST",
                         "applicability_flag": "HORS_SCOPE_PHASE2",
                         "status": "hors_scope_phase2",
                         "reason": "missing_panel",
@@ -620,13 +649,13 @@ def run_q3(
                         "required_uplift_twh_per_year": 0.0,
                         "within_bounds": False,
                         "target_sr": target_sr_energy,
-                        "target_h_negative": target_h_negative_proxy,
+                        "target_h_negative": target_h_negative_est,
                         "target_h_below_5": target_h_below_5,
                         "predicted_sr_after": np.nan,
                         "predicted_far_after": np.nan,
                         "predicted_h_negative_after": np.nan,
                         "predicted_h_below_5_after": np.nan,
-                        "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
+                        "predicted_h_negative_metric": "MARKET_PROXY_BUCKET_MODEL_EST",
                         "applicability_flag": "HORS_SCOPE_PHASE2",
                         "status": "hors_scope_phase2",
                         "reason": "q1_no_bascule",
@@ -717,24 +746,30 @@ def run_q3(
 
         avg_load_ref = np.nan
         n_hours_ref = np.nan
+        baseline_est: dict[str, Any] = {}
+        proxy_quality_status = "NOT_RUN"
+        proxy_quality_reasons = "not_run"
+        market_proxy_model: MarketProxyBucketModel | None = None
+        risk_bucket_ids: set[int] = set()
         if hourly_ref is None or hourly_ref.empty:
             demand_solver = {"status": "missing_data", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
             export_solver = {"status": "missing_data", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
             flex_solver = {"status": "missing_data", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
-            proxy_mapping = pd.DataFrame()
         else:
             canonical_ref = build_canonical_hourly_panel(hourly_ref)
             avg_load_ref = _safe_float(pd.to_numeric(canonical_ref.get("load_mw"), errors="coerce").mean(), np.nan)
             n_hours_ref = _safe_float(len(canonical_ref), np.nan)
             exports_ref = pd.to_numeric(canonical_ref.get("exports_net_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
-            proxy_mapping = fit_market_proxy(
-                pd.DataFrame(
-                    {
-                        "nrl_mw": pd.to_numeric(canonical_ref.get("nrl_mw"), errors="coerce"),
-                        "price_da_eur_mwh": pd.to_numeric(hourly_ref.get("price_da_eur_mwh"), errors="coerce"),
-                    }
-                )
-            )
+            try:
+                market_proxy_model = MarketProxyBucketModel.fit_baseline(hourly_ref, eps=1e-6)
+                baseline_est = market_proxy_model.estimate_from_hourly(hourly_ref)
+                proxy_quality_status = str(market_proxy_model.quality_summary.get("quality_status", "FAIL")).upper()
+                proxy_quality_reasons = str(market_proxy_model.quality_summary.get("quality_reasons", "")).strip()
+                risk_bucket_ids = _top_risk_bucket_ids(market_proxy_model, top_n=int(max(1, _safe_float(selection.get("q3_flex_risk_bucket_count"), 4.0))))
+            except Exception as exc:
+                market_proxy_model = None
+                proxy_quality_status = "FAIL"
+                proxy_quality_reasons = f"market_proxy_fit_error:{exc}"
 
             demand_cap_mw = _safe_float(selection.get("demand_uplift_max_mw"), np.nan)
             if not np.isfinite(demand_cap_mw) or demand_cap_mw <= 0.0:
@@ -750,56 +785,78 @@ def run_q3(
                 else:
                     flex_cap = max(1.0, _safe_float(avg_load_ref, 1000.0) * 0.05)
 
-            ttl_shift = _safe_float(selection.get("ttl_shift_eur_mwh"), 0.0)
-
-            demand_solver = _solve_lever_binary_search(
-                lambda x: _compute_hourly_proxy_metrics(
-                    hourly_ref,
-                    demand_uplift_mw=x,
-                    export_uplift_mw=0.0,
-                    flex_mw_additional=0.0,
-                    export_coincidence_factor=export_coincidence_factor,
-                    mapping=proxy_mapping,
-                    ttl_shift_eur_mwh=ttl_shift,
-                ),
-                min_value=0.0,
-                max_value=float(demand_cap_mw),
-                target_sr_energy=target_sr_energy,
-                target_h_negative_proxy=target_h_negative_proxy,
-                target_h_below_5=target_h_below_5,
-            )
-            export_solver = _solve_lever_binary_search(
-                lambda x: _compute_hourly_proxy_metrics(
-                    hourly_ref,
-                    demand_uplift_mw=0.0,
-                    export_uplift_mw=x,
-                    flex_mw_additional=0.0,
-                    export_coincidence_factor=export_coincidence_factor,
-                    mapping=proxy_mapping,
-                    ttl_shift_eur_mwh=ttl_shift,
-                ),
-                min_value=0.0,
-                max_value=float(export_cap_mw),
-                target_sr_energy=target_sr_energy,
-                target_h_negative_proxy=target_h_negative_proxy,
-                target_h_below_5=target_h_below_5,
-            )
-            flex_solver = _solve_lever_binary_search(
-                lambda x: _compute_hourly_proxy_metrics(
-                    hourly_ref,
-                    demand_uplift_mw=0.0,
-                    export_uplift_mw=0.0,
-                    flex_mw_additional=x,
-                    export_coincidence_factor=export_coincidence_factor,
-                    mapping=proxy_mapping,
-                    ttl_shift_eur_mwh=ttl_shift,
-                ),
-                min_value=0.0,
-                max_value=float(flex_cap),
-                target_sr_energy=target_sr_energy,
-                target_h_negative_proxy=target_h_negative_proxy,
-                target_h_below_5=target_h_below_5,
-            )
+            if market_proxy_model is None or proxy_quality_status == "FAIL":
+                demand_solver = {
+                    "status": "missing_data",
+                    "required_uplift": np.nan,
+                    "reason": "market_proxy_invalid",
+                }
+                export_solver = {
+                    "status": "missing_data",
+                    "required_uplift": np.nan,
+                    "reason": "market_proxy_invalid",
+                }
+                flex_solver = {
+                    "status": "missing_data",
+                    "required_uplift": np.nan,
+                    "reason": "market_proxy_invalid",
+                }
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q3_MARKET_PROXY_INVALID",
+                        "message": f"{country}: quality FAIL sur proxy marche ({proxy_quality_reasons or 'invalid'}).",
+                    }
+                )
+            else:
+                demand_solver = _solve_lever_binary_search(
+                    lambda x: _compute_hourly_proxy_metrics(
+                        hourly_ref,
+                        market_proxy_model=market_proxy_model,
+                        risk_bucket_ids=risk_bucket_ids,
+                        demand_uplift_mw=x,
+                        export_uplift_mw=0.0,
+                        flex_mw_additional=0.0,
+                        export_coincidence_factor=export_coincidence_factor,
+                    ),
+                    min_value=0.0,
+                    max_value=float(demand_cap_mw),
+                    target_sr_energy=target_sr_energy,
+                    target_h_negative_est=target_h_negative_est,
+                    target_h_below_5=target_h_below_5,
+                )
+                export_solver = _solve_lever_binary_search(
+                    lambda x: _compute_hourly_proxy_metrics(
+                        hourly_ref,
+                        market_proxy_model=market_proxy_model,
+                        risk_bucket_ids=risk_bucket_ids,
+                        demand_uplift_mw=0.0,
+                        export_uplift_mw=x,
+                        flex_mw_additional=0.0,
+                        export_coincidence_factor=export_coincidence_factor,
+                    ),
+                    min_value=0.0,
+                    max_value=float(export_cap_mw),
+                    target_sr_energy=target_sr_energy,
+                    target_h_negative_est=target_h_negative_est,
+                    target_h_below_5=target_h_below_5,
+                )
+                flex_solver = _solve_lever_binary_search(
+                    lambda x: _compute_hourly_proxy_metrics(
+                        hourly_ref,
+                        market_proxy_model=market_proxy_model,
+                        risk_bucket_ids=risk_bucket_ids,
+                        demand_uplift_mw=0.0,
+                        export_uplift_mw=0.0,
+                        flex_mw_additional=x,
+                        export_coincidence_factor=export_coincidence_factor,
+                    ),
+                    min_value=0.0,
+                    max_value=float(flex_cap),
+                    target_sr_energy=target_sr_energy,
+                    target_h_negative_est=target_h_negative_est,
+                    target_h_below_5=target_h_below_5,
+                )
 
         lever_to_solver = [
             ("demand_uplift", demand_solver),
@@ -813,8 +870,8 @@ def run_q3(
                 req_uplift_mw = 0.0
             pred_sr_after = _safe_float(solver.get("sr_energy_after"), np.nan)
             pred_far_after = _safe_float(solver.get("far_after"), np.nan)
-            pred_hneg_after = _safe_float(solver.get("h_negative_proxy_after"), np.nan)
-            pred_hb5_after = _safe_float(solver.get("h_below_5_proxy_after"), np.nan)
+            pred_hneg_after = _safe_float(solver.get("h_negative_est_after", solver.get("h_negative_proxy_after")), np.nan)
+            pred_hb5_after = _safe_float(solver.get("h_below_5_est_after", solver.get("h_below_5_proxy_after")), np.nan)
             req_uplift_pct = (
                 req_uplift_mw / avg_load_ref
                 if np.isfinite(req_uplift_mw) and np.isfinite(avg_load_ref) and avg_load_ref > 0.0
@@ -841,30 +898,41 @@ def run_q3(
                     "required_uplift_twh_per_year": req_uplift_twh if in_phase2_current else 0.0,
                     "within_bounds": bool(solver.get("within_bounds", False)) if in_phase2_current else False,
                     "target_sr": target_sr_energy,
-                    "target_h_negative": target_h_negative_proxy,
+                    "target_h_negative": target_h_negative_est,
                     "target_h_below_5": target_h_below_5,
                     "predicted_sr_after": pred_sr_after,
                     "predicted_far_after": pred_far_after,
                     "predicted_h_negative_after": pred_hneg_after,
                     "predicted_h_below_5_after": pred_hb5_after,
-                    "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
+                    "predicted_h_negative_metric": "MARKET_PROXY_BUCKET_MODEL_EST",
+                    "h_negative_obs_before": _safe_float(baseline_est.get("h_negative_obs"), np.nan),
+                    "h_below_5_obs_before": _safe_float(baseline_est.get("h_below_5_obs"), np.nan),
+                    "h_negative_est_before": _safe_float(baseline_est.get("h_negative_est"), np.nan),
+                    "h_below_5_est_before": _safe_float(baseline_est.get("h_below_5_est"), np.nan),
                     "applicability_flag": "APPLICABLE" if in_phase2_current else "HORS_SCOPE_PHASE2",
                     "status": out_status,
                     "reason": str(solver.get("reason", out_status)),
                     "export_coincidence_factor": export_coincidence_factor,
+                    "proxy_quality_status": proxy_quality_status,
+                    "proxy_quality_reasons": proxy_quality_reasons,
+                    "output_schema_version": Q3_OUTPUT_SCHEMA_VERSION,
                 }
             )
 
         demand_status = str(demand_solver.get("status", "missing_data")).lower()
         if in_phase2_current:
-            if demand_status == "already_ok":
+            if proxy_quality_status == "FAIL":
+                status = "FAIL"
+                reason_code = "market_proxy_invalid"
+                status_explanation = "Le proxy marche est invalide (quality FAIL), simulation non defensable."
+            elif demand_status == "already_ok":
                 status = "STOP_CONFIRMED"
                 reason_code = "already_meets_targets"
-                status_explanation = "Les cibles proxy marche sont deja respectees a uplift=0."
+                status_explanation = "Les cibles proxy marche EST sont deja respectees a uplift=0."
             elif demand_status == "not_achievable":
                 status = "CONTINUES"
                 reason_code = "targets_unreachable_within_bounds"
-                status_explanation = "Les cibles proxy ne sont pas atteignables dans les bornes de levier."
+                status_explanation = "Les cibles proxy EST ne sont pas atteignables dans les bornes de levier."
             elif demand_status == "missing_data":
                 status = "CONTINUES"
                 reason_code = "missing_data"
@@ -893,6 +961,10 @@ def run_q3(
             demand_uplift_twh,
         )
         mustrun_reduction_needed, mustrun_status = _required_mustrun_reduction(last, all_params, max_reduction=1.0)
+        if proxy_quality_status == "FAIL":
+            status = "FAIL"
+            reason_code = "market_proxy_invalid"
+            status_explanation = "Le proxy marche est invalide (quality FAIL)."
 
         rows.append(
             {
@@ -935,13 +1007,13 @@ def run_q3(
                 "turned_off_family_persistent_2y": bool(persistent_off),
                 "within_bounds": bool(demand_solver.get("within_bounds", False)) if in_phase2_current else False,
                 "target_sr": target_sr_energy,
-                "target_h_negative": target_h_negative_proxy,
+                "target_h_negative": target_h_negative_est,
                 "target_h_below_5": target_h_below_5,
                 "predicted_sr_after": _safe_float(demand_solver.get("sr_energy_after"), np.nan),
                 "predicted_far_after": _safe_float(demand_solver.get("far_after"), np.nan),
-                "predicted_h_negative_after": _safe_float(demand_solver.get("h_negative_proxy_after"), np.nan),
-                "predicted_h_below_5_after": _safe_float(demand_solver.get("h_below_5_proxy_after"), np.nan),
-                "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
+                "predicted_h_negative_after": _safe_float(demand_solver.get("h_negative_est_after", demand_solver.get("h_negative_proxy_after")), np.nan),
+                "predicted_h_below_5_after": _safe_float(demand_solver.get("h_below_5_est_after", demand_solver.get("h_below_5_proxy_after")), np.nan),
+                "predicted_h_negative_metric": "MARKET_PROXY_BUCKET_MODEL_EST",
                 "required_uplift_mw": 0.0 if demand_status == "already_ok" else _safe_float(demand_solver.get("required_uplift"), np.nan),
                 "required_uplift_pct_avg_load": (
                     (_safe_float(demand_solver.get("required_uplift"), np.nan) / avg_load_ref)
@@ -953,15 +1025,95 @@ def run_q3(
                     if demand_status != "already_ok" and np.isfinite(_safe_float(demand_solver.get("required_uplift"), np.nan)) and np.isfinite(n_hours_ref)
                     else (0.0 if demand_status == "already_ok" else np.nan)
                 ),
+                "h_negative_obs_before": _safe_float(baseline_est.get("h_negative_obs"), np.nan),
+                "h_below_5_obs_before": _safe_float(baseline_est.get("h_below_5_obs"), np.nan),
+                "h_negative_est_before": _safe_float(baseline_est.get("h_negative_est"), np.nan),
+                "h_below_5_est_before": _safe_float(baseline_est.get("h_below_5_est"), np.nan),
+                "h_negative_est_after": _safe_float(demand_solver.get("h_negative_est_after", demand_solver.get("h_negative_proxy_after")), np.nan),
+                "h_below_5_est_after": _safe_float(demand_solver.get("h_below_5_est_after", demand_solver.get("h_below_5_proxy_after")), np.nan),
+                "delta_h_negative_est": (
+                    _safe_float(demand_solver.get("h_negative_est_after", demand_solver.get("h_negative_proxy_after")), np.nan)
+                    - _safe_float(baseline_est.get("h_negative_est"), np.nan)
+                ),
+                "delta_h_below_5_est": (
+                    _safe_float(demand_solver.get("h_below_5_est_after", demand_solver.get("h_below_5_proxy_after")), np.nan)
+                    - _safe_float(baseline_est.get("h_below_5_est"), np.nan)
+                ),
+                "baseload_price_obs_before": _safe_float(baseline_est.get("baseload_price_obs"), np.nan),
+                "baseload_price_est_before": _safe_float(baseline_est.get("baseload_price_est"), np.nan),
+                "baseload_price_est_after": _safe_float(demand_solver.get("baseload_price_est_after"), np.nan),
+                "pv_capture_price_obs_before": _safe_float(baseline_est.get("pv_capture_price_obs"), np.nan),
+                "pv_capture_price_est_before": _safe_float(baseline_est.get("pv_capture_price_est"), np.nan),
+                "pv_capture_price_est_after": _safe_float(demand_solver.get("pv_capture_price_est_after"), np.nan),
+                "wind_capture_price_obs_before": _safe_float(baseline_est.get("wind_capture_price_obs"), np.nan),
+                "wind_capture_price_est_before": _safe_float(baseline_est.get("wind_capture_price_est"), np.nan),
+                "wind_capture_price_est_after": _safe_float(demand_solver.get("wind_capture_price_est_after"), np.nan),
+                "capture_ratio_pv_obs_before": _safe_float(baseline_est.get("capture_ratio_pv_obs"), np.nan),
+                "capture_ratio_pv_est_before": _safe_float(baseline_est.get("capture_ratio_pv_est"), np.nan),
+                "capture_ratio_pv_est_after": _safe_float(demand_solver.get("capture_ratio_pv_est_after"), np.nan),
+                "capture_ratio_wind_obs_before": _safe_float(baseline_est.get("capture_ratio_wind_obs"), np.nan),
+                "capture_ratio_wind_est_before": _safe_float(baseline_est.get("capture_ratio_wind_est"), np.nan),
+                "capture_ratio_wind_est_after": _safe_float(demand_solver.get("capture_ratio_wind_est_after"), np.nan),
+                "proxy_quality_status": proxy_quality_status,
+                "proxy_quality_reasons": proxy_quality_reasons,
+                "h_negative_before": _safe_float(baseline_est.get("h_negative_obs"), np.nan),
+                "h_negative_after": _safe_float(demand_solver.get("h_negative_est_after", demand_solver.get("h_negative_proxy_after")), np.nan),
+                "h_negative_after_source": "est_proxy",
+                "h_below_5_before": _safe_float(baseline_est.get("h_below_5_obs"), np.nan),
+                "h_below_5_after": _safe_float(demand_solver.get("h_below_5_est_after", demand_solver.get("h_below_5_proxy_after")), np.nan),
+                "h_below_5_after_source": "est_proxy",
+                "output_schema_version": Q3_OUTPUT_SCHEMA_VERSION,
                 "q2_slope_above_target": bool(np.isfinite(q2_slope) and q2_slope >= slope_capture_target),
             }
         )
 
     out = pd.DataFrame(rows)
     q3_inversion_requirements = pd.DataFrame(requirement_rows)
+    q3_quality_summary = pd.DataFrame()
+    if not out.empty:
+        defaults: dict[str, Any] = {
+            "proxy_quality_status": "NOT_RUN",
+            "proxy_quality_reasons": "not_run",
+            "output_schema_version": Q3_OUTPUT_SCHEMA_VERSION,
+            "h_negative_after_source": "est_proxy",
+            "h_below_5_after_source": "est_proxy",
+        }
+        for col, default in defaults.items():
+            if col not in out.columns:
+                out[col] = default
+            else:
+                out[col] = out[col].fillna(default)
+        q3_quality_summary = (
+            out[
+                [
+                    "country",
+                    "scenario_id",
+                    "reference_year",
+                    "proxy_quality_status",
+                    "proxy_quality_reasons",
+                    "output_schema_version",
+                ]
+            ]
+            .rename(columns={"reference_year": "year"})
+            .copy()
+        )
+        q3_quality_summary["module_id"] = "Q3"
+        q3_quality_summary["quality_status"] = q3_quality_summary["proxy_quality_status"]
+
     if out.empty:
         checks.append({"status": "FAIL", "code": "Q3_EMPTY", "message": "Aucune sortie Q3."})
     else:
+        proxy_fail = out["proxy_quality_status"].astype(str).str.upper().eq("FAIL")
+        if bool(proxy_fail.any()):
+            non_failed = ~out.loc[proxy_fail, "status"].astype(str).str.upper().eq("FAIL")
+            if bool(non_failed.any()):
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q3_PROXY_FAIL_NOT_PROPAGATED",
+                        "message": "proxy_quality_status=FAIL doit imposer status=FAIL sur Q3.",
+                    }
+                )
         add_needed = pd.to_numeric(out.get("additional_absorbed_needed_TWh_year"), errors="coerce")
         sink_p95 = pd.to_numeric(out.get("additional_sink_power_p95_mw"), errors="coerce")
         profile_status = out.get("additional_sink_profile_status", pd.Series("", index=out.index)).astype(str)
@@ -1073,7 +1225,11 @@ def run_q3(
         selection=selection,
         assumptions_used=assumptions_subset(assumptions_df, Q3_PARAMS),
         kpis=kpis,
-        tables={"Q3_status": out, "q3_inversion_requirements": q3_inversion_requirements},
+        tables={
+            "Q3_status": out,
+            "q3_inversion_requirements": q3_inversion_requirements,
+            "q3_quality_summary": q3_quality_summary,
+        },
         figures=[],
         narrative_md=narrative,
         checks=checks,

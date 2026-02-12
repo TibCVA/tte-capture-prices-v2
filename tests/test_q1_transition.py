@@ -265,3 +265,31 @@ def test_q1_emits_test_q1_001_reality_check(annual_panel_fixture):
     q1_checks = [c for c in res.checks if str(c.get("code")) == "TEST_Q1_001"]
     assert q1_checks
     assert all(str(c.get("status")) in {"PASS", "WARN", "FAIL"} for c in q1_checks)
+
+
+def test_q1_no_bascule_forces_at_bascule_nan_and_populates_end_year_block(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    df = annual_panel_fixture.copy()
+    df["h_negative_obs"] = 0.0
+    df["h_below_5_obs"] = 10.0
+    df["days_spread_gt50"] = 0.0
+    df["days_spread_50_obs"] = 0.0
+    df["capture_ratio_pv"] = 1.05
+    df["capture_ratio_wind"] = 1.05
+    df["sr_energy"] = 0.0
+    df["sr_hours"] = 0.0
+    df["far_energy"] = 0.99
+    df["far_observed"] = 0.99
+    df["ir_p10"] = 0.5
+
+    res = run_q1(df, assumptions, {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]}, "test")
+    summary = res.tables["Q1_country_summary"]
+    assert not summary.empty
+    row = summary.iloc[0]
+    assert pd.isna(row["bascule_year_market"])
+    assert str(row["bascule_status_market"]) == "not_reached_in_window"
+    bascule_cols = [c for c in summary.columns if c.endswith("_at_bascule")]
+    assert bascule_cols
+    assert summary.loc[[row.name], bascule_cols].isna().all(axis=None)
+    for col in ["end_year", "sr_energy_at_end_year", "h_negative_at_end_year", "capture_ratio_pv_at_end_year"]:
+        assert col in summary.columns

@@ -227,3 +227,46 @@ def test_q5_summary_contains_scenario_audit_fields(make_raw_panel, countries_cfg
     ]:
         assert col in out.index
     assert str(out["scenario_id"]) == "HIGH_CO2"
+
+
+def test_q5_emits_quality_summary_table(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    commodity = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=20, freq="D"),
+            "gas_price_eur_mwh_th": 35.0,
+            "co2_price_eur_t": 80.0,
+        }
+    )
+    res = run_q5(
+        hourly,
+        assumptions,
+        {"country": "FR", "year": 2024, "scenario_id": "BASE", "mode": "SCEN"},
+        "test",
+        commodity_daily=commodity,
+        ttl_target_eur_mwh=120.0,
+    )
+    quality = res.tables.get("q5_quality_summary", pd.DataFrame())
+    assert not quality.empty
+    assert {"module_id", "country", "year", "scenario_id", "quality_status", "output_schema_version"}.issubset(quality.columns)
+    assert set(quality["module_id"].astype(str).unique()) == {"Q5"}
+    assert set(quality["quality_status"].astype(str).unique()).issubset({"PASS", "WARN", "FAIL"})
+
+
+def test_q5_missing_commodities_emits_quality_summary(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q5(
+        hourly,
+        assumptions,
+        {"country": "FR", "year": 2024, "scenario_id": "BASE", "mode": "SCEN"},
+        "test",
+        commodity_daily=pd.DataFrame(),
+        ttl_target_eur_mwh=120.0,
+    )
+    quality = res.tables.get("q5_quality_summary", pd.DataFrame())
+    assert not quality.empty
+    assert quality.iloc[0]["quality_status"] == "WARN"

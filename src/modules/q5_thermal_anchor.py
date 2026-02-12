@@ -21,6 +21,8 @@ Q5_PARAMS = [
     "coal_vom_eur_mwh",
 ]
 
+Q5_OUTPUT_SCHEMA_VERSION = "2.0.0"
+
 ANCHOR_TECH_DEFAULTS = {
     "CCGT": {
         "efficiency": THERMAL_DEFAULTS["CCGT"]["efficiency"],
@@ -62,6 +64,12 @@ def _safe_float(value: Any, default: float = np.nan) -> float:
     except Exception:
         return float(default)
     return out if np.isfinite(out) else float(default)
+
+
+def _quality_status_from_checks(checks: list[dict[str, Any]]) -> str:
+    has_fail = any(str(c.get("status", "")).upper() == "FAIL" for c in checks)
+    has_warn = any(str(c.get("status", "")).upper() == "WARN" for c in checks)
+    return "FAIL" if has_fail else ("WARN" if has_warn else "PASS")
 
 
 def _required_abs_and_delta(
@@ -256,6 +264,20 @@ def run_q5(
                     "co2_required_base_non_negative": np.nan,
                     "co2_required_gas_override_non_negative": np.nan,
                     "warnings_quality": "missing_commodities",
+                    "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
+                }
+            ]
+        )
+        fallback_year = _safe_float(selection.get("horizon_year", selection.get("year")), np.nan)
+        q5_quality_summary = pd.DataFrame(
+            [
+                {
+                    "module_id": "Q5",
+                    "country": country,
+                    "year": int(fallback_year) if np.isfinite(fallback_year) else np.nan,
+                    "scenario_id": scenario_id_effective,
+                    "quality_status": _quality_status_from_checks(checks),
+                    "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
                 }
             ]
         )
@@ -265,7 +287,7 @@ def run_q5(
             selection=selection,
             assumptions_used=assumptions_subset(assumptions_df, Q5_PARAMS),
             kpis={},
-            tables={"Q5_summary": empty},
+            tables={"Q5_summary": empty, "q5_quality_summary": q5_quality_summary},
             figures=[],
             narrative_md="Q5 ne peut pas s'executer sans series journaliere gaz/CO2.",
             checks=checks,
@@ -493,12 +515,23 @@ def run_q5(
         ttl_model_eur_mwh = ttl_anchor_formula
         delta_tca_vs_base = np.nan
         delta_ttl_model_vs_base = np.nan
+        delta_capture_ratio_vs_base = np.nan
         coherence_flag = "MISSING_BASE"
     else:
         ttl_model_eur_mwh = (
             base_ttl_model_ref + (tca_current_eur_mwh - base_tca_ref) * pass_through_factor
             if np.isfinite(base_ttl_model_ref) and np.isfinite(base_tca_ref) and np.isfinite(tca_current_eur_mwh)
             else ttl_anchor_formula
+        )
+        capture_ratio_vs_tca = (
+            ttl_model_eur_mwh / tca_current_eur_mwh
+            if np.isfinite(ttl_model_eur_mwh) and np.isfinite(tca_current_eur_mwh) and abs(tca_current_eur_mwh) > 1e-12
+            else np.nan
+        )
+        base_capture_ratio_ref = (
+            base_ttl_model_ref / base_tca_ref
+            if np.isfinite(base_ttl_model_ref) and np.isfinite(base_tca_ref) and abs(base_tca_ref) > 1e-12
+            else np.nan
         )
         delta_tca_vs_base = (
             tca_current_eur_mwh - base_tca_ref
@@ -508,6 +541,11 @@ def run_q5(
         delta_ttl_model_vs_base = (
             ttl_model_eur_mwh - base_ttl_model_ref
             if np.isfinite(ttl_model_eur_mwh) and np.isfinite(base_ttl_model_ref)
+            else (0.0 if str(scenario_id_effective).upper() in {"HIST", "BASE"} else np.nan)
+        )
+        delta_capture_ratio_vs_base = (
+            capture_ratio_vs_tca - base_capture_ratio_ref
+            if np.isfinite(capture_ratio_vs_tca) and np.isfinite(base_capture_ratio_ref)
             else (0.0 if str(scenario_id_effective).upper() in {"HIST", "BASE"} else np.nan)
         )
         coherence_flag = (
@@ -655,6 +693,18 @@ def run_q5(
                 "message": "Gas scenario > base mais tca_ccgt_scenario < tca_ccgt_base.",
             }
         )
+    if (
+        base_ref_status == "ok"
+        and str(scenario_id_effective).upper() not in {"HIST", "BASE"}
+        and not np.isfinite(_safe_float(delta_capture_ratio_vs_base, np.nan))
+    ):
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q5_DELTA_CAPTURE_RATIO_NAN",
+                "message": "delta_capture_ratio_vs_base doit etre renseigne quand base_ref_status=ok.",
+            }
+        )
     if ttl_reference_mode == "year_specific" and np.isfinite(_safe_float(ref_year_used, np.nan)) and not annual_ttl.empty:
         annual_same = annual_ttl[annual_ttl["year"] == int(ref_year_used)]
         ttl_annual_same_year = _safe_float(annual_same["ttl_eur_mwh"].iloc[0], np.nan) if not annual_same.empty else np.nan
@@ -671,6 +721,7 @@ def run_q5(
                 )
     if not checks:
         checks.append({"status": "PASS", "code": "Q5_PASS", "message": "Q5 checks passes."})
+    module_quality_status = _quality_status_from_checks(checks)
 
     summary = pd.DataFrame(
         [
@@ -744,6 +795,7 @@ def run_q5(
                 "reason": base_ref_reason,
                 "delta_tca_vs_base": delta_tca_vs_base,
                 "delta_ttl_model_vs_base": delta_ttl_model_vs_base,
+                "delta_capture_ratio_vs_base": delta_capture_ratio_vs_base,
                 "coherence_flag": coherence_flag,
                 "required_co2_abs_raw_eur_t": raw_required_co2,
                 "required_gas_abs_raw_eur_mwh_th": raw_required_gas,
@@ -752,6 +804,7 @@ def run_q5(
                 "co2_required_base_non_negative": required_co2 if np.isfinite(required_co2) else np.nan,
                 "co2_required_gas_override_non_negative": required_co2 if gas_override_eur_mwh_th is not None and np.isfinite(required_co2) else np.nan,
                 "warnings_quality": "",
+                "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
             }
         ]
     )
@@ -781,7 +834,21 @@ def run_q5(
                 "reason": base_ref_reason,
                 "delta_tca_vs_base": delta_tca_vs_base,
                 "delta_ttl_model_vs_base": delta_ttl_model_vs_base,
+                "delta_capture_ratio_vs_base": delta_capture_ratio_vs_base,
                 "coherence_flag": coherence_flag,
+                "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
+            }
+        ]
+    )
+    q5_quality_summary = pd.DataFrame(
+        [
+            {
+                "module_id": "Q5",
+                "country": country,
+                "year": q5_year if np.isfinite(_safe_float(q5_year, np.nan)) else np.nan,
+                "scenario_id": scenario_id_effective,
+                "quality_status": module_quality_status,
+                "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
             }
         ]
     )
@@ -809,8 +876,9 @@ def run_q5(
             "delta_gas_vs_scenario": delta_gas_vs_scenario,
             "delta_tca_vs_base": delta_tca_vs_base,
             "delta_ttl_model_vs_base": delta_ttl_model_vs_base,
+            "delta_capture_ratio_vs_base": delta_capture_ratio_vs_base,
         },
-        tables={"Q5_summary": summary, "q5_anchor_sensitivity": q5_anchor_sensitivity},
+        tables={"Q5_summary": summary, "q5_anchor_sensitivity": q5_anchor_sensitivity, "q5_quality_summary": q5_quality_summary},
         figures=[],
         narrative_md=narrative,
         checks=checks,
