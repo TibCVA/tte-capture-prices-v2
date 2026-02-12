@@ -10,6 +10,7 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
+from src.core.market_proxy import fit_market_proxy, predict_event_counts, predict_prices
 from src.hash_utils import hash_object
 from src.modules.common import assumptions_subset
 from src.modules.result import ModuleResult
@@ -760,7 +761,26 @@ def run_q4(
         p10_mr = float(np.nanquantile(must_run_arr[must_run_arr >= 0.0], 0.10)) if len(must_run_arr) else np.nan
         ir_before = (p10_mr / p10_load) if np.isfinite(p10_mr) and np.isfinite(p10_load) and p10_load > 0 else np.nan
         sr_hours_share_before = float(np.mean(surplus > 0.0)) if len(surplus) else np.nan
-        x_knots, y_knots = _calibrate_price_model(price, nrl)
+        ttl_shift_eur_mwh = _safe_float(selection.get("ttl_shift_eur_mwh"), 0.0)
+        proxy_mapping = fit_market_proxy(
+            pd.DataFrame(
+                {
+                    "nrl_mw": nrl,
+                    "price_da_eur_mwh": price,
+                }
+            )
+        )
+        proxy_price_before = predict_prices(
+            proxy_mapping,
+            pd.Series(nrl, index=base.index),
+            ttl_shift_eur_mwh=ttl_shift_eur_mwh,
+            shift_top_nrl_quantile=0.90,
+        )
+        proxy_counts_before = predict_event_counts(proxy_price_before)
+        h_negative_proxy_before = int(_safe_float(proxy_counts_before.get("h_negative_pred"), h_negative_before))
+        h_below_5_proxy_before = int(_safe_float(proxy_counts_before.get("h_below5_pred"), h_below_5_before))
+        if h_below_5_proxy_before < h_negative_proxy_before:
+            h_below_5_proxy_before = h_negative_proxy_before
 
         baseline_metrics = {
             "h_negative": float(h_negative_before),
@@ -888,35 +908,33 @@ def run_q4(
                 )
 
                 neg_mask_before = np.where(np.isfinite(price), price < 0.0, False)
+                reducible_upper_bound_hours = _negative_price_reducible_upper_bound_hours(
+                    neg_mask=neg_mask_before,
+                    surplus_unabs_before=surplus_unabs_model,
+                    power_mw=cfg.power_mw,
+                    energy_mwh=cfg.energy_mwh,
+                    max_cycles_per_day=cfg.max_cycles_per_day,
+                    day_ranges=day_ranges,
+                )
+                h_negative_upper_bound_after = int(max(0, h_negative_before - reducible_upper_bound_hours))
+                proxy_price_after = predict_prices(
+                    proxy_mapping,
+                    pd.Series(nrl_after, index=base.index),
+                    ttl_shift_eur_mwh=ttl_shift_eur_mwh,
+                    shift_top_nrl_quantile=0.90,
+                )
+                proxy_counts_after = predict_event_counts(proxy_price_after)
+                h_negative_proxy_after_raw = int(_safe_float(proxy_counts_after.get("h_negative_pred"), np.nan))
+                h_below_5_proxy_after_raw = int(_safe_float(proxy_counts_after.get("h_below5_pred"), np.nan))
                 if cfg.power_mw <= 0.0 or cfg.energy_mwh <= 0.0:
-                    reducible_upper_bound_hours = 0
-                    h_negative_upper_bound_after = int(h_negative_before)
-                    h_negative_proxy_after_raw = int(h_negative_before)
+                    h_negative_proxy_after_raw = int(h_negative_proxy_before)
+                    h_below_5_proxy_after_raw = int(h_below_5_proxy_before)
                     h_negative_proxy_after = int(h_negative_before)
                     h_below_5_proxy_after = int(h_below_5_before)
                 else:
-                    reducible_upper_bound_hours = _negative_price_reducible_upper_bound_hours(
-                        neg_mask=neg_mask_before,
-                        surplus_unabs_before=surplus_unabs_model,
-                        power_mw=cfg.power_mw,
-                        energy_mwh=cfg.energy_mwh,
-                        max_cycles_per_day=cfg.max_cycles_per_day,
-                        day_ranges=day_ranges,
-                    )
-                    h_negative_upper_bound_after = int(max(0, h_negative_before - reducible_upper_bound_hours))
-                    nrl_q10_after = (
-                        float(np.nanquantile(nrl_after[np.isfinite(nrl_after)], 0.10))
-                        if np.isfinite(nrl_after).any()
-                        else np.nan
-                    )
-                    h_negative_proxy_mask = sim["unabs_after"] > 0.0
-                    if np.isfinite(nrl_q10_after):
-                        h_negative_proxy_mask = h_negative_proxy_mask | (nrl_after <= nrl_q10_after)
-                    h_negative_proxy_after_raw = int(np.sum(h_negative_proxy_mask))
-                    h_negative_proxy_after = int(
-                        min(h_negative_before, max(h_negative_proxy_after_raw, h_negative_upper_bound_after))
-                    )
-                    h_below_5_proxy_after = int(min(h_below_5_before, h_negative_proxy_after))
+                    h_negative_proxy_after = int(min(h_negative_before, h_negative_proxy_after_raw))
+                    h_below_5_proxy_after = int(min(h_below_5_before, h_below_5_proxy_after_raw))
+                    h_below_5_proxy_after = int(max(h_below_5_proxy_after, h_negative_proxy_after))
 
                 nrl_after_pos = nrl_after[nrl_after > 0.0]
                 low_residual_thr_after = float(np.nanquantile(nrl_after_pos, 0.10)) if len(nrl_after_pos) else np.nan
@@ -971,14 +989,17 @@ def run_q4(
                         "far_before_trivial": far_before_trivial,
                         "far_after_trivial": far_after_trivial,
                         "h_negative_before": h_negative_before,
+                        "h_negative_proxy_before": h_negative_proxy_before,
                         "h_negative_after": h_negative_proxy_after,
                         "h_negative_proxy_after": h_negative_proxy_after,
                         "h_negative_proxy_raw_after": h_negative_proxy_after_raw,
                         "h_negative_reducible_upper_bound": reducible_upper_bound_hours,
                         "h_negative_upper_bound_after": h_negative_upper_bound_after,
                         "h_below_5_before": h_below_5_before,
+                        "h_below_5_proxy_before": h_below_5_proxy_before,
                         "h_below_5_after": h_below_5_proxy_after,
                         "h_below_5_proxy_after": h_below_5_proxy_after,
+                        "h_below_5_proxy_raw_after": h_below_5_proxy_after_raw,
                         "delta_h_negative": float(h_negative_proxy_after - h_negative_before),
                         "delta_h_below_5": float(h_below_5_proxy_after - h_below_5_before),
                         "baseload_price_before": baseload_before,
@@ -1480,6 +1501,17 @@ def run_q4(
                     "message": "h_negative>0 mais aucun point de frontier ne reduit h_negative.",
                 }
             )
+    hneg_after_ser = pd.to_numeric(frontier.get("h_negative_after"), errors="coerce")
+    hbelow_after_ser = pd.to_numeric(frontier.get("h_below_5_after"), errors="coerce")
+    bad_order = hbelow_after_ser < hneg_after_ser
+    if bool(bad_order.fillna(False).any()):
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q4_HBELOW_LT_HNEG",
+                "message": "h_below_5_after doit etre >= h_negative_after sur toute la frontier.",
+            }
+        )
 
     # Objective satisfaction and selection rule.
     feasible = _objective_satisfied(frontier, objective, targets)
@@ -1491,6 +1523,7 @@ def run_q4(
     objective_met = False
     objective_reason = ""
     objective_recommendation = ""
+    not_sensitive = False
     if objective == "FAR_TARGET":
         objective_target_value = targets["target_far"]
     elif objective == "SURPLUS_UNABS_TARGET":
@@ -1503,6 +1536,31 @@ def run_q4(
         objective_target_value = 1.0
 
     if baseline_row is not None:
+        nonzero_rows = frontier[~zero_mask].copy()
+        has_effect = False
+        for mcol in [
+            "far_after",
+            "surplus_unabs_energy_after",
+            "h_negative_after",
+            "h_below_5_after",
+            "capture_ratio_pv_after",
+            "capture_ratio_wind_after",
+        ]:
+            if mcol not in frontier.columns:
+                continue
+            base_val = _safe_float(baseline_row.get(mcol), np.nan)
+            vals = pd.to_numeric(nonzero_rows.get(mcol), errors="coerce")
+            if vals.empty:
+                continue
+            if np.isfinite(base_val):
+                if bool((vals - base_val).abs().fillna(0.0).gt(1e-9).any()):
+                    has_effect = True
+                    break
+            elif vals.notna().any():
+                has_effect = True
+                break
+        not_sensitive = bool(nonzero_rows.empty or (not has_effect))
+
         if objective == "FAR_TARGET":
             baseline_met = bool(_safe_float(baseline_row.get("far_after"), -np.inf) >= targets["target_far"])
         elif objective == "SURPLUS_UNABS_TARGET":
@@ -1523,12 +1581,24 @@ def run_q4(
             objective_met = True
             objective_reason = "already_met"
             best = baseline_row
+        elif not_sensitive:
+            objective_met = False
+            objective_reason = "not_sensitive"
+            objective_recommendation = "not_sensitive_to_bess"
+            best = baseline_row
+            checks.append(
+                {
+                    "status": "WARN",
+                    "code": "Q4_NOT_SENSITIVE",
+                    "message": "Les configurations BESS testees ne modifient pas les metriques cibles; required=0.",
+                }
+            )
         else:
             best = None
     else:
         best = None
 
-    if not objective_met:
+    if (not objective_met) and (not not_sensitive):
         if not feasible.empty:
             objective_met = True
             objective_reason = "met_after_grid_expansion" if grid_expansions_used > 0 else "met_in_grid"
@@ -1619,6 +1689,12 @@ def run_q4(
                 "objective_met": objective_met,
                 "objective_reason": objective_reason,
                 "objective_not_reached": objective_not_reached,
+                "status": (
+                    "already_ok"
+                    if objective_reason == "already_met"
+                    else ("not_sensitive" if objective_reason == "not_sensitive" else ("ok" if objective_met else "not_achievable"))
+                ),
+                "reason": objective_reason,
                 "objective_target_value": objective_target_value,
                 "objective_recommendation": objective_recommendation,
                 "pv_capacity_proxy_mw": float(pv_capacity_proxy),

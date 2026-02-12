@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.core.canonical_metrics import build_canonical_hourly_panel
+from src.core.market_proxy import fit_market_proxy, predict_event_counts, predict_prices
 from src.modules.common import assumptions_subset
 from src.modules.q1_transition import run_q1
 from src.modules.q2_slope import run_q2
@@ -251,56 +253,99 @@ def _compute_hourly_proxy_metrics(
     hourly: pd.DataFrame,
     *,
     demand_uplift: float = 0.0,
+    demand_uplift_mw: float | None = None,
     export_uplift: float = 0.0,
+    export_uplift_mw: float | None = None,
     flex_mw_additional: float = 0.0,
     export_coincidence_factor: float = 1.0,
+    mapping: pd.DataFrame | None = None,
+    ttl_shift_eur_mwh: float = 0.0,
 ) -> dict[str, float]:
-    h = hourly.copy()
-    if h.empty:
-        return {"status": "NOT_CALCULABLE"}
+    if hourly is None or hourly.empty:
+        return {"status": "missing_data"}
 
-    load = _safe_series(h, "load_mw", np.nan)
-    if load.notna().sum() == 0:
-        load = _safe_series(h, "load_total_mw", np.nan) - _safe_series(h, "psh_pump_mw", 0.0).fillna(0.0)
-    vre = _safe_series(h, "gen_vre_mw", np.nan)
-    if vre.notna().sum() == 0:
-        vre = _safe_series(h, "gen_solar_mw", 0.0).fillna(0.0) + _safe_series(h, "gen_wind_on_mw", 0.0).fillna(0.0) + _safe_series(h, "gen_wind_off_mw", 0.0).fillna(0.0)
-    must_run = _safe_series(h, "gen_must_run_mw", 0.0).fillna(0.0)
-    net_position = _safe_series(h, "net_position_mw", 0.0).fillna(0.0)
-    psh = _safe_series(h, "psh_pump_mw", 0.0).fillna(0.0).clip(lower=0.0)
-    flex_obs = _safe_series(h, "flex_sink_observed_mw", np.nan)
-    export_base = net_position.clip(lower=0.0)
-    if flex_obs.notna().sum() == 0:
-        flex_obs = export_base + psh
-    else:
-        flex_obs = flex_obs.fillna(0.0).clip(lower=0.0)
+    canonical = build_canonical_hourly_panel(hourly)
+    if canonical.empty:
+        return {"status": "missing_data"}
 
-    load_after = load * (1.0 + max(0.0, float(demand_uplift)))
+    load = pd.to_numeric(canonical.get("load_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+    vre = pd.to_numeric(canonical.get("gen_vre_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+    must_run = pd.to_numeric(canonical.get("must_run_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+    nrl_base = pd.to_numeric(canonical.get("nrl_mw"), errors="coerce").fillna(0.0)
+    export_base = pd.to_numeric(canonical.get("exports_net_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+    psh_absorption = pd.to_numeric(canonical.get("psh_pumping_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+    other_flex_absorption = pd.to_numeric(canonical.get("other_flex_sinks_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+
+    avg_load = _safe_float(load.mean(), 0.0)
+    export_ref = _safe_float(export_base.quantile(0.95), np.nan)
+    if not np.isfinite(export_ref) or export_ref <= 0.0:
+        export_ref = max(1.0, _safe_float(export_base.mean(), 1.0))
+
+    demand_mw = _safe_float(demand_uplift_mw, np.nan)
+    if not np.isfinite(demand_mw):
+        raw = max(0.0, _safe_float(demand_uplift, 0.0))
+        demand_mw = raw * avg_load if raw <= 3.0 else raw
+    demand_mw = max(0.0, float(demand_mw))
+
+    export_mw = _safe_float(export_uplift_mw, np.nan)
+    if not np.isfinite(export_mw):
+        raw = max(0.0, _safe_float(export_uplift, 0.0))
+        export_mw = raw * export_ref if raw <= 3.0 else raw
+    export_mw = max(0.0, float(export_mw))
+
+    flex_mw = max(0.0, _safe_float(flex_mw_additional, 0.0))
+    coincidence = max(0.0, _safe_float(export_coincidence_factor, 1.0))
+
+    load_after = load + demand_mw
     nrl_after = load_after - vre - must_run
     surplus_after = (-nrl_after).clip(lower=0.0)
 
-    export_after = export_base * (1.0 + max(0.0, float(export_uplift))) * max(0.0, float(export_coincidence_factor))
-    other_sink = (flex_obs - export_base - psh).clip(lower=0.0)
-    base_sink_after = export_after + psh + other_sink
-    extra_flex_sink = pd.Series(0.0, index=h.index, dtype=float)
-    if float(flex_mw_additional) > 0.0:
-        extra_flex_sink = np.minimum(float(flex_mw_additional), surplus_after)
-    sink_after = base_sink_after + extra_flex_sink
-    absorbed_after = np.minimum(surplus_after, sink_after)
+    export_after = export_base + (surplus_after > 0.0).astype(float) * export_mw * coincidence
+    additional_flex_after = other_flex_absorption + (surplus_after > 0.0).astype(float) * flex_mw
+    absorbed_after = np.minimum(surplus_after, export_after + psh_absorption + additional_flex_after)
     unabsorbed_after = (surplus_after - absorbed_after).clip(lower=0.0)
 
-    sr_hours_after = float((unabsorbed_after > 0.0).mean())
-    nrl_q10 = _safe_float(pd.to_numeric(nrl_after, errors="coerce").quantile(0.10), np.nan)
-    proxy_mask = (unabsorbed_after > 0.0)
-    if np.isfinite(nrl_q10):
-        proxy_mask = proxy_mask | (nrl_after <= nrl_q10)
-    h_negative_proxy_after = float(proxy_mask.sum())
+    surplus_energy = float(pd.to_numeric(surplus_after, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    unabsorbed_energy = float(pd.to_numeric(unabsorbed_after, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    load_energy = float(pd.to_numeric(load_after, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    sr_energy_after = (unabsorbed_energy / load_energy) if load_energy > 0.0 else np.nan
+    sr_energy_after = float(np.clip(sr_energy_after, 0.0, 1.0)) if np.isfinite(sr_energy_after) else np.nan
+    sr_hours_after = float((pd.to_numeric(unabsorbed_after, errors="coerce").fillna(0.0) > 0.0).mean())
+    far_after = 1.0 if surplus_energy <= 0.0 else float(np.clip(1.0 - (unabsorbed_energy / max(surplus_energy, 1e-12)), 0.0, 1.0))
+
+    if mapping is None or mapping.empty:
+        mapping = fit_market_proxy(
+            pd.DataFrame(
+                {
+                    "nrl_mw": nrl_base,
+                    "price_da_eur_mwh": pd.to_numeric(hourly.get("price_da_eur_mwh"), errors="coerce"),
+                }
+            )
+        )
+
+    predicted_price_after = predict_prices(
+        mapping,
+        nrl_after,
+        ttl_shift_eur_mwh=_safe_float(ttl_shift_eur_mwh, 0.0),
+        shift_top_nrl_quantile=0.90,
+    )
+    counts = predict_event_counts(predicted_price_after)
+    h_negative_proxy_after = _safe_float(counts.get("h_negative_pred"), np.nan)
+    h_below5_proxy_after = _safe_float(counts.get("h_below5_pred"), np.nan)
+    if np.isfinite(h_negative_proxy_after) and np.isfinite(h_below5_proxy_after) and h_below5_proxy_after < h_negative_proxy_after:
+        h_below5_proxy_after = h_negative_proxy_after
 
     return {
-        "status": "OK",
+        "status": "ok",
+        "demand_uplift_mw": demand_mw,
+        "export_uplift_mw": export_mw,
+        "flex_uplift_mw": flex_mw,
+        "sr_energy_after": sr_energy_after,
         "sr_hours_after": sr_hours_after,
+        "far_after": far_after,
         "h_negative_proxy_after": h_negative_proxy_after,
-        "surplus_unabsorbed_twh_after": float(unabsorbed_after.sum()) / 1e6,
+        "h_below_5_proxy_after": h_below5_proxy_after,
+        "surplus_unabsorbed_twh_after": unabsorbed_energy / 1e6,
     }
 
 
@@ -309,35 +354,37 @@ def _solve_lever_binary_search(
     *,
     min_value: float,
     max_value: float,
-    target_sr_hours: float,
+    target_sr_energy: float,
     target_h_negative_proxy: float,
+    target_h_below_5: float,
 ) -> dict[str, Any]:
     base = eval_fn(min_value)
-    if str(base.get("status", "")) != "OK":
-        return {"status": "NOT_CALCULABLE", "required_uplift": np.nan, **base}
+    if str(base.get("status", "")).lower() != "ok":
+        return {**base, "status": "missing_data", "required_uplift": np.nan}
 
     def _objective_ok(metrics: dict[str, Any]) -> bool:
-        sr_ok = _safe_float(metrics.get("sr_hours_after"), np.nan) <= float(target_sr_hours)
+        sr_ok = _safe_float(metrics.get("sr_energy_after"), np.nan) <= float(target_sr_energy)
         h_ok = _safe_float(metrics.get("h_negative_proxy_after"), np.nan) <= float(target_h_negative_proxy)
-        return bool(sr_ok and h_ok)
+        h5_ok = _safe_float(metrics.get("h_below_5_proxy_after"), np.nan) <= float(target_h_below_5)
+        return bool(sr_ok and h_ok and h5_ok)
 
     if _objective_ok(base):
         return {
-            "status": "OK",
+            **base,
+            "status": "already_ok",
             "within_bounds": True,
             "required_uplift": float(min_value),
-            **base,
         }
 
     hi_metrics = eval_fn(max_value)
-    if str(hi_metrics.get("status", "")) != "OK":
-        return {"status": "NOT_CALCULABLE", "required_uplift": np.nan, **hi_metrics}
+    if str(hi_metrics.get("status", "")).lower() != "ok":
+        return {**hi_metrics, "status": "missing_data", "required_uplift": np.nan}
     if not _objective_ok(hi_metrics):
         return {
-            "status": "UNREACHABLE",
+            **hi_metrics,
+            "status": "not_achievable",
             "within_bounds": False,
             "required_uplift": np.nan,
-            **hi_metrics,
         }
 
     lo = float(min_value)
@@ -346,8 +393,8 @@ def _solve_lever_binary_search(
     for _ in range(40):
         mid = 0.5 * (lo + hi)
         m = eval_fn(mid)
-        if str(m.get("status", "")) != "OK":
-            return {"status": "NOT_CALCULABLE", "required_uplift": np.nan, **m}
+        if str(m.get("status", "")).lower() != "ok":
+            return {**m, "status": "missing_data", "required_uplift": np.nan}
         if _objective_ok(m):
             hi = mid
             best_metrics = m
@@ -356,10 +403,10 @@ def _solve_lever_binary_search(
         if abs(hi - lo) <= 1e-4:
             break
     return {
-        "status": "OK",
+        **best_metrics,
+        "status": "ok",
         "within_bounds": True,
         "required_uplift": float(hi),
-        **best_metrics,
     }
 
 
@@ -382,9 +429,9 @@ def run_q3(
     }
     trend_window = max(2, int(params.get("trend_window_years", 3)))
     sr_energy_target = float(params.get("sr_energy_target", 0.01))
-    target_sr_hours = float(selection.get("target_sr_hours", all_params.get("stage1_sr_hours_max", 0.05)))
+    target_sr_energy = float(selection.get("target_sr_energy", selection.get("target_sr", all_params.get("stage1_sr_energy_max", sr_energy_target))))
     target_h_negative_proxy = float(selection.get("target_h_negative", all_params.get("stage1_h_negative_max", 200.0)))
-    max_export_uplift = max(0.0, float(selection.get("export_uplift_max", all_params.get("q1_lever_max_uplift", 1.0))))
+    target_h_below_5 = float(selection.get("target_h_below_5", all_params.get("stage1_h_below_5_max", 500.0)))
     slope_capture_target = float(params.get("slope_capture_target", params.get("trend_capture_ratio_min", 0.0)))
     mode = str(selection.get("mode", "HIST")).upper()
     scenario_id = str(selection.get("scenario_id") or ("HIST" if mode == "HIST" else "SCEN"))
@@ -505,15 +552,21 @@ def run_q3(
                         "scenario_id": scenario_id,
                         "year": np.nan,
                         "lever": lever,
-                        "required_uplift": np.nan,
+                        "required_uplift": 0.0,
+                        "required_uplift_mw": 0.0,
+                        "required_uplift_pct_avg_load": 0.0,
+                        "required_uplift_twh_per_year": 0.0,
                         "within_bounds": False,
-                        "target_sr": target_sr_hours,
+                        "target_sr": target_sr_energy,
                         "target_h_negative": target_h_negative_proxy,
+                        "target_h_below_5": target_h_below_5,
                         "predicted_sr_after": np.nan,
+                        "predicted_far_after": np.nan,
                         "predicted_h_negative_after": np.nan,
-                        "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+                        "predicted_h_below_5_after": np.nan,
+                        "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
                         "applicability_flag": "HORS_SCOPE_PHASE2",
-                        "status": "NOT_CALCULABLE",
+                        "status": "hors_scope_phase2",
                         "reason": "missing_panel",
                     }
                 )
@@ -561,15 +614,21 @@ def run_q3(
                         "scenario_id": scenario_id,
                         "year": int(_safe_float(last_any.get("year"), np.nan)) if np.isfinite(_safe_float(last_any.get("year"), np.nan)) else np.nan,
                         "lever": lever,
-                        "required_uplift": np.nan,
+                        "required_uplift": 0.0,
+                        "required_uplift_mw": 0.0,
+                        "required_uplift_pct_avg_load": 0.0,
+                        "required_uplift_twh_per_year": 0.0,
                         "within_bounds": False,
-                        "target_sr": target_sr_hours,
+                        "target_sr": target_sr_energy,
                         "target_h_negative": target_h_negative_proxy,
+                        "target_h_below_5": target_h_below_5,
                         "predicted_sr_after": np.nan,
+                        "predicted_far_after": np.nan,
                         "predicted_h_negative_after": np.nan,
-                        "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+                        "predicted_h_below_5_after": np.nan,
+                        "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
                         "applicability_flag": "HORS_SCOPE_PHASE2",
-                        "status": "HORS_SCOPE_PHASE2",
+                        "status": "hors_scope_phase2",
                         "reason": "q1_no_bascule",
                     }
                 )
@@ -656,110 +715,164 @@ def run_q3(
         if not np.isfinite(export_coincidence_factor):
             export_coincidence_factor = 1.0
 
+        avg_load_ref = np.nan
+        n_hours_ref = np.nan
         if hourly_ref is None or hourly_ref.empty:
-            demand_solver = {"status": "NOT_CALCULABLE", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
-            export_solver = {"status": "NOT_CALCULABLE", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
-            flex_solver = {"status": "NOT_CALCULABLE", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
+            demand_solver = {"status": "missing_data", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
+            export_solver = {"status": "missing_data", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
+            flex_solver = {"status": "missing_data", "required_uplift": np.nan, "reason": "hourly_profile_unavailable"}
+            proxy_mapping = pd.DataFrame()
         else:
+            canonical_ref = build_canonical_hourly_panel(hourly_ref)
+            avg_load_ref = _safe_float(pd.to_numeric(canonical_ref.get("load_mw"), errors="coerce").mean(), np.nan)
+            n_hours_ref = _safe_float(len(canonical_ref), np.nan)
+            exports_ref = pd.to_numeric(canonical_ref.get("exports_net_mw"), errors="coerce").fillna(0.0).clip(lower=0.0)
+            proxy_mapping = fit_market_proxy(
+                pd.DataFrame(
+                    {
+                        "nrl_mw": pd.to_numeric(canonical_ref.get("nrl_mw"), errors="coerce"),
+                        "price_da_eur_mwh": pd.to_numeric(hourly_ref.get("price_da_eur_mwh"), errors="coerce"),
+                    }
+                )
+            )
+
+            demand_cap_mw = _safe_float(selection.get("demand_uplift_max_mw"), np.nan)
+            if not np.isfinite(demand_cap_mw) or demand_cap_mw <= 0.0:
+                demand_cap_mw = max(1.0, max(0.0, _safe_float(avg_load_ref, 0.0)) * max(0.0, float(params.get("demand_k_max", 0.30))))
+            export_cap_mw = _safe_float(selection.get("export_uplift_max_mw"), np.nan)
+            if not np.isfinite(export_cap_mw) or export_cap_mw <= 0.0:
+                export_cap_mw = max(1.0, _safe_float(exports_ref.quantile(0.95), 0.0) * max(0.5, _safe_float(all_params.get("q1_lever_max_uplift"), 1.0)))
+            flex_cap = _safe_float(selection.get("flex_uplift_max_mw", selection.get("flex_mw_max")), np.nan)
+            if not np.isfinite(flex_cap) or flex_cap <= 0.0:
+                nrl_proxy = pd.to_numeric(canonical_ref.get("nrl_mw"), errors="coerce")
+                if nrl_proxy.notna().sum() > 0:
+                    flex_cap = max(1.0, float((-nrl_proxy).clip(lower=0.0).quantile(0.95)) * 1.5)
+                else:
+                    flex_cap = max(1.0, _safe_float(avg_load_ref, 1000.0) * 0.05)
+
+            ttl_shift = _safe_float(selection.get("ttl_shift_eur_mwh"), 0.0)
+
             demand_solver = _solve_lever_binary_search(
                 lambda x: _compute_hourly_proxy_metrics(
                     hourly_ref,
-                    demand_uplift=x,
-                    export_uplift=0.0,
+                    demand_uplift_mw=x,
+                    export_uplift_mw=0.0,
                     flex_mw_additional=0.0,
                     export_coincidence_factor=export_coincidence_factor,
+                    mapping=proxy_mapping,
+                    ttl_shift_eur_mwh=ttl_shift,
                 ),
                 min_value=0.0,
-                max_value=max(0.0, float(params.get("demand_k_max", 0.30))),
-                target_sr_hours=target_sr_hours,
+                max_value=float(demand_cap_mw),
+                target_sr_energy=target_sr_energy,
                 target_h_negative_proxy=target_h_negative_proxy,
+                target_h_below_5=target_h_below_5,
             )
             export_solver = _solve_lever_binary_search(
                 lambda x: _compute_hourly_proxy_metrics(
                     hourly_ref,
-                    demand_uplift=0.0,
-                    export_uplift=x,
+                    demand_uplift_mw=0.0,
+                    export_uplift_mw=x,
                     flex_mw_additional=0.0,
                     export_coincidence_factor=export_coincidence_factor,
+                    mapping=proxy_mapping,
+                    ttl_shift_eur_mwh=ttl_shift,
                 ),
                 min_value=0.0,
-                max_value=max_export_uplift,
-                target_sr_hours=target_sr_hours,
+                max_value=float(export_cap_mw),
+                target_sr_energy=target_sr_energy,
                 target_h_negative_proxy=target_h_negative_proxy,
+                target_h_below_5=target_h_below_5,
             )
-            flex_cap = _safe_float(selection.get("flex_mw_max"), np.nan)
-            if not np.isfinite(flex_cap) or flex_cap <= 0.0:
-                nrl_proxy = _safe_series(hourly_ref, "nrl_mw", np.nan)
-                if nrl_proxy.notna().sum() > 0:
-                    flex_cap = max(1.0, float((-nrl_proxy).clip(lower=0.0).quantile(0.95)) * 1.5)
-                else:
-                    load_proxy = _safe_series(hourly_ref, "load_mw", np.nan)
-                    flex_cap = max(1.0, _safe_float(load_proxy.quantile(0.5), 1000.0) * 0.05)
             flex_solver = _solve_lever_binary_search(
                 lambda x: _compute_hourly_proxy_metrics(
                     hourly_ref,
-                    demand_uplift=0.0,
-                    export_uplift=0.0,
+                    demand_uplift_mw=0.0,
+                    export_uplift_mw=0.0,
                     flex_mw_additional=x,
                     export_coincidence_factor=export_coincidence_factor,
+                    mapping=proxy_mapping,
+                    ttl_shift_eur_mwh=ttl_shift,
                 ),
                 min_value=0.0,
                 max_value=float(flex_cap),
-                target_sr_hours=target_sr_hours,
+                target_sr_energy=target_sr_energy,
                 target_h_negative_proxy=target_h_negative_proxy,
+                target_h_below_5=target_h_below_5,
             )
 
-        for lever, solver in [
+        lever_to_solver = [
             ("demand_uplift", demand_solver),
             ("export_uplift", export_solver),
             ("flex_uplift", flex_solver),
-        ]:
-            raw_status = str(solver.get("status", "NOT_CALCULABLE")).upper()
-            if raw_status not in {"OK", "UNREACHABLE", "NOT_CALCULABLE"}:
-                raw_status = "NOT_CALCULABLE"
-            req_uplift = _safe_float(solver.get("required_uplift"), np.nan)
-            pred_sr_after = _safe_float(solver.get("sr_hours_after"), np.nan)
+        ]
+        for lever, solver in lever_to_solver:
+            raw_status = str(solver.get("status", "missing_data")).lower()
+            req_uplift_mw = _safe_float(solver.get("required_uplift"), np.nan)
+            if raw_status == "already_ok":
+                req_uplift_mw = 0.0
+            pred_sr_after = _safe_float(solver.get("sr_energy_after"), np.nan)
+            pred_far_after = _safe_float(solver.get("far_after"), np.nan)
             pred_hneg_after = _safe_float(solver.get("h_negative_proxy_after"), np.nan)
-            if raw_status == "OK" and not np.isfinite(req_uplift):
-                raw_status = "NOT_CALCULABLE"
+            pred_hb5_after = _safe_float(solver.get("h_below_5_proxy_after"), np.nan)
+            req_uplift_pct = (
+                req_uplift_mw / avg_load_ref
+                if np.isfinite(req_uplift_mw) and np.isfinite(avg_load_ref) and avg_load_ref > 0.0
+                else np.nan
+            )
+            req_uplift_twh = (
+                req_uplift_mw * n_hours_ref / 1e6
+                if np.isfinite(req_uplift_mw) and np.isfinite(n_hours_ref)
+                else np.nan
+            )
+            out_status = raw_status if in_phase2_current else "hors_scope_phase2"
+            out_required = req_uplift_mw if in_phase2_current else 0.0
+            if out_status not in {"ok", "already_ok", "not_achievable", "missing_data", "hors_scope_phase2"}:
+                out_status = "missing_data"
             requirement_rows.append(
                 {
                     "country": country,
                     "scenario_id": scenario_id,
                     "year": hourly_ref_year if hourly_ref_year is not None else (ref_year_int if ref_year_int is not None else np.nan),
                     "lever": lever,
-                    "required_uplift": req_uplift,
+                    "required_uplift": out_required,
+                    "required_uplift_mw": out_required,
+                    "required_uplift_pct_avg_load": req_uplift_pct if in_phase2_current else 0.0,
+                    "required_uplift_twh_per_year": req_uplift_twh if in_phase2_current else 0.0,
                     "within_bounds": bool(solver.get("within_bounds", False)) if in_phase2_current else False,
-                    "target_sr": target_sr_hours,
+                    "target_sr": target_sr_energy,
                     "target_h_negative": target_h_negative_proxy,
+                    "target_h_below_5": target_h_below_5,
                     "predicted_sr_after": pred_sr_after,
+                    "predicted_far_after": pred_far_after,
                     "predicted_h_negative_after": pred_hneg_after,
-                    "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+                    "predicted_h_below_5_after": pred_hb5_after,
+                    "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
                     "applicability_flag": "APPLICABLE" if in_phase2_current else "HORS_SCOPE_PHASE2",
-                    "status": raw_status if in_phase2_current else "HORS_SCOPE_PHASE2",
-                    "reason": str(solver.get("reason", raw_status.lower())),
+                    "status": out_status,
+                    "reason": str(solver.get("reason", out_status)),
                     "export_coincidence_factor": export_coincidence_factor,
                 }
             )
 
-        demand_status = str(demand_solver.get("status", "NOT_CALCULABLE")).upper()
+        demand_status = str(demand_solver.get("status", "missing_data")).lower()
         if in_phase2_current:
-            if demand_status == "OK" and _safe_float(demand_solver.get("required_uplift"), np.nan) <= 1e-6:
+            if demand_status == "already_ok":
                 status = "STOP_CONFIRMED"
                 reason_code = "already_meets_targets"
-                status_explanation = "Les cibles proxy sont deja respectees."
-            elif demand_status == "UNREACHABLE":
+                status_explanation = "Les cibles proxy marche sont deja respectees a uplift=0."
+            elif demand_status == "not_achievable":
                 status = "CONTINUES"
                 reason_code = "targets_unreachable_within_bounds"
-                status_explanation = "Les cibles proxy ne sont pas atteignables dans les bornes du levier."
-            elif demand_status == "NOT_CALCULABLE":
+                status_explanation = "Les cibles proxy ne sont pas atteignables dans les bornes de levier."
+            elif demand_status == "missing_data":
                 status = "CONTINUES"
-                reason_code = "not_calculable"
-                status_explanation = "Le calcul du levier demande est indisponible."
+                reason_code = "missing_data"
+                status_explanation = "Donnees insuffisantes pour calibrer le proxy marche."
             else:
                 status = "CONTINUES"
                 reason_code = "no_family_turned_off"
-                status_explanation = "Une hausse de demande est necessaire pour respecter les cibles proxy."
+                status_explanation = "Un uplift est requis pour atteindre les cibles proxy."
         else:
             status = "HORS_SCOPE_PHASE2"
             reason_code = "not_in_phase2"
@@ -801,17 +914,17 @@ def run_q3(
                 "surplus_energy_twh_recent": surplus_twh,
                 "target_absorption_twh": target_abs_twh,
                 "demand_uplift_twh": demand_uplift_twh,
-                "inversion_k_demand": _safe_float(demand_solver.get("required_uplift"), np.nan),
-                "inversion_k_demand_status": demand_status.lower(),
+                "inversion_k_demand": 0.0 if demand_status == "already_ok" else _safe_float(demand_solver.get("required_uplift"), np.nan),
+                "inversion_k_demand_status": demand_status,
                 "inversion_r_mustrun": mustrun_reduction_needed,
                 "inversion_r_mustrun_status": mustrun_status,
                 "inversion_f_flex": _safe_float(flex_solver.get("required_uplift"), np.nan),
-                "inversion_f_flex_status": str(flex_solver.get("status", "NOT_CALCULABLE")).upper().lower(),
+                "inversion_f_flex_status": str(flex_solver.get("status", "missing_data")).lower(),
                 "additional_absorbed_needed_TWh_year": demand_uplift_twh,
                 "additional_sink_power_p95_mw": sink_p95,
                 "additional_sink_profile_status": sink_profile_status,
                 "warnings_quality": "" if sink_profile_status in {"profile_weighted_surplus", "no_additional_energy_required"} else sink_profile_status,
-                "bascule_reference_year": float(int(bascule_ref)),
+                "bascule_reference_year": float(int(bascule_ref)) if np.isfinite(bascule_ref) else np.nan,
                 "bascule_reference_source": bascule_source,
                 "families_active_at_bascule": ",".join(sorted(active_bascule)),
                 "turned_off_low_price": bool(turned_off_map["LOW_PRICE"]),
@@ -821,11 +934,25 @@ def run_q3(
                 "turned_off_family_any": bool(turned_off_any),
                 "turned_off_family_persistent_2y": bool(persistent_off),
                 "within_bounds": bool(demand_solver.get("within_bounds", False)) if in_phase2_current else False,
-                "target_sr": target_sr_hours,
+                "target_sr": target_sr_energy,
                 "target_h_negative": target_h_negative_proxy,
-                "predicted_sr_after": _safe_float(demand_solver.get("sr_hours_after"), np.nan),
+                "target_h_below_5": target_h_below_5,
+                "predicted_sr_after": _safe_float(demand_solver.get("sr_energy_after"), np.nan),
+                "predicted_far_after": _safe_float(demand_solver.get("far_after"), np.nan),
                 "predicted_h_negative_after": _safe_float(demand_solver.get("h_negative_proxy_after"), np.nan),
-                "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+                "predicted_h_below_5_after": _safe_float(demand_solver.get("h_below_5_proxy_after"), np.nan),
+                "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
+                "required_uplift_mw": 0.0 if demand_status == "already_ok" else _safe_float(demand_solver.get("required_uplift"), np.nan),
+                "required_uplift_pct_avg_load": (
+                    (_safe_float(demand_solver.get("required_uplift"), np.nan) / avg_load_ref)
+                    if demand_status != "already_ok" and np.isfinite(_safe_float(demand_solver.get("required_uplift"), np.nan)) and np.isfinite(avg_load_ref) and avg_load_ref > 0.0
+                    else (0.0 if demand_status == "already_ok" else np.nan)
+                ),
+                "required_uplift_twh_per_year": (
+                    (_safe_float(demand_solver.get("required_uplift"), np.nan) * n_hours_ref / 1e6)
+                    if demand_status != "already_ok" and np.isfinite(_safe_float(demand_solver.get("required_uplift"), np.nan)) and np.isfinite(n_hours_ref)
+                    else (0.0 if demand_status == "already_ok" else np.nan)
+                ),
                 "q2_slope_above_target": bool(np.isfinite(q2_slope) and q2_slope >= slope_capture_target),
             }
         )
@@ -868,6 +995,8 @@ def run_q3(
             "target_sr",
             "predicted_h_negative_after",
             "target_h_negative",
+            "predicted_h_below_5_after",
+            "target_h_below_5",
         }
         if required_cols.issubset(set(out.columns)):
             tol = _safe_float(selection.get("q3_target_tolerance", 1e-6), 1e-6)
@@ -876,7 +1005,9 @@ def run_q3(
             tgt_sr = pd.to_numeric(out["target_sr"], errors="coerce")
             pred_hn = pd.to_numeric(out["predicted_h_negative_after"], errors="coerce")
             tgt_hn = pd.to_numeric(out["target_h_negative"], errors="coerce")
-            bad = wb & ((pred_sr > (tgt_sr + tol)) | (pred_hn > (tgt_hn + tol)))
+            pred_h5 = pd.to_numeric(out["predicted_h_below_5_after"], errors="coerce")
+            tgt_h5 = pd.to_numeric(out["target_h_below_5"], errors="coerce")
+            bad = wb & ((pred_sr > (tgt_sr + tol)) | (pred_hn > (tgt_hn + tol)) | (pred_h5 > (tgt_h5 + tol)))
             if bool(bad.any()):
                 for _, bad_row in out.loc[bad, ["country", "scenario_id"]].iterrows():
                     checks.append(
@@ -891,7 +1022,7 @@ def run_q3(
                     {
                         "status": "PASS",
                         "code": "TEST_Q3_001",
-                        "message": "Toutes les lignes within_bounds=true respectent target_sr et target_h_negative.",
+                        "message": "Toutes les lignes within_bounds=true respectent target_sr/target_h_negative/target_h_below_5.",
                     }
                 )
         else:
@@ -904,7 +1035,7 @@ def run_q3(
             )
 
     if not q3_inversion_requirements.empty:
-        ok_mask = q3_inversion_requirements["status"].astype(str).str.upper() == "OK"
+        ok_mask = q3_inversion_requirements["status"].astype(str).str.lower().isin(["ok", "already_ok"])
         pred_sr_nan = pd.to_numeric(q3_inversion_requirements["predicted_sr_after"], errors="coerce").isna()
         pred_h_nan = pd.to_numeric(q3_inversion_requirements["predicted_h_negative_after"], errors="coerce").isna()
         if bool((ok_mask & (pred_sr_nan | pred_h_nan)).any()):
@@ -912,7 +1043,7 @@ def run_q3(
                 {
                     "status": "FAIL",
                     "code": "Q3_PREDICTED_NAN_WITH_STATUS_OK",
-                    "message": "status=OK doit fournir predicted_sr_after et predicted_h_negative_after.",
+                    "message": "status in {ok,already_ok} doit fournir predicted_sr_after et predicted_h_negative_after.",
                 }
             )
 

@@ -10,6 +10,7 @@ def test_q2_slope_basic(annual_panel_fixture):
     res = run_q2(annual_panel_fixture, assumptions, {"countries": ["FR", "DE"]}, "test")
     out = res.tables["Q2_country_slopes"]
     assert not out.empty
+    assert "scenario_id" in out.columns
     assert "slope" in out.columns
     assert "phase2_start_year_for_slope" in out.columns
     assert "years_used" in out.columns
@@ -53,7 +54,7 @@ def test_q2_n_lt_3_has_nan_pvalue_and_no_ols(annual_panel_fixture):
     out = res.tables["Q2_country_slopes"]
     if out.empty:
         return
-    low_n = out[pd.to_numeric(out["n"], errors="coerce") < 4]
+    low_n = out[pd.to_numeric(out.get("n_points", out.get("n")), errors="coerce") < 3]
     if low_n.empty:
         return
     assert (~low_n["slope_method"].astype(str).eq("ols")).all()
@@ -72,6 +73,18 @@ def test_q2_two_point_slope_is_finite_when_x_varies(annual_panel_fixture):
     if endpoint.empty:
         return
     assert pd.to_numeric(endpoint["slope"], errors="coerce").notna().all()
+
+
+def test_q2_slope_per_1pp_consistency(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    out = run_q2(annual_panel_fixture, assumptions, {"countries": ["FR", "DE"]}, "test").tables["Q2_country_slopes"]
+    if out.empty:
+        return
+    slope = pd.to_numeric(out["slope"], errors="coerce")
+    slope_pp = pd.to_numeric(out["slope_per_1pp"], errors="coerce")
+    mask = slope.notna() & slope_pp.notna()
+    if mask.any():
+        assert ((slope_pp[mask] - (slope[mask] / 100.0)).abs() <= 1e-12).all()
 
 
 def test_q2_fragile_rows_have_cross_country_benchmark(annual_panel_fixture):

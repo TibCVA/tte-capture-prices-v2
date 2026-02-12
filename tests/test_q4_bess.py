@@ -152,7 +152,7 @@ def test_q4_summary_has_finite_far_and_nonzero_rec_when_objective_not_reached(ma
     assert 0.0 <= float(s["far_before"]) <= 1.0
     assert 0.0 <= float(s["far_after"]) <= 1.0
     if bool(s["objective_not_reached"]):
-        assert str(s["objective_reason"]) in {"grid_too_small", "unreachable_under_policy"}
+        assert str(s["objective_reason"]) in {"grid_too_small", "unreachable_under_policy", "not_sensitive"}
 
 
 def test_q4_frontier_has_join_keys(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):

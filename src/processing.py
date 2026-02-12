@@ -244,14 +244,15 @@ def build_hourly_table(
 
     # "Quasi-surplus" diagnostic signal (without changing A/B/C/D labels).
     nrl = pd.to_numeric(df[COL_NRL], errors="coerce")
-    nrl_pos = nrl.clip(lower=0.0)
+    nrl_pos = nrl[nrl > 0.0]
     if nrl_pos.notna().any():
         low_residual_threshold = float(nrl_pos.quantile(0.10))
     else:
         low_residual_threshold = float("nan")
     df[COL_LOW_RESIDUAL_THRESHOLD] = low_residual_threshold
     if np.isfinite(low_residual_threshold):
-        df[COL_LOW_RESIDUAL_HOUR] = (nrl >= 0.0) & (nrl <= low_residual_threshold)
+        # Low residual bucket must stay disjoint from surplus regimes A/B (NRL <= 0).
+        df[COL_LOW_RESIDUAL_HOUR] = (nrl > 0.0) & (nrl <= low_residual_threshold)
     else:
         df[COL_LOW_RESIDUAL_HOUR] = False
 

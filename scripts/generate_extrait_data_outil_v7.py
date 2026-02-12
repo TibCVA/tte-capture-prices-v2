@@ -191,10 +191,15 @@ def _extract_q1_transition_summary(run_dir: Path, countries: list[str], phase1_a
 
 
 def _extract_q2_slope_summary(run_dir: Path, countries: list[str]) -> pd.DataFrame:
-    df = _read_csv(run_dir / "Q2" / "hist" / "tables" / "Q2_country_slopes.csv", "Q2_country_slopes")
+    df = _load_table_across_modes(run_dir, "Q2", "Q2_country_slopes")
+    if df.empty:
+        df = _read_csv(run_dir / "Q2" / "hist" / "tables" / "Q2_country_slopes.csv", "Q2_country_slopes")
     df = df[df["country"].astype(str).isin(countries)].copy()
     if df.empty:
         return df
+    if "scenario_id" not in df.columns:
+        df["scenario_id"] = "HIST"
+    df["scenario_id"] = _pick(df, "scenario_id", default="HIST").astype(str).replace({"": "HIST", "nan": "HIST", "None": "HIST"})
 
     def _driver_stats(row: pd.Series) -> str:
         payload = {
@@ -208,6 +213,7 @@ def _extract_q2_slope_summary(run_dir: Path, countries: list[str]) -> pd.DataFra
 
     out = pd.DataFrame(
         {
+            "scenario_id": df["scenario_id"].astype(str),
             "country": df["country"].astype(str),
             "tech": df["tech"].astype(str),
             "x_var_used": df.get("x_axis_used", pd.Series("", index=df.index)).astype(str),
@@ -223,7 +229,7 @@ def _extract_q2_slope_summary(run_dir: Path, countries: list[str]) -> pd.DataFra
             "slope_quality_notes": df.get("slope_quality_notes", pd.Series("", index=df.index)).astype(str),
         }
     )
-    out = out.sort_values(["country", "tech"]).reset_index(drop=True)
+    out = out.sort_values(["country", "scenario_id", "tech"]).reset_index(drop=True)
     return out
 
 
@@ -238,8 +244,9 @@ def _extract_q3_inversion_requirements(run_dir: Path, countries: list[str], phas
         return df
 
     if "lever" not in df.columns:
-        target_sr = _assumption_value(phase1_assumptions, "stage1_sr_hours_max", default=np.nan)
+        target_sr = _assumption_value(phase1_assumptions, "stage1_sr_energy_max", default=np.nan)
         target_h_negative = _assumption_value(phase1_assumptions, "stage1_h_negative_max", default=np.nan)
+        target_h_below_5 = _assumption_value(phase1_assumptions, "stage1_h_below_5_max", default=np.nan)
         rows: list[dict[str, Any]] = []
         for _, row in df.iterrows():
             country = str(row.get("country", ""))
@@ -253,14 +260,20 @@ def _extract_q3_inversion_requirements(run_dir: Path, countries: list[str], phas
                         "year": year,
                         "lever": "demand_uplift",
                         "required_uplift": _to_num(pd.Series([row.get("inversion_k_demand")])).iloc[0],
+                        "required_uplift_mw": _to_num(pd.Series([row.get("required_uplift_mw", row.get("inversion_k_demand"))])).iloc[0],
+                        "required_uplift_pct_avg_load": _to_num(pd.Series([row.get("required_uplift_pct_avg_load")])).iloc[0],
+                        "required_uplift_twh_per_year": _to_num(pd.Series([row.get("required_uplift_twh_per_year")])).iloc[0],
                         "within_bounds": bool(row.get("within_bounds", False)),
                         "target_sr": target_sr,
                         "target_h_negative": target_h_negative,
+                        "target_h_below_5": target_h_below_5,
                         "predicted_sr_after": _to_num(pd.Series([row.get("predicted_sr_after")])).iloc[0],
+                        "predicted_far_after": _to_num(pd.Series([row.get("predicted_far_after")])).iloc[0],
                         "predicted_h_negative_after": _to_num(pd.Series([row.get("predicted_h_negative_after")])).iloc[0],
-                        "predicted_h_negative_metric": str(row.get("predicted_h_negative_metric", "PROXY_SURPLUS_OR_LOW_NRL")),
+                        "predicted_h_below_5_after": _to_num(pd.Series([row.get("predicted_h_below_5_after")])).iloc[0],
+                        "predicted_h_negative_metric": str(row.get("predicted_h_negative_metric", "MARKET_PROXY_NRL_LOOKUP")),
                         "applicability_flag": "APPLICABLE" if bool(row.get("in_phase2", False)) else "HORS_SCOPE_PHASE2",
-                        "status": str(row.get("status", "NOT_CALCULABLE")),
+                        "status": str(row.get("status", "missing_data")),
                         "reason": str(row.get("reason_code", "")),
                     },
                     {
@@ -269,14 +282,20 @@ def _extract_q3_inversion_requirements(run_dir: Path, countries: list[str], phas
                         "year": year,
                         "lever": "export_uplift",
                         "required_uplift": np.nan,
+                        "required_uplift_mw": np.nan,
+                        "required_uplift_pct_avg_load": np.nan,
+                        "required_uplift_twh_per_year": np.nan,
                         "within_bounds": False,
                         "target_sr": target_sr,
                         "target_h_negative": target_h_negative,
+                        "target_h_below_5": target_h_below_5,
                         "predicted_sr_after": np.nan,
+                        "predicted_far_after": np.nan,
                         "predicted_h_negative_after": np.nan,
-                        "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+                        "predicted_h_below_5_after": np.nan,
+                        "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
                         "applicability_flag": "APPLICABLE" if bool(row.get("in_phase2", False)) else "HORS_SCOPE_PHASE2",
-                        "status": "NOT_CALCULABLE",
+                        "status": "missing_data",
                         "reason": "legacy_q3_status_no_export_solver",
                     },
                     {
@@ -285,14 +304,20 @@ def _extract_q3_inversion_requirements(run_dir: Path, countries: list[str], phas
                         "year": year,
                         "lever": "flex_uplift",
                         "required_uplift": _to_num(pd.Series([row.get("inversion_f_flex")])).iloc[0],
+                        "required_uplift_mw": _to_num(pd.Series([row.get("required_uplift_mw", row.get("inversion_f_flex"))])).iloc[0],
+                        "required_uplift_pct_avg_load": _to_num(pd.Series([row.get("required_uplift_pct_avg_load")])).iloc[0],
+                        "required_uplift_twh_per_year": _to_num(pd.Series([row.get("required_uplift_twh_per_year")])).iloc[0],
                         "within_bounds": False,
                         "target_sr": target_sr,
                         "target_h_negative": target_h_negative,
+                        "target_h_below_5": target_h_below_5,
                         "predicted_sr_after": np.nan,
+                        "predicted_far_after": np.nan,
                         "predicted_h_negative_after": np.nan,
-                        "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+                        "predicted_h_below_5_after": np.nan,
+                        "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
                         "applicability_flag": "APPLICABLE" if bool(row.get("in_phase2", False)) else "HORS_SCOPE_PHASE2",
-                        "status": str(row.get("inversion_f_flex_status", "NOT_CALCULABLE")),
+                        "status": str(row.get("inversion_f_flex_status", "missing_data")),
                         "reason": str(row.get("reason_code", "")),
                     },
                 ]
@@ -302,9 +327,9 @@ def _extract_q3_inversion_requirements(run_dir: Path, countries: list[str], phas
     for col, default in {
         "scenario_id": "HIST",
         "year": np.nan,
-        "status": "NOT_CALCULABLE",
+        "status": "missing_data",
         "reason": "",
-        "predicted_h_negative_metric": "PROXY_SURPLUS_OR_LOW_NRL",
+        "predicted_h_negative_metric": "MARKET_PROXY_NRL_LOOKUP",
     }.items():
         if col not in df.columns:
             df[col] = default
@@ -315,11 +340,17 @@ def _extract_q3_inversion_requirements(run_dir: Path, countries: list[str], phas
         "year",
         "lever",
         "required_uplift",
+        "required_uplift_mw",
+        "required_uplift_pct_avg_load",
+        "required_uplift_twh_per_year",
         "within_bounds",
         "target_sr",
         "target_h_negative",
+        "target_h_below_5",
         "predicted_sr_after",
+        "predicted_far_after",
         "predicted_h_negative_after",
+        "predicted_h_below_5_after",
         "predicted_h_negative_metric",
         "applicability_flag",
         "status",
@@ -427,6 +458,11 @@ def _extract_q5_anchor_sensitivity(run_dir: Path, countries: list[str]) -> pd.Da
             "delta_tca_vs_base": pd.to_numeric(_pick(df, "delta_tca_vs_base"), errors="coerce"),
             "delta_ttl_model_vs_base": pd.to_numeric(_pick(df, "delta_ttl_model_vs_base"), errors="coerce"),
             "coherence_flag": _pick(df, "coherence_flag", default="").astype(str),
+            "ttl_proxy_method": _pick(df, "ttl_proxy_method", default="").astype(str),
+            "status": _pick(df, "status", default="").astype(str),
+            "reason": _pick(df, "reason", default="").astype(str),
+            "base_ref_status": _pick(df, "base_ref_status", default="").astype(str),
+            "base_ref_reason": _pick(df, "base_ref_reason", default="").astype(str),
         }
     )
 
@@ -439,9 +475,13 @@ def _extract_q5_anchor_sensitivity(run_dir: Path, countries: list[str]) -> pd.Da
         }
     )
     out = out.merge(base, on=["country", "year"], how="left")
-    out["delta_tca_vs_base"] = out["delta_tca_vs_base"].where(out["delta_tca_vs_base"].notna(), out["tca_ccgt_eur_mwh"] - out["base_tca"])
+    missing_base_mask = out["status"].astype(str).str.lower().eq("missing_base") | out["base_ref_status"].astype(str).str.lower().eq("missing_base")
+    out["delta_tca_vs_base"] = out["delta_tca_vs_base"].where(
+        out["delta_tca_vs_base"].notna() | missing_base_mask,
+        out["tca_ccgt_eur_mwh"] - out["base_tca"],
+    )
     out["delta_ttl_model_vs_base"] = out["delta_ttl_model_vs_base"].where(
-        out["delta_ttl_model_vs_base"].notna(),
+        out["delta_ttl_model_vs_base"].notna() | missing_base_mask,
         out["ttl_model_eur_mwh"] - out["base_ttl_model"],
     )
     hist_mask = out["scenario_id"].astype(str).str.upper() == "HIST"

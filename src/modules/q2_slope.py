@@ -114,7 +114,7 @@ def _endpoint_slope(df_xy: pd.DataFrame) -> dict[str, Any]:
 
 def _fit_slope(df_xy: pd.DataFrame, min_points: int) -> dict[str, Any]:
     n = int(len(df_xy))
-    if n < 4:
+    if n < 2:
         return {
             "slope": np.nan,
             "intercept": np.nan,
@@ -125,6 +125,8 @@ def _fit_slope(df_xy: pd.DataFrame, min_points: int) -> dict[str, Any]:
             "insufficient_points": True,
             "reason_code": "INSUFFICIENT_POINTS",
         }
+    if n < int(max(3, min_points)):
+        return _endpoint_slope(df_xy)
     if df_xy["x"].nunique(dropna=True) > 1:
         reg = robust_linreg(df_xy["x"], df_xy["y"])
         return {
@@ -266,16 +268,18 @@ def run_q2(
         validation_findings_df=validation_findings_df,
     )
     q1_panel = q1.tables["Q1_year_panel"].copy()
+    q1_summary = q1.tables.get("Q1_country_summary", pd.DataFrame()).copy()
 
     params = {
         str(r["param_name"]): float(r["param_value"])
         for _, r in assumptions_df[assumptions_df["param_name"].isin(Q2_PARAMS)].iterrows()
     }
-    min_points = max(4, int(params.get("min_points_regression", 4)))
+    min_points = max(3, int(params.get("min_points_regression", 4)))
     exclude_2022 = int(params.get("exclude_year_2022", 1)) == 1
     include_2022 = _to_bool(selection.get("include_2022"), default=False)
     if include_2022:
         exclude_2022 = False
+    scenario_id_effective = str(selection.get("scenario_id") or ("HIST" if str(selection.get("mode", "HIST")).upper() == "HIST" else "SCEN"))
 
     countries = selection.get("countries", sorted(annual_df["country"].dropna().unique().tolist()))
     panel = annual_df[annual_df["country"].isin(countries)].copy()
@@ -327,14 +331,19 @@ def run_q2(
 
     for country, group in panel.groupby("country"):
         group = group.sort_values("year").copy()
+        c_summary = (
+            q1_summary[q1_summary["country"].astype(str) == str(country)].copy()
+            if "country" in q1_summary.columns
+            else pd.DataFrame()
+        )
         for tech in ["PV", "WIND"]:
-            if tech == "PV" and "stage2_candidate_year_pv" in group.columns:
-                phase2_mask = pd.to_numeric(group.get("stage2_candidate_year_pv"), errors="coerce").fillna(0.0) > 0.0
-            elif tech == "WIND" and "stage2_candidate_year_wind" in group.columns:
-                phase2_mask = pd.to_numeric(group.get("stage2_candidate_year_wind"), errors="coerce").fillna(0.0) > 0.0
+            phase2_start_year, phase2_start_reason = _phase2_start_year(c_summary, tech=tech)
+            years_num = pd.to_numeric(group.get("year"), errors="coerce")
+            if np.isfinite(phase2_start_year):
+                phase2_scope = group[years_num >= float(phase2_start_year)].copy()
             else:
                 phase2_mask = pd.to_numeric(group.get("is_phase2_market"), errors="coerce").fillna(0.0) > 0.0
-            phase2_scope = group[phase2_mask].copy()
+                phase2_scope = group[phase2_mask].copy()
             phase2_scope["quality_ok"] = phase2_scope.get("quality_ok", True).fillna(False).astype(bool)
             phase2_scope["crisis_year"] = phase2_scope.get("crisis_year", False).fillna(False).astype(bool)
             phase2_scope["year_num"] = pd.to_numeric(phase2_scope.get("year"), errors="coerce")
@@ -348,10 +357,11 @@ def run_q2(
                 warnings.append(f"{country}-{tech}: aucun point phase2 Q1 exploitable.")
                 rows.append(
                     {
+                        "scenario_id": scenario_id_effective,
                         "country": country,
                         "tech": tech,
                         "phase2_start_year_for_slope": np.nan,
-                        "phase2_start_reason": "q1_no_phase2_market_year",
+                        "phase2_start_reason": phase2_start_reason if phase2_start_reason else "q1_no_phase2_market_year",
                         "phase2_end_year": np.nan,
                         "years_used": "",
                         "n_points": 0,
@@ -442,7 +452,7 @@ def run_q2(
                 fit["robust_flag"] = "ROBUST"
             else:
                 notes: list[str] = []
-                if n_points_fit < 4:
+                if n_points_fit < 3:
                     notes.append("INSUFFICIENT_POINTS")
                 if n_points_fit < 6:
                     notes.append("N_LT_6")
@@ -458,7 +468,7 @@ def run_q2(
                     notes.append("LOO_UNSTABLE")
                 slope_quality_flag = "WARN"
                 slope_quality_notes = "|".join(notes) if notes else str(fit.get("reason_code", "WARN"))
-                fit["robust_flag"] = "NON_TESTABLE" if n_points_fit < 4 else "FRAGILE"
+                fit["robust_flag"] = "NON_TESTABLE" if n_points_fit < 3 else "FRAGILE"
 
             corr_vre_load_phase2 = np.nan
             if {"gen_vre_twh", "load_net_twh"}.issubset(set(phase2_scope.columns)):
@@ -486,10 +496,11 @@ def run_q2(
 
             rows.append(
                 {
+                    "scenario_id": scenario_id_effective,
                     "country": country,
                     "tech": tech,
-                    "phase2_start_year_for_slope": phase2_start,
-                    "phase2_start_reason": "q1_phase2_market_years",
+                    "phase2_start_year_for_slope": int(phase2_start_year) if np.isfinite(phase2_start_year) else phase2_start,
+                    "phase2_start_reason": phase2_start_reason if phase2_start_reason else "q1_phase2_market_years",
                     "phase2_end_year": phase2_end,
                     "years_used": years_used,
                     "n_points": int(fit["n"]),
@@ -507,7 +518,7 @@ def run_q2(
                     "method": fit["slope_method"],
                     "insufficient_points": bool(fit["insufficient_points"]),
                     "robust_flag": fit["robust_flag"],
-                    "reason_code": fit["reason_code"],
+                    "reason_code": str(fit["reason_code"]).lower(),
                     "outlier_years_count": 0,
                     "slope_all_years": fit["slope"],
                     "slope_excluding_outliers": fit["slope"],
@@ -528,7 +539,7 @@ def run_q2(
             )
 
             if (
-                int(fit["n"]) >= 4
+                int(fit["n"]) >= 3
                 and str(fit["slope_method"]) == "ols"
                 and str(fit["robust_flag"]) == "ROBUST"
                 and np.isfinite(_safe_float(fit["slope"], np.nan))
@@ -542,20 +553,20 @@ def run_q2(
                     }
                 )
 
-            if int(fit["n"]) < 4 and str(fit["slope_method"]) == "ols":
+            if int(fit["n"]) < 3 and str(fit["slope_method"]) == "ols":
                 checks.append(
                     {
                         "status": "FAIL",
-                        "code": "Q2_N_LT_4_WITH_OLS",
-                        "message": f"{country}-{tech}: OLS interdit si n<4.",
+                        "code": "Q2_N_LT_3_WITH_OLS",
+                        "message": f"{country}-{tech}: OLS interdit si n<3.",
                     }
                 )
-            if int(fit["n"]) < 4 and np.isfinite(_safe_float(fit["p_value"], np.nan)):
+            if int(fit["n"]) < 3 and np.isfinite(_safe_float(fit["p_value"], np.nan)):
                 checks.append(
                     {
                         "status": "FAIL",
-                        "code": "Q2_N_LT_4_WITH_PVALUE",
-                        "message": f"{country}-{tech}: p_value doit etre NaN si n<4.",
+                        "code": "Q2_N_LT_3_WITH_PVALUE",
+                        "message": f"{country}-{tech}: p_value doit etre NaN si n<3.",
                     }
                 )
             if slope_quality_flag == "PASS" and _safe_float(fit.get("p_value"), np.nan) > 0.05:
@@ -593,6 +604,7 @@ def run_q2(
             corr, elast = _corr_and_elasticity(y_drv, x_drv)
             drivers_rows.append(
                 {
+                    "scenario_id": scenario_id_effective,
                     "country": country,
                     "driver_name": name,
                     "corr_capture_pv": corr,

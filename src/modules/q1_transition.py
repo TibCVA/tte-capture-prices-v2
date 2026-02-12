@@ -92,7 +92,11 @@ def _safe_ratio(a: Any, b: Any) -> float:
 
 
 def _quantile(series: pd.Series, q: float) -> float:
-    s = pd.to_numeric(series, errors="coerce").dropna()
+    s = pd.to_numeric(series, errors="coerce")
+    if isinstance(s, pd.Series):
+        s = s.dropna()
+    else:
+        s = pd.Series([s], dtype=float).dropna()
     if s.empty:
         return float("nan")
     return float(s.quantile(q))
@@ -657,11 +661,14 @@ def _drivers_at_bascule(row: pd.Series, p: dict[str, float]) -> str:
             drivers.append(
                 f"PHYSICAL:ir_p10>={_safe_param(p, 'ir_p10_stage2_min', 1.5):.2f} ({_safe_float(row.get('ir_p10'), np.nan):.3f})"
             )
-    if bool(row.get("flag_unexplained_negative_prices", False)):
-        drivers.append(
-            f"UNEXPLAINED_NEGATIVE_PRICES:share>{Q1_UNEXPLAINED_NEGATIVE_PRICES_MAX:.2f} ({_safe_float(row.get('share_neg_hours_unexplained'), np.nan):.3f})"
-        )
     return "; ".join(drivers)
+
+
+def _quality_flags_from_row(row: pd.Series) -> str:
+    flags: list[str] = []
+    if bool(row.get("flag_unexplained_negative_prices", False)):
+        flags.append("UNEXPLAINED_NEGATIVE_PRICES")
+    return "; ".join(flags)
 
 
 def _families_active_at_row(row: pd.Series, tech: str | None = None) -> str:
@@ -904,8 +911,18 @@ def _build_residual_diagnostics(
         row: dict[str, Any] = {"country": country, "year": year}
         if key in hourly_by_country_year and hourly_by_country_year[key] is not None and not hourly_by_country_year[key].empty:
             h = hourly_by_country_year[key]
-            nrl = pd.to_numeric(h.get("nrl_mw"), errors="coerce")
-            price = pd.to_numeric(h.get("price_da_eur_mwh"), errors="coerce")
+            nrl_raw = h.get("nrl_mw")
+            nrl = (
+                pd.to_numeric(nrl_raw, errors="coerce")
+                if isinstance(nrl_raw, pd.Series)
+                else pd.Series(np.nan, index=h.index, dtype=float)
+            )
+            price_raw = h.get("price_da_eur_mwh")
+            price = (
+                pd.to_numeric(price_raw, errors="coerce")
+                if isinstance(price_raw, pd.Series)
+                else pd.Series(np.nan, index=h.index, dtype=float)
+            )
             low_residual = (
                 pd.to_numeric(h.get("low_residual_hour"), errors="coerce").fillna(0.0) > 0
                 if "low_residual_hour" in h.columns
@@ -1026,11 +1043,21 @@ def _build_negative_price_explainability(
         if hourly is not None and not hourly.empty and COL_PRICE_DA in hourly.columns:
             price = pd.to_numeric(hourly.get(COL_PRICE_DA), errors="coerce")
             reg = hourly.get(COL_REGIME, pd.Series(index=hourly.index, dtype=object)).astype(str)
-            low_residual = (
-                pd.to_numeric(hourly.get(COL_LOW_RESIDUAL_HOUR), errors="coerce").fillna(0.0) > 0.0
-                if COL_LOW_RESIDUAL_HOUR in hourly.columns
-                else pd.Series(False, index=hourly.index)
-            )
+            if COL_LOW_RESIDUAL_HOUR in hourly.columns:
+                low_residual = pd.to_numeric(hourly.get(COL_LOW_RESIDUAL_HOUR), errors="coerce").fillna(0.0) > 0.0
+            else:
+                nrl_raw = hourly.get("nrl_mw")
+                nrl = (
+                    pd.to_numeric(nrl_raw, errors="coerce")
+                    if isinstance(nrl_raw, pd.Series)
+                    else pd.Series(np.nan, index=hourly.index, dtype=float)
+                )
+                nrl_pos = nrl[nrl > 0.0]
+                if nrl_pos.notna().any():
+                    low_residual_threshold = float(nrl_pos.quantile(0.10))
+                    low_residual = (nrl > 0.0) & (nrl <= low_residual_threshold)
+                else:
+                    low_residual = pd.Series(False, index=hourly.index, dtype=bool)
             neg = price < 0.0
             neg_count = int(neg.sum())
             neg_hours = float(neg_count)
@@ -1122,6 +1149,8 @@ def run_q1(
                 panel["share_neg_hours_unexplained"]
             )
             panel = panel.drop(columns=["share_neg_hours_unexplained_expl"])
+    panel["quality_flag_unexplained_neg_prices"] = panel.get("flag_unexplained_negative_prices", False).fillna(False).astype(bool)
+    panel["quality_flags"] = panel.apply(_quality_flags_from_row, axis=1)
 
     checks: list[dict[str, str]] = []
     warnings: list[str] = []
@@ -1189,6 +1218,8 @@ def run_q1(
                 bad_quality = ~around.get("quality_ok", pd.Series(False, index=around.index)).fillna(False).astype(bool)
                 if bool(bad_quality.fillna(False).any()):
                     confidence -= 0.10
+                if bool(around.get("flag_unexplained_negative_prices", pd.Series(False, index=around.index)).fillna(False).any()):
+                    confidence -= 0.20
             if not _is_market_persistent(group, bascule_year, persist_window):
                 confidence -= 0.20
         confidence = float(np.clip(confidence, 0.0, 1.0))
@@ -1238,6 +1269,8 @@ def run_q1(
                 "families_active_at_bascule_wind": _families_active_at_row(at_wind, tech="WIND"),
                 "families_active_at_bascule_country": _families_active_at_row(at, tech=None),
                 "drivers_at_bascule": _drivers_at_bascule(at, params),
+                "quality_flag_unexplained_neg_prices": bool(at.get("flag_unexplained_negative_prices", False)),
+                "quality_flags": _quality_flags_from_row(at),
                 "low_price_flags_count_at_bascule": int(_safe_float(at.get("low_price_flags_count"), 0.0)),
                 "physical_flags_count_at_bascule": int(_safe_float(at.get("physical_flags_count"), 0.0)),
                 "capture_flags_count_at_bascule": int(_safe_float(at.get("capture_flags_count"), 0.0)),
@@ -1404,6 +1437,8 @@ def run_q1(
         "crisis_year",
         "quality_flag",
         "quality_ok",
+        "quality_flag_unexplained_neg_prices",
+        "quality_flags",
         "stage2_candidate_year",
         "stage1_candidate_year",
         "phase2_candidate_year",

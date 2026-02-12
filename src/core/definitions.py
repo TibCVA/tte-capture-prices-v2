@@ -28,6 +28,7 @@ from src.constants import (
     COL_LOAD_NET,
     COL_LOAD_NET_MODE,
     COL_LOAD_TOTAL,
+    COL_NET_POSITION,
     COL_NRL,
     COL_PSH_PUMP,
     COL_PSH_PUMP_ALIAS,
@@ -232,8 +233,20 @@ def compute_scope_coverage_lowload(
     lowload_quantile: float = 0.20,
 ) -> float:
     load = pd.to_numeric(load_mw, errors="coerce")
-    mr = pd.to_numeric(must_run_mw, errors="coerce").fillna(0.0).clip(lower=0.0)
-    total = pd.to_numeric(total_generation_mw, errors="coerce").fillna(0.0).clip(lower=0.0)
+    if not isinstance(load, pd.Series):
+        load = pd.Series([load], dtype=float)
+    mr = pd.to_numeric(must_run_mw, errors="coerce")
+    if isinstance(mr, pd.Series):
+        mr = mr.reindex(load.index)
+    else:
+        mr = pd.Series(float(mr), index=load.index, dtype=float)
+    total = pd.to_numeric(total_generation_mw, errors="coerce")
+    if isinstance(total, pd.Series):
+        total = total.reindex(load.index)
+    else:
+        total = pd.Series(float(total), index=load.index, dtype=float)
+    mr = mr.fillna(0.0).clip(lower=0.0)
+    total = total.fillna(0.0).clip(lower=0.0)
     if load.dropna().empty:
         return float("nan")
     q = _finite_quantile(load, lowload_quantile)
@@ -252,6 +265,7 @@ def compute_core_hourly_definitions(
     *,
     prefer_net_of_psh_pump: bool = True,
     psh_missing_share_threshold: float = 0.05,
+    net_position_positive_is_export: bool = True,
     must_run_floor_quantile: float = 0.10,
     must_run_candidates: list[str] | tuple[str, ...] | None = None,
     fallback_must_run_profile_mw: pd.Series | None = None,
@@ -292,10 +306,29 @@ def compute_core_hourly_definitions(
     nrl_mw = load_mw - vre_mw - must_run.must_run_mw
     surplus_mw = (-nrl_mw).clip(lower=0.0)
 
-    exports_pos = _numeric_series(df, COL_EXPORTS, 0.0).fillna(0.0).clip(lower=0.0)
+    exports_raw = _numeric_series(df, COL_EXPORTS, np.nan)
+    if exports_raw.notna().any():
+        exports_pos = exports_raw.fillna(0.0).clip(lower=0.0)
+        export_sign_convention = "exports_mw_direct"
+    else:
+        net_position = _numeric_series(df, COL_NET_POSITION, 0.0).fillna(0.0)
+        if net_position_positive_is_export:
+            exports_pos = net_position.clip(lower=0.0)
+            export_sign_convention = "net_position_mw_positive_is_export"
+        else:
+            exports_pos = (-net_position).clip(lower=0.0)
+            export_sign_convention = "net_position_mw_negative_is_export"
+    psh_absorption = psh_pump_effective.fillna(0.0).clip(lower=0.0)
+
+    flex_obs_raw = _numeric_series(df, COL_FLEX_OBS, np.nan)
+    if flex_obs_raw.notna().any():
+        other_flex_obs = (flex_obs_raw.fillna(0.0).clip(lower=0.0) - exports_pos - psh_absorption).clip(lower=0.0)
+    else:
+        other_flex_obs = pd.Series(0.0, index=df.index, dtype=float)
     bess_charge = _numeric_series(df, COL_BESS_CHARGE, 0.0).fillna(0.0).clip(lower=0.0)
-    flex_obs = exports_pos + psh_pump_effective.fillna(0.0)
-    flex_sinks = flex_obs + bess_charge
+    additional_flex_absorption = (other_flex_obs + bess_charge).clip(lower=0.0)
+    flex_obs = (exports_pos + psh_absorption + other_flex_obs).clip(lower=0.0)
+    flex_sinks = (exports_pos + psh_absorption + additional_flex_absorption).clip(lower=0.0)
     absorbed_mw = np.minimum(surplus_mw.fillna(0.0), flex_sinks.fillna(0.0))
     unabsorbed_mw = (surplus_mw.fillna(0.0) - absorbed_mw).clip(lower=0.0)
 
@@ -317,6 +350,17 @@ def compute_core_hourly_definitions(
         total_generation_mw=_numeric_series(df, COL_GEN_TOTAL, 0.0).fillna(0.0).clip(lower=0.0),
     )
 
+    load_energy = float(pd.to_numeric(load_mw, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    surplus_energy = float(pd.to_numeric(surplus_mw, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    unabsorbed_energy = float(pd.to_numeric(unabsorbed_mw, errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    sr_energy_share_load = float(np.clip(_safe_ratio(unabsorbed_energy, load_energy), 0.0, 1.0)) if load_energy > 0.0 else np.nan
+    sr_hours_share_unabsorbed = float(np.clip((pd.to_numeric(unabsorbed_mw, errors="coerce").fillna(0.0) > 0.0).mean(), 0.0, 1.0))
+    far_energy_from_unabsorbed = (
+        1.0
+        if surplus_energy <= 0.0
+        else float(np.clip(1.0 - (unabsorbed_energy / max(surplus_energy, 1e-12)), 0.0, 1.0))
+    )
+
     return {
         COL_LOAD_NET: load_mw,
         COL_LOAD_NET_MODE: load_mode,
@@ -331,17 +375,24 @@ def compute_core_hourly_definitions(
         COL_NRL: nrl_mw,
         COL_SURPLUS: surplus_mw,
         COL_FLEX_OBS: flex_obs,
-        COL_FLEX_PSH: psh_pump_effective.fillna(0.0),
+        COL_FLEX_PSH: psh_absorption,
         COL_FLEX_EFFECTIVE: flex_sinks,
+        "export_absorption_mw": exports_pos,
+        "psh_absorption_mw": psh_absorption,
+        "additional_flex_absorption_mw": additional_flex_absorption,
         "flex_sinks_mw": flex_sinks,
         COL_SURPLUS_ABSORBED: pd.Series(absorbed_mw, index=df.index, dtype=float),
         COL_SURPLUS_UNABS: pd.Series(unabsorbed_mw, index=df.index, dtype=float),
         "sr_energy": balances.sr_energy,
         "far_energy": balances.far_energy,
+        "sr_energy_share_load": sr_energy_share_load,
+        "sr_hours_share_unabsorbed": sr_hours_share_unabsorbed,
+        "far_energy_from_unabsorbed": far_energy_from_unabsorbed,
         "ir_p10": balances.ir,
         "p10_load_mw": balances.p10_load_mw,
         "p10_must_run_mw": balances.p10_must_run_mw,
         "must_run_scope_coverage": scope_cov,
+        "export_sign_convention": export_sign_convention,
         "load_net_clamped_mask": load_psh_diag["load_net_clamped_mask"],
         "load_net_clamped_count": load_psh_diag["load_net_clamped_count"],
         "psh_negative_input_count": load_psh_diag["psh_negative_input_count"],
@@ -412,5 +463,10 @@ def sanity_check_core_definitions(df: pd.DataFrame, far_energy: float, sr_energy
             issues.append("FAR must equal 1 when surplus is zero")
         if unabs_sum > tol:
             issues.append("unabsorbed energy must be zero when surplus is zero")
+    elif np.isfinite(far_energy) and abs(float(far_energy) - 1.0) <= 1e-6:
+        load_sum = float(load.fillna(0.0).clip(lower=0.0).sum())
+        tol_unabs = max(1e-9, 1e-6 * max(load_sum, 1.0))
+        if unabs_sum > tol_unabs:
+            issues.append("FAR~1 but unabsorbed energy is not near zero")
 
     return issues

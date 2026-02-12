@@ -645,10 +645,19 @@ def _run_scen_module(
             if isinstance(base_anchor_by_country, dict):
                 anchor_ref = base_anchor_by_country.get(country, {})
                 if isinstance(anchor_ref, dict):
-                    if np.isfinite(_safe_float(anchor_ref.get("base_tca_eur_mwh"), np.nan)):
-                        scen_sel["base_tca_eur_mwh"] = _safe_float(anchor_ref.get("base_tca_eur_mwh"), np.nan)
-                    if np.isfinite(_safe_float(anchor_ref.get("base_ttl_observed_eur_mwh"), np.nan)):
-                        scen_sel["base_ttl_observed_eur_mwh"] = _safe_float(anchor_ref.get("base_ttl_observed_eur_mwh"), np.nan)
+                    for key in [
+                        "base_tca_eur_mwh",
+                        "base_tca_ccgt_eur_mwh",
+                        "base_tca_coal_eur_mwh",
+                        "base_ttl_observed_eur_mwh",
+                        "base_ttl_model_eur_mwh",
+                        "base_gas_eur_per_mwh_th",
+                        "base_co2_eur_per_t",
+                        "base_year_reference",
+                    ]:
+                        value = _safe_float(anchor_ref.get(key), np.nan)
+                        if np.isfinite(value):
+                            scen_sel[key] = value
             runs.append(
                 run_q5(
                     hourly_df=hourly,
@@ -1562,8 +1571,32 @@ def run_question_bundle(
                             brow.get("tca_current_eur_mwh", brow.get("ttl_anchor_formula")),
                             np.nan,
                         ),
+                        "base_tca_ccgt_eur_mwh": _safe_float(
+                            brow.get("tca_ccgt_eur_mwh", brow.get("tca_current_eur_mwh", brow.get("ttl_anchor_formula"))),
+                            np.nan,
+                        ),
+                        "base_tca_coal_eur_mwh": _safe_float(
+                            brow.get("tca_coal_eur_mwh"),
+                            np.nan,
+                        ),
                         "base_ttl_observed_eur_mwh": _safe_float(
                             brow.get("ttl_observed_eur_mwh", brow.get("ttl_obs")),
+                            np.nan,
+                        ),
+                        "base_ttl_model_eur_mwh": _safe_float(
+                            brow.get("ttl_model_eur_mwh", brow.get("ttl_observed_eur_mwh", brow.get("ttl_obs"))),
+                            np.nan,
+                        ),
+                        "base_gas_eur_per_mwh_th": _safe_float(
+                            brow.get("assumed_gas_price_eur_mwh_th"),
+                            np.nan,
+                        ),
+                        "base_co2_eur_per_t": _safe_float(
+                            brow.get("assumed_co2_price_eur_t"),
+                            np.nan,
+                        ),
+                        "base_year_reference": _safe_float(
+                            brow.get("ttl_reference_year", brow.get("year")),
                             np.nan,
                         ),
                     }

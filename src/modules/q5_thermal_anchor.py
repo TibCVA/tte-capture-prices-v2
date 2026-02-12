@@ -456,42 +456,73 @@ def run_q5(
     pass_through_factor = _safe_float(selection.get("pass_through_factor"), 1.0)
     if not np.isfinite(pass_through_factor):
         pass_through_factor = 1.0
+    base_scenario_id = str(selection.get("base_scenario_id", "BASE")).upper()
+    base_year_reference = _safe_float(selection.get("base_year_reference", ref_year_used), np.nan)
     base_tca_ref = _safe_float(
         selection.get("base_tca_eur_mwh", selection.get("base_tca_ccgt_eur_mwh")),
         np.nan,
     )
-    base_ttl_observed_ref = _safe_float(
-        selection.get("base_ttl_observed_eur_mwh", selection.get("base_ttl_obs")),
+    base_ttl_model_ref = _safe_float(
+        selection.get("base_ttl_model_eur_mwh", selection.get("base_ttl_observed_eur_mwh", selection.get("base_ttl_obs"))),
         np.nan,
     )
+    base_tca_ccgt_ref = _safe_float(selection.get("base_tca_ccgt_eur_mwh", base_tca_ref), np.nan)
+    base_tca_coal_ref = _safe_float(selection.get("base_tca_coal_eur_mwh"), np.nan)
+    base_gas_ref = _safe_float(selection.get("base_gas_eur_per_mwh_th", selection.get("base_gas_price_eur_mwh_th")), np.nan)
+    base_co2_ref = _safe_float(selection.get("base_co2_eur_per_t", selection.get("base_co2_price_eur_t")), np.nan)
+    base_ref_status = "ok"
+    base_ref_reason = ""
     if str(scenario_id_effective).upper() in {"HIST", "BASE"}:
         if not np.isfinite(base_tca_ref):
             base_tca_ref = _safe_float(tca_current_eur_mwh, np.nan)
-        if not np.isfinite(base_ttl_observed_ref):
-            base_ttl_observed_ref = _safe_float(ttl_obs, np.nan)
-    ttl_model_eur_mwh = (
-        base_ttl_observed_ref + (tca_current_eur_mwh - base_tca_ref) * pass_through_factor
-        if np.isfinite(base_ttl_observed_ref) and np.isfinite(base_tca_ref) and np.isfinite(tca_current_eur_mwh)
-        else ttl_anchor_formula
-    )
-    delta_tca_vs_base = (
-        tca_current_eur_mwh - base_tca_ref
-        if np.isfinite(tca_current_eur_mwh) and np.isfinite(base_tca_ref)
-        else (0.0 if str(scenario_id_effective).upper() in {"HIST", "BASE"} else np.nan)
-    )
-    delta_ttl_model_vs_base = (
-        ttl_model_eur_mwh - base_ttl_observed_ref
-        if np.isfinite(ttl_model_eur_mwh) and np.isfinite(base_ttl_observed_ref)
-        else (0.0 if str(scenario_id_effective).upper() in {"HIST", "BASE"} else np.nan)
-    )
-    coherence_flag = (
-        "PASS"
-        if (
-            (np.isfinite(delta_tca_vs_base) and np.isfinite(delta_ttl_model_vs_base)
-             and (np.sign(delta_tca_vs_base) == np.sign(delta_ttl_model_vs_base) or (abs(delta_tca_vs_base) <= 1e-12 and abs(delta_ttl_model_vs_base) <= 1e-12)))
-            or str(scenario_id_effective).upper() in {"HIST", "BASE"}
+        if not np.isfinite(base_ttl_model_ref):
+            base_ttl_model_ref = _safe_float(ttl_obs, np.nan)
+        if not np.isfinite(base_tca_ccgt_ref):
+            base_tca_ccgt_ref = _safe_float(tca_ccgt_eur_mwh, np.nan)
+        if not np.isfinite(base_tca_coal_ref):
+            base_tca_coal_ref = _safe_float(tca_coal_eur_mwh, np.nan)
+        if not np.isfinite(base_gas_ref):
+            base_gas_ref = _safe_float(assumed_gas, np.nan)
+        if not np.isfinite(base_co2_ref):
+            base_co2_ref = _safe_float(assumed_co2, np.nan)
+    else:
+        if not (np.isfinite(base_tca_ref) and np.isfinite(base_ttl_model_ref)):
+            base_ref_status = "missing_base"
+            base_ref_reason = "base_reference_not_provided"
+    if base_ref_status == "missing_base":
+        ttl_model_eur_mwh = ttl_anchor_formula
+        delta_tca_vs_base = np.nan
+        delta_ttl_model_vs_base = np.nan
+        coherence_flag = "MISSING_BASE"
+    else:
+        ttl_model_eur_mwh = (
+            base_ttl_model_ref + (tca_current_eur_mwh - base_tca_ref) * pass_through_factor
+            if np.isfinite(base_ttl_model_ref) and np.isfinite(base_tca_ref) and np.isfinite(tca_current_eur_mwh)
+            else ttl_anchor_formula
         )
-        else "WARN"
+        delta_tca_vs_base = (
+            tca_current_eur_mwh - base_tca_ref
+            if np.isfinite(tca_current_eur_mwh) and np.isfinite(base_tca_ref)
+            else (0.0 if str(scenario_id_effective).upper() in {"HIST", "BASE"} else np.nan)
+        )
+        delta_ttl_model_vs_base = (
+            ttl_model_eur_mwh - base_ttl_model_ref
+            if np.isfinite(ttl_model_eur_mwh) and np.isfinite(base_ttl_model_ref)
+            else (0.0 if str(scenario_id_effective).upper() in {"HIST", "BASE"} else np.nan)
+        )
+        coherence_flag = (
+            "PASS"
+            if (
+                (np.isfinite(delta_tca_vs_base) and np.isfinite(delta_ttl_model_vs_base)
+                 and (np.sign(delta_tca_vs_base) == np.sign(delta_ttl_model_vs_base) or (abs(delta_tca_vs_base) <= 1e-12 and abs(delta_ttl_model_vs_base) <= 1e-12)))
+                or str(scenario_id_effective).upper() in {"HIST", "BASE"}
+            )
+            else "WARN"
+        )
+    ttl_proxy_method = (
+        "observed_from_prices"
+        if np.isfinite(ttl_obs)
+        else ("cost_anchor_only" if np.isfinite(ttl_anchor_formula) else "market_proxy")
     )
     horizon_year = _safe_float(selection.get("horizon_year"), np.nan)
     q5_year = int(horizon_year) if np.isfinite(horizon_year) else (int(ref_year_used) if np.isfinite(_safe_float(ref_year_used, np.nan)) else np.nan)
@@ -588,6 +619,42 @@ def run_q5(
                     "message": "ttl_target <= ttl_anchor_formula: deltas requis fixes a 0.",
                 }
             )
+    if np.isfinite(ttl_model_eur_mwh) and ttl_model_eur_mwh < 0.0:
+        checks.append({"status": "FAIL", "code": "Q5_TTL_MODEL_NEGATIVE", "message": "ttl_model_eur_mwh doit etre >= 0."})
+    if (
+        base_ref_status == "ok"
+        and str(scenario_id_effective).upper() not in {"HIST", "BASE"}
+        and np.isfinite(base_co2_ref)
+        and np.isfinite(assumed_co2)
+        and assumed_co2 > base_co2_ref + 1e-9
+        and np.isfinite(base_tca_coal_ref)
+        and np.isfinite(tca_coal_eur_mwh)
+        and tca_coal_eur_mwh < base_tca_coal_ref - 1e-9
+    ):
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q5_CO2_UP_TCA_COAL_DOWN",
+                "message": "CO2 scenario > base mais tca_coal_scenario < tca_coal_base.",
+            }
+        )
+    if (
+        base_ref_status == "ok"
+        and str(scenario_id_effective).upper() not in {"HIST", "BASE"}
+        and np.isfinite(base_gas_ref)
+        and np.isfinite(assumed_gas)
+        and assumed_gas > base_gas_ref + 1e-9
+        and np.isfinite(base_tca_ccgt_ref)
+        and np.isfinite(tca_ccgt_eur_mwh)
+        and tca_ccgt_eur_mwh < base_tca_ccgt_ref - 1e-9
+    ):
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q5_GAS_UP_TCA_CCGT_DOWN",
+                "message": "Gas scenario > base mais tca_ccgt_scenario < tca_ccgt_base.",
+            }
+        )
     if ttl_reference_mode == "year_specific" and np.isfinite(_safe_float(ref_year_used, np.nan)) and not annual_ttl.empty:
         annual_same = annual_ttl[annual_ttl["year"] == int(ref_year_used)]
         ttl_annual_same_year = _safe_float(annual_same["ttl_eur_mwh"].iloc[0], np.nan) if not annual_same.empty else np.nan
@@ -664,6 +731,17 @@ def run_q5(
                 "tca_coal_eur_mwh": tca_coal_eur_mwh,
                 "tca_current_eur_mwh": tca_current_eur_mwh,
                 "pass_through_factor": pass_through_factor,
+                "base_scenario_id": base_scenario_id,
+                "base_year_reference": base_year_reference,
+                "base_ref_status": base_ref_status,
+                "base_ref_reason": base_ref_reason,
+                "base_tca_ref_eur_mwh": base_tca_ref,
+                "base_ttl_model_ref_eur_mwh": base_ttl_model_ref,
+                "base_gas_eur_per_mwh_th": base_gas_ref,
+                "base_co2_eur_per_t": base_co2_ref,
+                "ttl_proxy_method": ttl_proxy_method,
+                "status": base_ref_status,
+                "reason": base_ref_reason,
                 "delta_tca_vs_base": delta_tca_vs_base,
                 "delta_ttl_model_vs_base": delta_ttl_model_vs_base,
                 "coherence_flag": coherence_flag,
@@ -690,6 +768,17 @@ def run_q5(
                 "tca_coal_eur_mwh": tca_coal_eur_mwh,
                 "ttl_observed_eur_mwh": ttl_obs,
                 "ttl_model_eur_mwh": ttl_model_eur_mwh,
+                "base_scenario_id": base_scenario_id,
+                "base_year_reference": base_year_reference,
+                "base_ref_status": base_ref_status,
+                "base_ref_reason": base_ref_reason,
+                "base_tca_ref_eur_mwh": base_tca_ref,
+                "base_ttl_model_ref_eur_mwh": base_ttl_model_ref,
+                "base_gas_eur_per_mwh_th": base_gas_ref,
+                "base_co2_eur_per_t": base_co2_ref,
+                "ttl_proxy_method": ttl_proxy_method,
+                "status": base_ref_status,
+                "reason": base_ref_reason,
                 "delta_tca_vs_base": delta_tca_vs_base,
                 "delta_ttl_model_vs_base": delta_ttl_model_vs_base,
                 "coherence_flag": coherence_flag,

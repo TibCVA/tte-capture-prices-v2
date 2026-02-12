@@ -94,6 +94,7 @@ def test_q3_additional_absorbed_non_zero_when_flex_reduces_unabsorbed(annual_pan
             "family_turned_off_confirmed",
             "family_turned_off_recent",
             "no_family_turned_off",
+            "targets_unreachable_within_bounds",
         }
 
 
