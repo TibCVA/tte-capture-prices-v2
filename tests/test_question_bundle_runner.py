@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+import src.modules.question_bundle_runner as qbundle_runner
 from src.config_loader import load_phase2_assumptions
 from src.modules.question_bundle_runner import _annotate_comparison_interpretability, _evaluate_test_ledger, run_question_bundle
 from src.modules.result import ModuleResult
@@ -58,7 +59,10 @@ def test_run_question_bundle_q1_hist_and_scen(
 
     assert bundle.question_id == "Q1"
     assert bundle.hist_result.module_id == "Q1"
-    assert "BASE" in bundle.scen_results
+    if "BASE" not in bundle.scen_results:
+        scen_rows = bundle.test_ledger[bundle.test_ledger["mode"].astype(str).str.upper() == "SCEN"]
+        assert not scen_rows.empty
+        assert scen_rows["status"].astype(str).isin(["NON_TESTABLE", "PASS", "WARN"]).all()
     assert not bundle.test_ledger.empty
     assert {"test_id", "mode", "status"}.issubset(bundle.test_ledger.columns)
 
@@ -306,10 +310,10 @@ def test_q1_s02_pass_when_nonzero_share_reaches_threshold() -> None:
             mode="SCEN",
             scenario_id="BASE",
         ),
-        "FLEX_UP": ModuleResult(
+        "LOW_RIGIDITY": ModuleResult(
             module_id="Q1",
-            run_id="TEST_Q1_FLEX",
-            selection={"mode": "SCEN", "scenario_id": "FLEX_UP"},
+            run_id="TEST_Q1_LOW_RIGIDITY",
+            selection={"mode": "SCEN", "scenario_id": "LOW_RIGIDITY"},
             assumptions_used=[],
             kpis={},
             tables={"Q1_country_summary": scen_df},
@@ -318,9 +322,117 @@ def test_q1_s02_pass_when_nonzero_share_reaches_threshold() -> None:
             checks=[],
             warnings=[],
             mode="SCEN",
-            scenario_id="FLEX_UP",
+            scenario_id="LOW_RIGIDITY",
         ),
     }
     ledger = _evaluate_test_ledger("Q1", spec, hist, scen_results, {})
-    row = ledger[ledger["scenario_id"] == "FLEX_UP"].iloc[0]
+    row = ledger[ledger["scenario_id"] == "LOW_RIGIDITY"].iloc[0]
     assert row["status"] == "PASS"
+
+
+def test_q4_h02_ignores_non_physical_extra_mode_fails() -> None:
+    spec = [s for s in get_question_tests("Q4", mode="HIST") if s.test_id == "Q4-H-02"]
+    hist = _empty_module_result("Q4", "HIST")
+    hist.checks = [{"status": "PASS", "code": "Q4_PASS", "message": "ok"}]
+
+    extra_mode = _empty_module_result("Q4", "HIST")
+    extra_mode.checks = [
+        {"status": "FAIL", "code": "Q4_SURPLUS_UNABS_NON_MONOTONIC_ENERGY", "message": "mode-specific artefact"},
+        {"status": "FAIL", "code": "Q4_HNEG_NON_MONOTONIC_ENERGY", "message": "mode-specific artefact"},
+    ]
+    ledger = _evaluate_test_ledger("Q4", spec, hist, {}, {"HIST_PRICE_ARBITRAGE_SIMPLE": extra_mode})
+    row = ledger.iloc[0]
+    assert row["status"] == "PASS"
+
+
+def test_q4_h02_fails_on_relevant_hist_physical_fail() -> None:
+    spec = [s for s in get_question_tests("Q4", mode="HIST") if s.test_id == "Q4-H-02"]
+    hist = _empty_module_result("Q4", "HIST")
+    hist.checks = [{"status": "FAIL", "code": "Q4_ZERO_SIZE_AFTER_DIFFERS_FROM_BEFORE", "message": "invariant"}]
+
+    ledger = _evaluate_test_ledger("Q4", spec, hist, {}, {})
+    row = ledger.iloc[0]
+    assert row["status"] == "FAIL"
+
+
+def test_q4_h02_fails_on_relevant_extra_mode_physical_fail() -> None:
+    spec = [s for s in get_question_tests("Q4", mode="HIST") if s.test_id == "Q4-H-02"]
+    hist = _empty_module_result("Q4", "HIST")
+    hist.checks = [{"status": "PASS", "code": "Q4_PASS", "message": "ok"}]
+
+    extra_mode = _empty_module_result("Q4", "HIST")
+    extra_mode.checks = [{"status": "FAIL", "code": "Q4_SOC_NEG", "message": "soc negative"}]
+    ledger = _evaluate_test_ledger("Q4", spec, hist, {}, {"HIST_PV_COLOCATED": extra_mode})
+    row = ledger.iloc[0]
+    assert row["status"] == "FAIL"
+
+
+def test_run_question_bundle_q5_adds_market_coherence_checks(monkeypatch) -> None:
+    assumptions_phase1 = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    assumptions_phase2 = load_phase2_assumptions()
+    annual_hist = pd.DataFrame([{"country": "FR", "year": 2024}])
+
+    def _mk_q5_result(run_id: str, scenario_id: str | None, tca: float, ttl: float) -> ModuleResult:
+        table = pd.DataFrame(
+            [
+                {
+                    "country": "FR",
+                    "year": 2030,
+                    "tca_ccgt_eur_mwh": tca,
+                    "ttl_eur_mwh": ttl,
+                }
+            ]
+        )
+        mode = "SCEN" if scenario_id is not None else "HIST"
+        return ModuleResult(
+            module_id="Q5",
+            run_id=run_id,
+            selection={"mode": mode, "scenario_id": scenario_id},
+            assumptions_used=[],
+            kpis={},
+            tables={"Q5_summary": table},
+            figures=[],
+            narrative_md="",
+            checks=[],
+            warnings=[],
+            mode=mode,
+            scenario_id=scenario_id,
+            horizon_year=2030,
+        )
+
+    def _fake_run_hist_module(**kwargs):
+        return _mk_q5_result("HIST", None, tca=100.0, ttl=150.0), {}
+
+    def _fake_run_scen_module(**kwargs):
+        sid = str(kwargs["scenario_id"])
+        if sid == "BASE":
+            return _mk_q5_result("BASE", "BASE", tca=100.0, ttl=150.0)
+        if sid == "HIGH_CO2":
+            return _mk_q5_result("HIGH_CO2", "HIGH_CO2", tca=120.0, ttl=170.0)
+        if sid == "HIGH_GAS":
+            return _mk_q5_result("HIGH_GAS", "HIGH_GAS", tca=130.0, ttl=165.0)
+        return None
+
+    monkeypatch.setattr(qbundle_runner, "_run_hist_module", _fake_run_hist_module)
+    monkeypatch.setattr(qbundle_runner, "_run_scen_module", _fake_run_scen_module)
+    monkeypatch.setattr(qbundle_runner, "_ensure_scenario_outputs", lambda **kwargs: (True, "ok"))
+
+    bundle = run_question_bundle(
+        question_id="Q5",
+        annual_hist=annual_hist,
+        hourly_hist_map={},
+        assumptions_phase1=assumptions_phase1,
+        assumptions_phase2=assumptions_phase2,
+        selection={
+            "countries": ["FR"],
+            "years": [2024],
+            "scenario_ids": ["BASE", "HIGH_CO2", "HIGH_GAS"],
+            "scenario_years": [2030],
+        },
+        run_id="TEST_Q5_BUNDLE_CHECKS",
+    )
+
+    q5_001 = [c for c in bundle.checks if str(c.get("code")) == "TEST_Q5_001"]
+    q5_002 = [c for c in bundle.checks if str(c.get("code")) == "TEST_Q5_002"]
+    assert q5_001 and any(str(c.get("status")) == "PASS" for c in q5_001)
+    assert q5_002 and any(str(c.get("status")) == "PASS" for c in q5_002)

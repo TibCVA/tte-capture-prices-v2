@@ -1,0 +1,22 @@
+{
+  "verdict": "NON_COMPLET",
+  "numeric_issues": [],
+  "logic_issues": [
+    {
+      "question_id": "GLOBAL",
+      "issue": "aucun docx de slides fourni n'existe sur disque",
+      "slides_docx_provided_count": 2
+    }
+  ],
+  "narrative_issues": [],
+  "slides_missing_count": 0,
+  "slides_docx_provided_count": 2,
+  "slides_docx_existing_count": 0,
+  "slides_requirements_count": 0,
+  "slides_trace_rows": 0,
+  "slides_covered_yes": 0,
+  "slides_covered_no": 0,
+  "slides_extraction_empty_with_docs": false,
+  "slides_trace_empty": false,
+  "all_pass": false
+}

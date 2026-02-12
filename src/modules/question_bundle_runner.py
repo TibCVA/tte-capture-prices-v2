@@ -1094,10 +1094,37 @@ def _evaluate_test_ledger(
                     ok = expected_modes.issubset(set(extra_hist.keys()))
                     _append_test_row(rows, spec, "PASS" if ok else "FAIL", ",".join(sorted(extra_hist.keys())), "3 modes executes", "Les trois modes Q4 sont disponibles.")
                 else:
-                    all_checks = hist_result.checks + [c for r in extra_hist.values() for c in r.checks]
-                    statuses = [str(c.get("status", "")).upper() for c in all_checks]
-                    has_fail = "FAIL" in statuses
-                    has_warn = "WARN" in statuses
+                    # Q4-H-02 must stay strict on physical invariants while avoiding
+                    # strategy-mode artefacts (PRICE_ARBITRAGE/PV_COLOCATED) that are
+                    # not the physically-grounded reference mode for Q4.
+                    extra_relevant_fail_codes = {
+                        "Q4_EMPTY",
+                        "Q4_FRONTIER_KEY_MISSING",
+                        "Q4_SUMMARY_FAR_INVALID",
+                        "Q4_SOC_NEG",
+                        "Q4_SOC_ABOVE_EMAX",
+                        "Q4_CHARGE_ABOVE_PMAX",
+                        "Q4_DISCHARGE_ABOVE_PMAX",
+                        "Q4_FREE_ENERGY_NO_CHARGE",
+                        "Q4_ENERGY_BALANCE",
+                        "Q4_SIMULTANEOUS_CHARGE_DISCHARGE",
+                        "Q4_CHARGE_EXCEEDS_SURPLUS",
+                        "Q4_ZERO_SIZE_NOT_ZERO_FLOW",
+                        "Q4_ZERO_SIZE_AFTER_DIFFERS_FROM_BEFORE",
+                        "Q4_SOC_END_BOUNDARY",
+                    }
+                    hist_fails = [c for c in hist_result.checks if str(c.get("status", "")).upper() == "FAIL"]
+                    extra_relevant_fails = []
+                    for mode_res in extra_hist.values():
+                        for c in mode_res.checks:
+                            if str(c.get("status", "")).upper() != "FAIL":
+                                continue
+                            code = str(c.get("code", "")).upper()
+                            if code in extra_relevant_fail_codes:
+                                extra_relevant_fails.append(c)
+                    evaluated_checks = hist_result.checks + [c for r in extra_hist.values() for c in r.checks]
+                    has_fail = bool(hist_fails or extra_relevant_fails)
+                    has_warn = any(str(c.get("status", "")).upper() == "WARN" for c in evaluated_checks)
                     if has_fail:
                         status = "FAIL"
                         interp = "Au moins un invariant physique batterie est viole."
@@ -1606,6 +1633,157 @@ def run_question_bundle(
                             "scenario_id": "",
                         }
                     )
+        if qid == "Q5":
+            base_res = scen_results.get("BASE")
+            co2_res = scen_results.get("HIGH_CO2")
+            gas_res = scen_results.get("HIGH_GAS")
+            base_tbl = base_res.tables.get("Q5_summary", pd.DataFrame()) if base_res is not None else pd.DataFrame()
+            co2_tbl = co2_res.tables.get("Q5_summary", pd.DataFrame()) if co2_res is not None else pd.DataFrame()
+            gas_tbl = gas_res.tables.get("Q5_summary", pd.DataFrame()) if gas_res is not None else pd.DataFrame()
+
+            def _first_numeric_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+                for c in candidates:
+                    if c in df.columns:
+                        return c
+                return None
+
+            if base_tbl.empty or (co2_tbl.empty and gas_tbl.empty):
+                checks.append(
+                    {
+                        "status": "WARN",
+                        "code": "TEST_Q5_001",
+                        "message": "Comparaison BASE/HIGH_CO2/HIGH_GAS indisponible (table Q5_summary manquante).",
+                        "scope": "BUNDLE",
+                        "scenario_id": "",
+                    }
+                )
+                checks.append(
+                    {
+                        "status": "WARN",
+                        "code": "TEST_Q5_002",
+                        "message": "Impossible d'evaluer la coherence delta_ttl_vs_base vs delta_tca_vs_base (donnees manquantes).",
+                        "scope": "BUNDLE",
+                        "scenario_id": "",
+                    }
+                )
+            else:
+                # Harmonized key for cross-scenario matching.
+                def _norm(df: pd.DataFrame, sid: str) -> pd.DataFrame:
+                    out_df = df.copy()
+                    out_df["scenario_id"] = sid
+                    if "country" not in out_df.columns:
+                        out_df["country"] = ""
+                    if "year" in out_df.columns:
+                        out_df["year_key"] = pd.to_numeric(out_df["year"], errors="coerce")
+                    elif "ttl_reference_year" in out_df.columns:
+                        out_df["year_key"] = pd.to_numeric(out_df["ttl_reference_year"], errors="coerce")
+                    else:
+                        out_df["year_key"] = np.nan
+                    return out_df
+
+                base_n = _norm(base_tbl, "BASE")
+                tca_col = _first_numeric_col(base_n, ["tca_ccgt_eur_mwh", "tca_q95", "ttl_anchor_formula", "ttl_anchor"])
+                ttl_col = _first_numeric_col(base_n, ["ttl_eur_mwh", "ttl_obs", "ttl_target", "ttl_anchor"])
+                if tca_col is None:
+                    checks.append(
+                        {
+                            "status": "WARN",
+                            "code": "TEST_Q5_001",
+                            "message": "Colonne TCA absente de Q5_summary (BASE).",
+                            "scope": "BUNDLE",
+                            "scenario_id": "",
+                        }
+                    )
+                else:
+                    tca_fail = False
+                    sign_pairs = 0
+                    sign_same = 0
+
+                    def _eval_vs_base(scen_df: pd.DataFrame, sid: str) -> None:
+                        nonlocal tca_fail, sign_pairs, sign_same
+                        if scen_df.empty:
+                            return
+                        s_n = _norm(scen_df, sid)
+                        merge_cols = ["country", "year_key"]
+                        merged = s_n.merge(
+                            base_n[merge_cols + [tca_col] + ([ttl_col] if ttl_col is not None else [])].rename(
+                                columns={
+                                    tca_col: "tca_base",
+                                    ttl_col: "ttl_base" if ttl_col is not None else ttl_col,
+                                }
+                            ),
+                            on=merge_cols,
+                            how="inner",
+                        )
+                        if merged.empty:
+                            return
+                        tca_scen = pd.to_numeric(merged.get(tca_col), errors="coerce")
+                        tca_base = pd.to_numeric(merged.get("tca_base"), errors="coerce")
+                        delta_tca = tca_scen - tca_base
+                        bad = delta_tca < -1e-9
+                        if bool(bad.any()):
+                            tca_fail = True
+                            bad_rows = merged[bad].head(3)
+                            for _, bad_row in bad_rows.iterrows():
+                                checks.append(
+                                    {
+                                        "status": "FAIL",
+                                        "code": "TEST_Q5_001",
+                                        "message": f"{sid}<{bad_row.get('country','?')}>: tca scenario < base.",
+                                        "scope": "BUNDLE",
+                                        "scenario_id": "",
+                                    }
+                                )
+                        if ttl_col is None or "ttl_base" not in merged.columns:
+                            return
+                        ttl_scen = pd.to_numeric(merged.get(ttl_col), errors="coerce")
+                        ttl_base = pd.to_numeric(merged.get("ttl_base"), errors="coerce")
+                        delta_ttl = ttl_scen - ttl_base
+                        for dtca, dttl in zip(delta_tca.to_numpy(dtype=float), delta_ttl.to_numpy(dtype=float)):
+                            if not (np.isfinite(dtca) and np.isfinite(dttl)):
+                                continue
+                            sign_tca = 0 if abs(dtca) <= 1e-9 else (1 if dtca > 0 else -1)
+                            sign_ttl = 0 if abs(dttl) <= 1e-9 else (1 if dttl > 0 else -1)
+                            if sign_tca == 0 or sign_ttl == 0:
+                                continue
+                            sign_pairs += 1
+                            if sign_tca == sign_ttl:
+                                sign_same += 1
+
+                    _eval_vs_base(co2_tbl, "HIGH_CO2")
+                    _eval_vs_base(gas_tbl, "HIGH_GAS")
+
+                    if not tca_fail:
+                        checks.append(
+                            {
+                                "status": "PASS",
+                                "code": "TEST_Q5_001",
+                                "message": "HIGH_CO2/HIGH_GAS: TCA scenario >= BASE sur les paires comparables.",
+                                "scope": "BUNDLE",
+                                "scenario_id": "",
+                            }
+                        )
+                    if sign_pairs > 0:
+                        share = sign_same / sign_pairs
+                        checks.append(
+                            {
+                                "status": "PASS" if share >= 0.5 else "WARN",
+                                "code": "TEST_Q5_002",
+                                "message": f"Coherence signe delta_ttl vs delta_tca: {share:.1%} ({sign_same}/{sign_pairs}).",
+                                "scope": "BUNDLE",
+                                "scenario_id": "",
+                            }
+                        )
+                    else:
+                        checks.append(
+                            {
+                                "status": "WARN",
+                                "code": "TEST_Q5_002",
+                                "message": "Aucune paire exploitable pour comparer les signes delta_ttl_vs_base et delta_tca_vs_base.",
+                                "scope": "BUNDLE",
+                                "scenario_id": "",
+                            }
+                        )
 
     warnings.extend(hist_result.warnings)
     for sid, scen_res in scen_results.items():

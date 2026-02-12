@@ -1,0 +1,17 @@
+country,scenario_id,metric,hist_value,scen_value,delta,scen_status,interpretability_status,interpretability_reason
+DE,HIGH_CO2,far_after,1.0,1.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIGH_CO2,surplus_unabs_energy_after,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIGH_CO2,pv_capture_price_after,49.001468765658025,138.25894900423287,89.25748023857486,,INFORMATIVE,delta_interpretable
+ES,HIGH_CO2,far_after,0.9995517261480726,1.0,0.0004482738519273,,INFORMATIVE,delta_interpretable
+ES,HIGH_CO2,surplus_unabs_energy_after,0.0015989982091109,0.0,-0.0015989982091109,,INFORMATIVE,delta_interpretable
+ES,HIGH_CO2,pv_capture_price_after,42.82346425535758,96.83590884777534,54.012444592417765,,INFORMATIVE,delta_interpretable
+DE,HIGH_GAS,far_after,1.0,1.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIGH_GAS,surplus_unabs_energy_after,0.0,0.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+DE,HIGH_GAS,pv_capture_price_after,49.001468765658025,141.91443721922963,92.91296845357164,,INFORMATIVE,delta_interpretable
+ES,HIGH_GAS,far_after,0.9995517261480726,1.0,0.0004482738519273,,INFORMATIVE,delta_interpretable
+ES,HIGH_GAS,surplus_unabs_energy_after,0.0015989982091109,0.0,-0.0015989982091109,,INFORMATIVE,delta_interpretable
+ES,HIGH_GAS,pv_capture_price_after,42.82346425535758,102.51866697811,59.69520272275243,,INFORMATIVE,delta_interpretable
+DE,HIST_PRICE_ARBITRAGE_SIMPLE,far_after,1.0,1.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+ES,HIST_PRICE_ARBITRAGE_SIMPLE,far_after,0.9995517261480726,0.9995018239355516,-4.990221252099136e-05,,INFORMATIVE,delta_interpretable
+DE,HIST_PV_COLOCATED,far_after,1.0,1.0,0.0,,FRAGILE,delta_quasi_nul_vs_historique
+ES,HIST_PV_COLOCATED,far_after,0.9995517261480726,0.9994023008613372,-0.0001494252867354,,INFORMATIVE,delta_interpretable

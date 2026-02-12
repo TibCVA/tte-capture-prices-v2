@@ -53,6 +53,7 @@ from src.constants import (
     COL_YEAR,
     PRICE_LOW_THRESHOLD_DEFAULT,
 )
+from src.core.canonical_metrics import build_canonical_hourly_panel, compute_canonical_year_metrics
 from src.core.definitions import compute_balance_metrics, compute_scope_coverage_lowload, sanity_check_core_definitions
 from src.time_utils import expected_hours, local_peak_mask
 
@@ -134,24 +135,34 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
     year = int(df[COL_YEAR].iloc[0])
     expected = expected_hours(year)
 
-    price = pd.to_numeric(df[COL_PRICE_DA], errors="coerce")
-    load = pd.to_numeric(df[COL_LOAD_NET], errors="coerce")
+    canonical_hourly = build_canonical_hourly_panel(df)
+    canonical_metrics = compute_canonical_year_metrics(
+        hourly_df=df,
+        country=str(df[COL_COUNTRY].iloc[0]),
+        year=year,
+        scenario_id=str(df.get("scenario_id", pd.Series([""])).iloc[0]) if "scenario_id" in df.columns else "",
+    )
 
-    baseload = float(price.mean()) if price.notna().any() else float("nan")
+    price = pd.to_numeric(canonical_hourly["price_eur_mwh"], errors="coerce")
+    load = pd.to_numeric(canonical_hourly["load_mw"], errors="coerce")
+
+    baseload = _safe_float(canonical_metrics.get("baseload_price_eur_mwh"), np.nan)
     peak_mask = local_peak_mask(df.index, timezone)
     peak_price = float(price[peak_mask].mean()) if price[peak_mask].notna().any() else float("nan")
     offpeak_price = float(price[~peak_mask].mean()) if price[~peak_mask].notna().any() else float("nan")
 
-    wind_total = pd.to_numeric(df[COL_GEN_WIND_ON], errors="coerce").fillna(0) + pd.to_numeric(df[COL_GEN_WIND_OFF], errors="coerce").fillna(0)
+    wind_total = pd.to_numeric(canonical_hourly["gen_wind_mw"], errors="coerce").fillna(0)
 
-    capture_pv = _weighted_capture(price, df[COL_GEN_SOLAR])
-    capture_wind = _weighted_capture(price, wind_total)
+    capture_pv = _safe_float(canonical_metrics.get("capture_price_pv_eur_mwh"), np.nan)
+    capture_wind = _safe_float(canonical_metrics.get("capture_price_wind_eur_mwh"), np.nan)
 
     mask_cd = df[COL_REGIME].isin(["C", "D"]) & price.notna()
     ttl = float(price[mask_cd].quantile(0.95)) if int(mask_cd.sum()) >= 1 else float("nan")
 
-    h_negative = int((price < 0).sum())
-    h_below_5 = int((price <= 5).sum())
+    h_negative = int(_safe_float(canonical_metrics.get("h_negative"), 0.0))
+    h_below_5 = int(_safe_float(canonical_metrics.get("h_below_5"), 0.0))
+    h_zero_or_negative = int(_safe_float(canonical_metrics.get("h_zero_or_negative"), 0.0))
+    low_price_hours_share = _safe_float(canonical_metrics.get("low_price_hours_share"), np.nan)
     days_spread_gt50, avg_daily_spread, max_daily_spread = _days_spread(price, timezone)
 
     regime = df[COL_REGIME].astype(str) if COL_REGIME in df.columns else pd.Series(index=df.index, dtype=object)
@@ -184,10 +195,10 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
     price_negative_median = _safe_float(price[neg_mask].median(), np.nan) if neg_count > 0 else np.nan
     residual_negative_p50 = _safe_float(nrl_series[neg_mask].median(), np.nan) if neg_count > 0 else np.nan
 
-    surplus_energy = float(pd.to_numeric(df[COL_SURPLUS], errors="coerce").fillna(0).clip(lower=0.0).sum())
-    surplus_absorbed = float(pd.to_numeric(df[COL_SURPLUS_ABSORBED], errors="coerce").fillna(0).clip(lower=0.0).sum())
+    surplus_energy = _safe_float(canonical_metrics.get("surplus_energy_mwh"), 0.0)
+    surplus_absorbed = _safe_float(canonical_metrics.get("absorbed_surplus_energy_mwh"), 0.0)
     surplus_unabs = float(pd.to_numeric(df[COL_SURPLUS_UNABS], errors="coerce").fillna(0).clip(lower=0.0).sum())
-    psh_pumping_mwh = float(pd.to_numeric(df.get(COL_PSH_PUMP), errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+    psh_pumping_mwh = _safe_float(canonical_metrics.get("psh_pumping_energy_mwh"), 0.0)
     flex_sink_exports_mwh = float(
         pd.to_numeric(df.get(COL_FLEX_EXPORTS, df.get(COL_EXPORTS)), errors="coerce").fillna(0.0).clip(lower=0.0).sum()
     )
@@ -205,7 +216,7 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         else "missing"
     )
 
-    load_energy = float(pd.to_numeric(df[COL_LOAD_NET], errors="coerce").fillna(0).sum())
+    load_energy = _safe_float(canonical_metrics.get("load_energy_mwh"), 0.0)
     gen_primary_series = pd.to_numeric(df[COL_GEN_PRIMARY], errors="coerce") if COL_GEN_PRIMARY in df.columns else pd.Series(0.0, index=df.index, dtype=float)
     if gen_primary_series.notna().sum() == 0:
         gen_primary_series = pd.to_numeric(df[COL_GEN_TOTAL], errors="coerce")
@@ -213,14 +224,8 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
     gen_total = float(pd.to_numeric(df[COL_GEN_TOTAL], errors="coerce").fillna(0).clip(lower=0.0).sum())
 
     sr_load = _safe_div(surplus_energy, load_energy)
-    sr_gen = _safe_div(surplus_energy, gen_primary)
-    if np.isfinite(sr_gen):
-        sr_gen = clip01(sr_gen)
-
-    if surplus_energy <= 0:
-        far = 1.0
-    else:
-        far = clip01(_safe_div(surplus_absorbed, surplus_energy))
+    sr_gen = _safe_float(canonical_metrics.get("sr_energy_share_gen"), np.nan)
+    far = _safe_float(canonical_metrics.get("far_energy"), np.nan)
 
     balance = compute_balance_metrics(
         load_mw=df[COL_LOAD_NET],
@@ -230,16 +235,18 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         gen_primary_mw=gen_primary_series,
     )
 
-    p10_mr = balance.p10_must_run_mw
-    p10_load = balance.p10_load_mw
+    p10_mr = _safe_float(canonical_metrics.get("ir_p10_must_run_mw"), balance.p10_must_run_mw)
+    p10_load = _safe_float(canonical_metrics.get("ir_p10_load_mw"), balance.p10_load_mw)
     p50_mr = _percentile(df[COL_GEN_MUST_RUN], 0.50)
     p50_load = _percentile(df[COL_LOAD_NET], 0.50)
-    ir_p10 = balance.ir
+    ir_p10 = _safe_float(canonical_metrics.get("ir_p10"), balance.ir)
     ir_p10_excess = float(ir_p10 - 1.0) if np.isfinite(ir_p10) else float("nan")
     ir_mean = _safe_div(float(pd.to_numeric(df[COL_GEN_MUST_RUN], errors="coerce").mean()), float(load.mean()))
+    must_run_share_load = _safe_float(canonical_metrics.get("must_run_share_load"), np.nan)
+    must_run_share_netdemand = _safe_float(canonical_metrics.get("must_run_share_netdemand"), np.nan)
 
-    capture_ratio_pv_vs_baseload = _safe_div(capture_pv, baseload)
-    capture_ratio_wind_vs_baseload = _safe_div(capture_wind, baseload)
+    capture_ratio_pv_vs_baseload = _safe_float(canonical_metrics.get("capture_ratio_pv"), np.nan)
+    capture_ratio_wind_vs_baseload = _safe_float(canonical_metrics.get("capture_ratio_wind"), np.nan)
     capture_ratio_pv_vs_ttl = _safe_div(capture_pv, ttl)
     capture_ratio_wind_vs_ttl = _safe_div(capture_wind, ttl)
 
@@ -318,8 +325,10 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "capture_ratio_wind_vs_ttl": capture_ratio_wind_vs_ttl,
         "h_negative": h_negative,
         "h_negative_obs": h_negative,
+        "h_zero_or_negative": h_zero_or_negative,
         "h_below_5": h_below_5,
         "h_below_5_obs": h_below_5,
+        "low_price_hours_share": low_price_hours_share,
         "share_neg_price_hours_in_AB": share_neg_price_hours_in_ab,
         "share_neg_price_hours_in_low_residual": share_neg_price_hours_in_low_residual,
         "share_neg_price_hours_in_AB_OR_LOW_RESIDUAL": share_neg_price_hours_in_ab_or_low_residual,
@@ -346,7 +355,15 @@ def compute_annual_metrics(df: pd.DataFrame, country_cfg: dict[str, Any], data_v
         "p50_must_run_mw": p50_mr,
         "ir_p10_excess": ir_p10_excess,
         "ir_mean": ir_mean,
+        "must_run_share_load": must_run_share_load,
+        "must_run_share_netdemand": must_run_share_netdemand,
         "must_run_scope_coverage": must_run_scope_coverage,
+        "sr_energy_denominator_kind": canonical_metrics.get("sr_energy_denominator_kind", ""),
+        "sr_energy_denominator_mwh": _safe_float(canonical_metrics.get("sr_energy_denominator_mwh"), np.nan),
+        "capture_price_pv_denominator_mwh": _safe_float(canonical_metrics.get("capture_price_pv_denominator_mwh"), np.nan),
+        "capture_price_wind_denominator_mwh": _safe_float(canonical_metrics.get("capture_price_wind_denominator_mwh"), np.nan),
+        "ir_p10_quality_flag": canonical_metrics.get("ir_p10_quality_flag", ""),
+        "canonical_quality_flags": canonical_metrics.get("canonical_quality_flags", ""),
         "core_sanity_issue_count": int(len(core_sanity_issues)),
         "core_sanity_issues": "; ".join(core_sanity_issues),
         "ttl_price_based_eur_mwh": ttl,
@@ -398,7 +415,7 @@ def compute_daily_metrics(df: pd.DataFrame, timezone: str) -> pd.DataFrame:
 
     out["daily_spread"] = out["daily_max_price"] - out["daily_min_price"]
     out["daily_has_negative"] = out["daily_min_price"] < 0
-    out["daily_has_below_5"] = out["daily_min_price"] <= 5
+    out["daily_has_below_5"] = out["daily_min_price"] < 5
     out["daily_vre_share_of_gen"] = out["daily_vre_mwh"] / out["daily_primary_mwh"]
     out = out.drop(columns=["daily_vre_mwh", "daily_primary_mwh"])
     return out

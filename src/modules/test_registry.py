@@ -22,10 +22,10 @@ class QuestionTestSpec:
 
 
 QUESTION_DEFAULT_SCENARIOS: dict[str, list[str]] = {
-    "Q1": ["BASE", "DEMAND_UP", "FLEX_UP", "LOW_RIGIDITY"],
+    "Q1": ["BASE", "DEMAND_UP", "LOW_RIGIDITY"],
     "Q2": ["BASE", "HIGH_CO2", "HIGH_GAS"],
-    "Q3": ["BASE", "DEMAND_UP", "FLEX_UP", "LOW_RIGIDITY"],
-    "Q4": ["BASE", "FLEX_UP", "HIGH_CO2", "HIGH_GAS"],
+    "Q3": ["BASE", "DEMAND_UP", "LOW_RIGIDITY"],
+    "Q4": ["BASE", "HIGH_CO2", "HIGH_GAS"],
     "Q5": ["BASE", "HIGH_CO2", "HIGH_GAS", "HIGH_BOTH"],
 }
 
@@ -93,7 +93,7 @@ _REGISTRY: list[QuestionTestSpec] = [
         source_ref="SPEC2-Q1/Slides 5",
         mode="SCEN",
         scenario_group="DEFAULT",
-        title="Effets DEMAND_UP/FLEX_UP/LOW_RIGIDITY",
+        title="Effets DEMAND_UP/LOW_RIGIDITY",
         what_is_tested="Les leviers scenario modifient la bascule vs BASE.",
         metric_rule="delta bascule_year_market vs BASE effectivement observable (finite_share/nonzero_share)",
         severity_if_fail="MEDIUM",
@@ -229,8 +229,8 @@ _REGISTRY: list[QuestionTestSpec] = [
         mode="HIST",
         scenario_group="HIST_BASE",
         title="Invariants physiques BESS",
-        what_is_tested="Bornes SOC/puissance/energie respectees.",
-        metric_rule="aucun check FAIL Q4",
+        what_is_tested="Bornes SOC/puissance/energie respectees (mode physique de reference) avec garde-fous structurels sur modes alternatifs.",
+        metric_rule="aucun FAIL physique/structurel pertinent",
         severity_if_fail="CRITICAL",
     ),
     QuestionTestSpec(

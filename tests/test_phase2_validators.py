@@ -41,3 +41,25 @@ def test_phase2_validators_no_gaps_after_trajectory_expansion() -> None:
     findings = validate_phase2_assumptions(expanded)
     codes = {f["code"] for f in findings}
     assert "P2_TRAJECTORY_GAPS" not in codes
+
+
+def test_phase2_validators_include_non_confounding_check() -> None:
+    df = pd.read_csv("data/assumptions/phase2/phase2_scenario_country_year.csv")
+    findings = validate_phase2_assumptions(df)
+    assert any(f["code"] == "TEST_SCEN_001" for f in findings)
+    assert not any(f["code"] == "TEST_SCEN_001" and f["severity"] == "ERROR" for f in findings)
+
+
+def test_phase2_validators_non_confounding_fails_for_unitary_scenario() -> None:
+    df = pd.read_csv("data/assumptions/phase2/phase2_scenario_country_year.csv")
+    base = df[df["scenario_id"] == "BASE"].head(1).copy()
+    demand = base.copy()
+    demand.loc[:, "scenario_id"] = "DEMAND_UP"
+    demand.loc[:, "demand_total_twh"] = demand["demand_total_twh"] * 1.1
+    demand.loc[:, "demand_peak_gw"] = demand["demand_peak_gw"] * 1.1
+    demand.loc[:, "cap_pv_gw"] = demand["cap_pv_gw"] * 1.2
+    demand.loc[:, "cap_wind_on_gw"] = demand["cap_wind_on_gw"] * 1.2
+    demand.loc[:, "interconnection_export_gw"] = demand["interconnection_export_gw"] * 1.1
+    stress = pd.concat([base, demand], ignore_index=True)
+    findings = validate_phase2_assumptions(stress)
+    assert any(f["code"] == "TEST_SCEN_001" and f["severity"] == "ERROR" for f in findings)

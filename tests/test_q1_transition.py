@@ -220,3 +220,48 @@ def test_q1_country_summary_has_bascule_status_columns(annual_panel_fixture):
     assert "bascule_status_physical" in summary.columns
     assert summary["bascule_status_market"].astype(str).str.len().gt(0).all()
     assert summary["bascule_status_physical"].astype(str).str.len().gt(0).all()
+
+
+def test_q1_phase2_market_requires_low_price_and_capture_flags(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    df = annual_panel_fixture.copy()
+    mask = (df["country"] == "FR") & (df["year"] == 2024)
+    # Force low-price pressure but keep capture healthy -> must not be phase2_market.
+    df.loc[mask, "h_negative_obs"] = 500.0
+    df.loc[mask, "h_below_5_obs"] = 800.0
+    df.loc[mask, "capture_ratio_pv"] = 1.0
+    df.loc[mask, "capture_ratio_wind"] = 1.0
+    df.loc[mask, "sr_energy"] = 0.0
+    df.loc[mask, "sr_hours"] = 0.0
+    df.loc[mask, "ir_p10"] = 0.5
+    res = run_q1(df, assumptions, {"countries": ["FR"], "years": [2024]}, "test")
+    row = res.tables["Q1_year_panel"].iloc[0]
+    assert bool(row["LOW_PRICE_FLAG"]) is True
+    assert bool(row["CAPTURE_DEGRADATION_FLAG"]) is False
+    assert bool(row["is_phase2_market"]) is False
+
+
+def test_q1_mustrun_shares_within_bounds_when_finite(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q1(annual_panel_fixture, assumptions, {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]}, "test")
+    panel = res.tables["Q1_year_panel"]
+    for col in ["must_run_share_load", "must_run_share_netdemand"]:
+        if col not in panel.columns:
+            continue
+        vals = pd.to_numeric(panel[col], errors="coerce")
+        vals = vals[vals.notna()]
+        if not vals.empty:
+            assert ((vals >= 0.0) & (vals <= 1.0)).all()
+
+
+def test_q1_emits_test_q1_001_reality_check(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q1(
+        annual_panel_fixture,
+        assumptions,
+        {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]},
+        "test",
+    )
+    q1_checks = [c for c in res.checks if str(c.get("code")) == "TEST_Q1_001"]
+    assert q1_checks
+    assert all(str(c.get("status")) in {"PASS", "WARN", "FAIL"} for c in q1_checks)

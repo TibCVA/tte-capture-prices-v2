@@ -1,0 +1,35 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,HIST,,Q4,,True
+WARN,Q4_OBJECTIVE_UNREACHABLE,Objectif non atteint sous les contraintes de policy actuelles.,HIST,,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,HIST,,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,HIST,,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,HIST,,Q4,,True
+WARN,Q4_OBJECTIVE_NOT_REACHED_GRID,Objectif non atteint sur la grille courante; augmenter les bornes de recherche.,HIST,,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,HIST,,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,HIST,,Q4,,True
+WARN,Q4_BESS_INEFFECTIVE,h_negative>0 mais aucun point de frontier ne reduit h_negative.,HIST,,Q4,,True
+WARN,Q4_OBJECTIVE_UNREACHABLE,Objectif non atteint sous les contraintes de policy actuelles.,HIST,,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,HIST,,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,BASE,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,BASE,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,BASE,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,BASE,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,BASE,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,BASE,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,BASE,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_CO2,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_CO2,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_CO2,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_CO2,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_CO2,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_CO2,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_CO2,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_GAS,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_GAS,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_GAS,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_GAS,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_GAS,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_GAS,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,SCEN,HIGH_GAS,Q4,,True
+PASS,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=0",BUNDLE,,Q4,,True
+PASS,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=76.62%,BUNDLE,,Q4,,True

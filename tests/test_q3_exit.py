@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from src.modules.q3_exit import run_q3
+from src.modules.q3_exit import _additional_sink_power_p95, run_q3
 
 
 def test_q3_monotonic_counterfactuals(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):
@@ -95,3 +95,65 @@ def test_q3_additional_absorbed_non_zero_when_flex_reduces_unabsorbed(annual_pan
             "family_turned_off_recent",
             "no_family_turned_off",
         }
+
+
+def test_q3_hourly_profile_additional_sink_power_is_positive_when_needed():
+    idx = pd.date_range("2024-01-01", periods=48, freq="h", tz="UTC")
+    hourly = pd.DataFrame({"surplus_mw": [100.0] * 24 + [0.0] * 24}, index=idx)
+    p95, status = _additional_sink_power_p95({("FR", 2024): hourly}, "FR", 2024.0, 0.02)
+    assert status == "profile_weighted_surplus"
+    assert float(p95) > 0.0
+
+
+def test_q3_rows_contain_scenario_audit_fields(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):
+    from src.processing import build_hourly_table
+
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    panel = annual_panel_fixture[annual_panel_fixture["country"] == "FR"].copy()
+    res = run_q3(
+        panel,
+        {("FR", 2024): hourly},
+        assumptions,
+        {
+            "countries": ["FR"],
+            "years": [2021, 2022, 2023, 2024],
+            "mode": "SCEN",
+            "scenario_id": "DEMAND_UP",
+            "demand_multiplier": 1.1,
+            "must_run_reduction_factor": 0.2,
+            "flex_multiplier": 1.05,
+        },
+        "test",
+    )
+    out = res.tables["Q3_status"]
+    assert not out.empty
+    for col in [
+        "scenario_id",
+        "assumed_demand_multiplier",
+        "assumed_must_run_reduction_factor",
+        "assumed_flex_multiplier",
+    ]:
+        assert col in out.columns
+    assert (out["scenario_id"].astype(str) == "DEMAND_UP").all()
+    fail_codes = {str(c.get("code")) for c in res.checks if str(c.get("status", "")).upper() == "FAIL"}
+    assert "Q3_SCENARIO_ID_MISSING" not in fail_codes
+
+
+def test_q3_emits_test_q3_001_reality_check(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):
+    from src.processing import build_hourly_table
+
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q3(
+        annual_panel_fixture[annual_panel_fixture["country"] == "FR"],
+        {("FR", 2024): hourly},
+        assumptions,
+        {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]},
+        "test",
+    )
+    checks = [c for c in res.checks if str(c.get("code")) == "TEST_Q3_001"]
+    assert checks
+    assert all(str(c.get("status")) in {"PASS", "WARN", "FAIL"} for c in checks)

@@ -1,0 +1,27 @@
+{
+  "question_id": "Q4",
+  "objective": "Quantifier l'impact batterie (systeme et actif) et estimer des ordres de grandeur de sizing.",
+  "countries_scope": [
+    "DE",
+    "ES"
+  ],
+  "run_id": "FULL_20260212_FIX4",
+  "source_summary_file": "outputs\\combined\\FULL_20260212_FIX4\\Q4\\summary.json",
+  "source_refs_in_ledger": [
+    "SPEC2-Q4",
+    "SPEC2-Q4/Slides 22",
+    "SPEC2-Q4/Slides 23",
+    "Slides 23-25"
+  ],
+  "scenarios": [
+    "HIGH_CO2",
+    "HIGH_GAS"
+  ],
+  "country_filter_notes": {
+    "hist_unfilterable_tables": [],
+    "scen_unfilterable_tables_by_scenario": {
+      "HIGH_CO2": [],
+      "HIGH_GAS": []
+    }
+  }
+}

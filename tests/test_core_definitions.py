@@ -61,3 +61,34 @@ def test_psh_status_and_coverage_when_partial_or_missing(make_raw_panel, countri
     df_missing = build_hourly_table(raw_missing, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
     assert set(df_missing["psh_pumping_data_status"].astype(str).str.lower().unique()) == {"missing"}
     assert float(pd.to_numeric(df_missing["psh_pumping_coverage_share"], errors="coerce").iloc[0]) == 0.0
+
+
+def test_load_mw_clamped_when_psh_exceeds_total(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=48)
+    raw["load_total_mw"] = 100.0
+    raw["psh_pump_mw"] = 180.0
+    df = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    load_net = pd.to_numeric(df["load_mw"], errors="coerce")
+    assert load_net.notna().all()
+    assert (load_net >= 0.0).all()
+    assert set(df["q_bad_load_net"].astype(bool).unique()) == {True}
+
+
+def test_invariant_codes_in_sanity_check():
+    df = pd.DataFrame(
+        {
+            "surplus_mw": [0.0, 0.0],
+            "surplus_absorbed_mw": [0.0, 0.0],
+            "surplus_unabsorbed_mw": [0.0, 0.0],
+            "gen_must_run_mw": [0.0, 0.0],
+            "gen_total_mw": [100.0, 100.0],
+            "load_total_mw": [100.0, 100.0],
+            "load_mw": [80.0, -1.0],
+            "exports_mw": [0.0, 0.0],
+            "psh_pump_mw": [15.0, -2.0],
+        }
+    )
+    issues = sanity_check_core_definitions(df, far_energy=1.0, sr_energy=0.0, ir=0.0)
+    assert any("INV_LOAD_001" in issue for issue in issues)
+    assert any("INV_LOAD_002" in issue for issue in issues)
+    assert any("INV_PSH_001" in issue for issue in issues)

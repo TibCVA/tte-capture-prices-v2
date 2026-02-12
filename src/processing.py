@@ -225,8 +225,10 @@ def build_hourly_table(
     df[COL_BESS_CHARGE] = _safe_series(df, COL_BESS_CHARGE, 0.0).fillna(0.0).clip(lower=0.0)
     df[COL_BESS_DISCHARGE] = _safe_series(df, COL_BESS_DISCHARGE, 0.0).fillna(0.0).clip(lower=0.0)
     df[COL_BESS_SOC] = _safe_series(df, COL_BESS_SOC, 0.0).fillna(0.0).clip(lower=0.0)
-    df[COL_Q_BAD_LOAD_NET] = df[COL_LOAD_NET] < 0
-    df.loc[df[COL_Q_BAD_LOAD_NET], COL_LOAD_NET] = np.nan
+    if "load_net_clamped_mask" in core:
+        df[COL_Q_BAD_LOAD_NET] = pd.Series(core["load_net_clamped_mask"], index=df.index).fillna(False).astype(bool)
+    else:
+        df[COL_Q_BAD_LOAD_NET] = df[COL_LOAD_NET] < 0
     df[COL_Q_MISSING_PSH_PUMP] = df[COL_PSH_PUMP_STATUS].astype(str).str.lower().isin(["missing", "partial"])
 
     model_cfg = thresholds_cfg.get("model", {})

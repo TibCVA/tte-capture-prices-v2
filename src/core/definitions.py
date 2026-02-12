@@ -106,17 +106,26 @@ def resolve_load_and_pump(
     psh_pump_mw: pd.Series,
     prefer_net_of_psh_pump: bool = True,
     psh_missing_share_threshold: float = 0.05,
-) -> tuple[pd.Series, pd.Series, str]:
+) -> tuple[pd.Series, pd.Series, str, dict[str, Any]]:
     """Resolve canonical load and PSH sink with explicit load-net mode."""
 
     load_total = pd.to_numeric(load_total_mw, errors="coerce")
-    psh = pd.to_numeric(psh_pump_mw, errors="coerce").clip(lower=0.0)
+    psh_raw = pd.to_numeric(psh_pump_mw, errors="coerce")
+    psh_negative_input_mask = psh_raw < 0.0
+    psh = psh_raw.clip(lower=0.0)
     # Non-negotiable definition:
     # load_mw = load_total_mw - psh_pumping_mw, with explicit zero-fill when PSH is missing.
     psh_effective = psh.fillna(0.0)
-    load_net = load_total - psh_effective
+    load_net_raw = load_total - psh_effective
+    load_net_clamped_mask = load_net_raw < 0.0
+    load_net = load_net_raw.mask(load_net_clamped_mask, 0.0)
     load_net_mode = "net_of_psh_pump"
-    return load_net, psh_effective, load_net_mode
+    diagnostics = {
+        "load_net_clamped_mask": load_net_clamped_mask.fillna(False).astype(bool),
+        "load_net_clamped_count": int(load_net_clamped_mask.fillna(False).sum()),
+        "psh_negative_input_count": int(psh_negative_input_mask.fillna(False).sum()),
+    }
+    return load_net, psh_effective, load_net_mode, diagnostics
 
 
 def build_vre_mw(df: pd.DataFrame) -> pd.Series:
@@ -264,7 +273,7 @@ def compute_core_hourly_definitions(
         psh_status = "ok"
     else:
         psh_status = "partial"
-    load_mw, psh_pump_effective, load_mode = resolve_load_and_pump(
+    load_mw, psh_pump_effective, load_mode, load_psh_diag = resolve_load_and_pump(
         load_total_mw=load_total,
         psh_pump_mw=psh_pump_raw,
         prefer_net_of_psh_pump=prefer_net_of_psh_pump,
@@ -333,6 +342,9 @@ def compute_core_hourly_definitions(
         "p10_load_mw": balances.p10_load_mw,
         "p10_must_run_mw": balances.p10_must_run_mw,
         "must_run_scope_coverage": scope_cov,
+        "load_net_clamped_mask": load_psh_diag["load_net_clamped_mask"],
+        "load_net_clamped_count": load_psh_diag["load_net_clamped_count"],
+        "psh_negative_input_count": load_psh_diag["psh_negative_input_count"],
     }
 
 
@@ -356,7 +368,8 @@ def sanity_check_core_definitions(df: pd.DataFrame, far_energy: float, sr_energy
     load = pd.to_numeric(df.get(COL_LOAD_NET), errors="coerce")
     load_total = pd.to_numeric(df.get(COL_LOAD_TOTAL), errors="coerce")
     exports = pd.to_numeric(df.get(COL_EXPORTS), errors="coerce").fillna(0.0).clip(lower=0.0)
-    psh = pd.to_numeric(df.get(COL_PSH_PUMP), errors="coerce").fillna(0.0).clip(lower=0.0)
+    psh_raw = pd.to_numeric(df.get(COL_PSH_PUMP), errors="coerce")
+    psh = psh_raw.fillna(0.0).clip(lower=0.0)
     curtailment_proxy = pd.to_numeric(df.get(COL_SURPLUS_UNABS), errors="coerce").fillna(0.0).clip(lower=0.0)
     total_gen = pd.to_numeric(df.get(COL_GEN_TOTAL), errors="coerce")
 
@@ -373,7 +386,16 @@ def sanity_check_core_definitions(df: pd.DataFrame, far_energy: float, sr_energy
         issues.append("must_run_mw exceeds load+exports+psh+curtailment_proxy")
 
     if load.notna().any() and (load < -tol).any():
-        issues.append("load_mw < 0")
+        issues.append("INV_LOAD_002: load_mw < 0")
+
+    if psh_raw.notna().any() and (psh_raw < -tol).any():
+        issues.append("INV_PSH_001: psh_pump_mw < 0")
+
+    inv_load_mask = load_total.notna() & load.notna() & psh.notna() & (psh > tol)
+    if bool(inv_load_mask.any()):
+        inv_load_residual = (load_total - (load + psh)).abs()
+        if (inv_load_residual[inv_load_mask] > 1e-6).any():
+            issues.append("INV_LOAD_001: load_total_mw != load_mw + psh_pump_mw (hourly)")
 
     if load_total.notna().any():
         # Annual energy identity check against PSH de-netting.

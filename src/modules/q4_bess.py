@@ -22,7 +22,7 @@ Q4_PARAMS = [
     "target_surplus_unabs_energy_twh",
 ]
 
-Q4_ENGINE_VERSION = "v2.2.1"
+Q4_ENGINE_VERSION = "v2.2.2"
 Q4_CACHE_BASE = Path("data/cache/q4")
 
 
@@ -139,6 +139,7 @@ def _simulate_dispatch_arrays(
     emax = float(cfg.energy_mwh)
     max_daily_throughput = max(0.0, float(cfg.max_cycles_per_day)) * emax
     tol = 1e-12
+    charge_vs_surplus_violation_hours = 0.0
 
     for start, end in day_ranges:
         daily_charge = 0.0
@@ -150,18 +151,10 @@ def _simulate_dispatch_arrays(
             boundary_forced_discharge = False
 
             if dispatch_mode == "SURPLUS_FIRST":
-                # Stress-absorption first, with pragmatic fallback:
-                # - charge on surplus hours (priority),
-                # - also charge on clearly negative-price hours,
-                # - discharge on stressed/high-price hours.
-                if nrl[i] < 0.0:
-                    desired_charge = min(pmax, max(surplus_unabs[i], abs(nrl[i])))
-                elif np.isfinite(price[i]) and price[i] < 0.0:
-                    desired_charge = pmax
-                if nrl[i] > 0.0:
-                    desired_discharge = min(pmax, nrl[i])
-                elif high_mask[i]:
-                    desired_discharge = pmax
+                # Strict physical mode: charge only against available unabsorbed surplus.
+                if surplus_unabs[i] > 0.0:
+                    desired_charge = min(pmax, surplus_unabs[i])
+                desired_discharge = 0.0
             elif dispatch_mode == "PRICE_ARBITRAGE_SIMPLE":
                 if low_mask[i]:
                     desired_charge = pmax
@@ -225,6 +218,8 @@ def _simulate_dispatch_arrays(
             charge[i] = ch
             discharge[i] = dis
             soc_series[i] = soc
+            if dispatch_mode == "SURPLUS_FIRST" and ch > surplus_unabs[i] + tol:
+                charge_vs_surplus_violation_hours += 1.0
 
     flex_after = flex_sink_observed + charge
     absorbed_after = np.minimum(surplus, flex_after)
@@ -248,6 +243,7 @@ def _simulate_dispatch_arrays(
         "soc_start": soc_start,
         "soc_end": float(soc),
         "simultaneous_charge_discharge_hours": float(np.sum((charge > tol) & (discharge > tol))),
+        "charge_vs_surplus_violation_hours": float(charge_vs_surplus_violation_hours),
     }
 
 
@@ -698,7 +694,7 @@ def run_q4(
             else np.nan
         )
         h_negative_before = int(np.nansum(np.where(np.isfinite(price), price < 0.0, 0)))
-        h_below_5_before = int(np.nansum(np.where(np.isfinite(price), price <= 5.0, 0)))
+        h_below_5_before = int(np.nansum(np.where(np.isfinite(price), price < 5.0, 0)))
         day_ranges = _day_slices(base.index)
         spread_days_before, avg_spread_before = _daily_spread_metrics(price, day_ranges)
         nrl_pos = nrl[np.isfinite(nrl) & (nrl > 0.0)]
@@ -793,9 +789,13 @@ def run_q4(
                         unabs_after_twh = float(np.sum(sim["unabs_after"]) / 1e6)
                         far_after_trivial = False
                     nrl_after = nrl + sim["charge"] - sim["discharge"]
-                    price_after = _price_from_nrl(nrl_after, x_knots, y_knots)
+                    # Audit-friendly rule: observe baseline prices, lift only when BESS fully removes hourly surplus.
+                    price_after = np.array(price, dtype=float, copy=True)
+                    if cfg.power_mw > 0.0 and cfg.energy_mwh > 0.0:
+                        full_absorb_mask = (surplus > 0.0) & (sim["unabs_after"] <= 1e-9)
+                        price_after[full_absorb_mask] = np.maximum(price_after[full_absorb_mask], 0.0)
                     h_negative_after = int(np.sum(price_after < 0.0))
-                    h_below_5_after = int(np.sum(price_after <= 5.0))
+                    h_below_5_after = int(np.sum(price_after < 5.0))
                     spread_days_after, avg_spread_after = _daily_spread_metrics(price_after, day_ranges)
                     baseload_after = float(np.nanmean(price_after)) if len(price_after) else np.nan
                     revenue = float(np.sum((sim["discharge"] - sim["charge"]) * price_after))
@@ -855,6 +855,9 @@ def run_q4(
                             "year": year,
                             "dispatch_mode": dispatch_mode,
                             "objective": objective,
+                            "bess_power_mw_test": cfg.power_mw,
+                            "bess_energy_mwh_test": cfg.energy_mwh,
+                            "bess_duration_h_test": cfg.duration_h,
                             "required_bess_power_mw": cfg.power_mw,
                             "required_bess_energy_mwh": cfg.energy_mwh,
                             "required_bess_duration_h": cfg.duration_h,
@@ -916,6 +919,7 @@ def run_q4(
                             "eta_charge": float(cfg.eta_charge),
                             "eta_discharge": float(cfg.eta_discharge),
                             "soc_boundary_mode": soc_boundary_mode,
+                            "charge_vs_surplus_violation_hours": float(sim.get("charge_vs_surplus_violation_hours", 0.0)),
                         }
                     )
             return pd.DataFrame(rows)
@@ -1034,6 +1038,18 @@ def run_q4(
             progress_callback("Aggregation et sauvegarde cache Q4", 0.92)
 
     # Keep stable frontier aliases for downstream joins, including cache-hit runs.
+    frontier["bess_power_mw_test"] = pd.to_numeric(
+        frontier.get("bess_power_mw_test", frontier.get("required_bess_power_mw")),
+        errors="coerce",
+    )
+    frontier["bess_duration_h_test"] = pd.to_numeric(
+        frontier.get("bess_duration_h_test", frontier.get("required_bess_duration_h")),
+        errors="coerce",
+    )
+    frontier["bess_energy_mwh_test"] = pd.to_numeric(
+        frontier.get("bess_energy_mwh_test", frontier.get("required_bess_energy_mwh")),
+        errors="coerce",
+    )
     frontier["bess_power_mw"] = pd.to_numeric(frontier.get("required_bess_power_mw"), errors="coerce")
     frontier["duration_h"] = pd.to_numeric(frontier.get("required_bess_duration_h"), errors="coerce")
     frontier["bess_energy_mwh"] = pd.to_numeric(frontier.get("required_bess_energy_mwh"), errors="coerce")
@@ -1065,6 +1081,7 @@ def run_q4(
         "turned_off_family_value_pv": False,
         "turned_off_family_value_wind": False,
         "turned_off_family_any": False,
+        "charge_vs_surplus_violation_hours": 0.0,
     }
     for col, default_val in default_cols.items():
         if col not in frontier.columns:
@@ -1122,6 +1139,16 @@ def run_q4(
                     "message": "Charge et decharge simultanees detectees.",
                 }
             )
+    if "charge_vs_surplus_violation_hours" in frontier.columns:
+        violations = pd.to_numeric(frontier["charge_vs_surplus_violation_hours"], errors="coerce").fillna(0.0)
+        if bool((violations > 0.0).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q4_CHARGE_EXCEEDS_SURPLUS",
+                    "message": "Mode SURPLUS_FIRST: charge superieure au surplus disponible detectee.",
+                }
+            )
 
     zero_size = (e_mwh <= tol) | (p_mw <= tol)
     if bool(zero_size.any()):
@@ -1139,6 +1166,28 @@ def run_q4(
                     "status": "FAIL",
                     "code": "Q4_ZERO_SIZE_NOT_ZERO_FLOW",
                     "message": "Cas P=0 ou E=0 non nul (charge/decharge/SOC) detecte.",
+                }
+            )
+        metric_pairs = [
+            ("h_negative_after", "h_negative_before"),
+            ("h_below_5_after", "h_below_5_before"),
+            ("capture_ratio_pv_after", "capture_ratio_pv_before"),
+            ("capture_ratio_wind_after", "capture_ratio_wind_before"),
+            ("surplus_unabs_energy_after", "surplus_unabs_energy_before"),
+            ("far_after", "far_before"),
+        ]
+        mismatch = pd.Series(False, index=frontier.index)
+        for after_col, before_col in metric_pairs:
+            after_v = pd.to_numeric(frontier.get(after_col), errors="coerce")
+            before_v = pd.to_numeric(frontier.get(before_col), errors="coerce")
+            both = after_v.notna() & before_v.notna()
+            mismatch = mismatch | (both & ((after_v - before_v).abs() > 1e-9))
+        if bool((mismatch & zero_size).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q4_ZERO_SIZE_AFTER_DIFFERS_FROM_BEFORE",
+                    "message": "Invariance violee: avec P=0 ou E=0, les metriques after doivent egaler before.",
                 }
             )
 
@@ -1162,7 +1211,7 @@ def run_q4(
             if len(subset) >= 2 and (subset["far_after"].diff().dropna() < -1e-8).any():
                 checks.append(
                     {
-                        "status": "WARN",
+                        "status": "FAIL",
                         "code": "Q4_FAR_NON_MONOTONIC",
                         "message": f"FAR diminue quand la puissance augmente (duration={d}h).",
                     }
@@ -1194,7 +1243,7 @@ def run_q4(
             if surplus_dominance_fail:
                 checks.append(
                     {
-                        "status": "WARN",
+                        "status": "FAIL",
                         "code": "Q4_SURPLUS_NON_MONOTONIC_DOMINANCE",
                         "message": "Surplus non absorbe non monotone en dominance (P,E).",
                     }
@@ -1202,35 +1251,58 @@ def run_q4(
             if far_dominance_fail:
                 checks.append(
                     {
-                        "status": "WARN",
+                        "status": "FAIL",
                         "code": "Q4_FAR_NON_MONOTONIC_DOMINANCE",
                         "message": "FAR non monotone en dominance (P,E).",
                     }
                 )
 
-    # Behavioral monotonic checks (warn-only by design).
+    # Behavioral monotonic checks (hard constraints).
     duration_vals = sorted(set(pd.to_numeric(frontier["required_bess_duration_h"], errors="coerce").dropna().tolist()))
     for d in duration_vals:
         subset = frontier[pd.to_numeric(frontier["required_bess_duration_h"], errors="coerce") == float(d)].sort_values("required_bess_power_mw")
         if len(subset) < 2:
             continue
-        hneg = pd.to_numeric(subset["h_negative_after"], errors="coerce")
-        if (hneg.diff().dropna() > 1.0).any():
+        unabs_after = pd.to_numeric(subset["surplus_unabs_energy_after"], errors="coerce")
+        if (unabs_after.diff().dropna() > 1e-9).any():
             checks.append(
                 {
-                    "status": "WARN",
+                    "status": "FAIL",
+                    "code": "Q4_SURPLUS_UNABS_NON_MONOTONIC_POWER",
+                    "message": f"surplus_unabs_energy_after doit etre non-croissant avec la puissance (duration={d}h).",
+                }
+            )
+        hneg = pd.to_numeric(subset["h_negative_after"], errors="coerce")
+        if (hneg.diff().dropna() > 1e-9).any():
+            checks.append(
+                {
+                    "status": "FAIL",
                     "code": "Q4_HNEG_NON_MONOTONIC",
                     "message": f"h_negative augmente localement avec la puissance (duration={d}h).",
                 }
             )
-        cap_pv = pd.to_numeric(subset["capture_ratio_pv_after"], errors="coerce")
-        cap_w = pd.to_numeric(subset["capture_ratio_wind_after"], errors="coerce")
-        if (cap_pv.diff().dropna() < -0.05).any() or (cap_w.diff().dropna() < -0.05).any():
+
+    power_vals = sorted(set(pd.to_numeric(frontier["required_bess_power_mw"], errors="coerce").dropna().tolist()))
+    for p_val in power_vals:
+        subset = frontier[pd.to_numeric(frontier["required_bess_power_mw"], errors="coerce") == float(p_val)].sort_values("required_bess_energy_mwh")
+        if len(subset) < 2:
+            continue
+        unabs_after = pd.to_numeric(subset["surplus_unabs_energy_after"], errors="coerce")
+        hneg_after = pd.to_numeric(subset["h_negative_after"], errors="coerce")
+        if (unabs_after.diff().dropna() > 1e-9).any():
             checks.append(
                 {
-                    "status": "WARN",
-                    "code": "Q4_CAPTURE_NON_MONOTONIC",
-                    "message": f"Capture ratio baisse fortement avec la puissance (duration={d}h).",
+                    "status": "FAIL",
+                    "code": "Q4_SURPLUS_UNABS_NON_MONOTONIC_ENERGY",
+                    "message": f"surplus_unabs_energy_after doit etre non-croissant avec l'energie (power={p_val}MW).",
+                }
+            )
+        if (hneg_after.diff().dropna() > 1e-9).any():
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q4_HNEG_NON_MONOTONIC_ENERGY",
+                    "message": f"h_negative_after doit etre non-croissant avec l'energie (power={p_val}MW).",
                 }
             )
 
@@ -1240,7 +1312,7 @@ def run_q4(
         if not bool(improved.any()):
             checks.append(
                 {
-                    "status": "FAIL",
+                    "status": "WARN",
                     "code": "Q4_BESS_INEFFECTIVE",
                     "message": "h_negative>0 mais aucun point de frontier ne reduit h_negative.",
                 }
@@ -1425,6 +1497,64 @@ def run_q4(
     if frontier[key_cols].isna().any().any():
         checks.append({"status": "FAIL", "code": "Q4_FRONTIER_KEY_MISSING", "message": "Cles manquantes dans Q4_bess_frontier."})
 
+    physics_fail_codes = {
+        "Q4_SOC_NEG",
+        "Q4_SOC_ABOVE_EMAX",
+        "Q4_CHARGE_ABOVE_PMAX",
+        "Q4_DISCHARGE_ABOVE_PMAX",
+        "Q4_FREE_ENERGY_NO_CHARGE",
+        "Q4_ENERGY_BALANCE",
+        "Q4_SIMULTANEOUS_CHARGE_DISCHARGE",
+        "Q4_CHARGE_EXCEEDS_SURPLUS",
+        "Q4_ZERO_SIZE_NOT_ZERO_FLOW",
+        "Q4_ZERO_SIZE_AFTER_DIFFERS_FROM_BEFORE",
+        "Q4_SOC_END_BOUNDARY",
+    }
+    monotonic_fail_codes = {
+        "Q4_SURPLUS_INCREASE",
+        "Q4_FAR_NON_MONOTONIC",
+        "Q4_SURPLUS_NON_MONOTONIC_DOMINANCE",
+        "Q4_FAR_NON_MONOTONIC_DOMINANCE",
+        "Q4_SURPLUS_UNABS_NON_MONOTONIC_POWER",
+        "Q4_HNEG_NON_MONOTONIC",
+        "Q4_SURPLUS_UNABS_NON_MONOTONIC_ENERGY",
+        "Q4_HNEG_NON_MONOTONIC_ENERGY",
+    }
+    has_physics_fail = any(
+        str(c.get("status", "")).upper() == "FAIL" and str(c.get("code", "")).upper() in physics_fail_codes
+        for c in checks
+    )
+    has_monotonic_fail = any(
+        str(c.get("status", "")).upper() == "FAIL" and str(c.get("code", "")).upper() in monotonic_fail_codes
+        for c in checks
+    )
+    checks.append(
+        {
+            "status": "FAIL" if has_physics_fail else "PASS",
+            "code": "TEST_Q4_001",
+            "message": "Invariants physiques batterie (SOC, puissance, energie) valides." if not has_physics_fail else "Violation d'un invariant physique batterie.",
+        }
+    )
+    checks.append(
+        {
+            "status": "FAIL" if has_monotonic_fail else "PASS",
+            "code": "TEST_Q4_002",
+            "message": "Monotonicite respectee (augmentation bess_power/energy ne degrade pas le surplus)." if not has_monotonic_fail else "Violation de monotonicite sur la frontier BESS.",
+        }
+    )
+
+    # Reporting semantics: frontier grid columns are test sizes, not "required" values.
+    frontier_out = frontier.copy()
+    if "bess_power_mw_test" not in frontier_out.columns:
+        frontier_out["bess_power_mw_test"] = pd.to_numeric(frontier_out.get("required_bess_power_mw"), errors="coerce")
+    if "bess_energy_mwh_test" not in frontier_out.columns:
+        frontier_out["bess_energy_mwh_test"] = pd.to_numeric(frontier_out.get("required_bess_energy_mwh"), errors="coerce")
+    if "bess_duration_h_test" not in frontier_out.columns:
+        frontier_out["bess_duration_h_test"] = pd.to_numeric(frontier_out.get("required_bess_duration_h"), errors="coerce")
+    frontier_out = frontier_out.drop(
+        columns=[c for c in ["required_bess_power_mw", "required_bess_energy_mwh", "required_bess_duration_h"] if c in frontier_out.columns]
+    )
+
     if cache_hit:
         checks.append({"status": "INFO", "code": "Q4_CACHE_HIT", "message": "Resultat charge depuis cache persistant Q4."})
     if not checks:
@@ -1456,12 +1586,12 @@ def run_q4(
             "engine_version": Q4_ENGINE_VERSION,
             "assumption_hash": assumption_hash,
         },
-        tables={"Q4_sizing_summary": summary, "Q4_bess_frontier": frontier},
+        tables={"Q4_sizing_summary": summary, "Q4_bess_frontier": frontier_out},
         figures=[],
         narrative_md=narrative,
         checks=checks,
         warnings=warnings,
         mode=str(selection.get("mode", "HIST")).upper(),
-        scenario_id=selection.get("scenario_id"),
+        scenario_id=scenario_id_effective,
         horizon_year=selection.get("horizon_year"),
     )

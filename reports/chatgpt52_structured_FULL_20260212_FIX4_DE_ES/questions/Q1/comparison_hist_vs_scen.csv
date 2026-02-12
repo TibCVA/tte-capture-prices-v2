@@ -1,0 +1,5 @@
+country,scenario_id,metric,hist_value,scen_value,delta,scen_status,interpretability_status,interpretability_reason
+DE,DEMAND_UP,bascule_year_market,2019.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,DEMAND_UP,bascule_year_market,2023.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+DE,LOW_RIGIDITY,bascule_year_market,2019.0,,,,NON_TESTABLE,delta_non_interpretable_nan
+ES,LOW_RIGIDITY,bascule_year_market,2023.0,,,,NON_TESTABLE,delta_non_interpretable_nan

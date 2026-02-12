@@ -18,7 +18,7 @@ from src.reporting.evidence_loader import load_combined_run
 
 
 DEFAULT_COUNTRIES = ["FR", "DE", "ES", "NL", "BE", "CZ", "IT_NORD"]
-DEFAULT_SCENARIOS = ["BASE", "DEMAND_UP", "FLEX_UP", "LOW_RIGIDITY", "HIGH_CO2", "HIGH_GAS"]
+DEFAULT_SCENARIOS = ["BASE", "DEMAND_UP", "LOW_RIGIDITY", "HIGH_CO2", "HIGH_GAS"]
 
 
 @dataclass

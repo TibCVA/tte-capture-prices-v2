@@ -46,6 +46,94 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
     psh_twh = row.get("psh_pumping_twh", np.nan)
     must_run_twh = row.get("gen_must_run_twh", np.nan)
     gen_total_twh = row.get("gen_primary_twh", row.get("gen_total_twh", np.nan))
+    n_hours = row.get("n_hours", row.get("n_hours_expected", np.nan))
+    coverage_price = row.get("coverage_price", np.nan)
+    coverage_load_total = row.get("coverage_load_total", np.nan)
+    missing_price = row.get("missing_share_price", np.nan)
+    missing_load = row.get("missing_share_load", np.nan)
+    partial_year_supported = bool(row.get("partial_year_supported", False))
+
+    if (not _finite(coverage_price)) and _finite(missing_price):
+        coverage_price = 1.0 - float(missing_price)
+    if (not _finite(coverage_load_total)) and _finite(missing_load):
+        coverage_load_total = 1.0 - float(missing_load)
+
+    if _finite(n_hours):
+        n_h = int(round(float(n_hours)))
+        if n_h not in {8760, 8784}:
+            checks.append(
+                {
+                    "status": "WARN" if partial_year_supported else "FAIL",
+                    "code": "TEST_DATA_001",
+                    "message": f"{label}: n_hours={n_h} (attendu 8760/8784).",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "status": "PASS",
+                    "code": "TEST_DATA_001",
+                    "message": f"{label}: n_hours={n_h} coherent.",
+                }
+            )
+    else:
+        checks.append({"status": "WARN", "code": "TEST_DATA_001", "message": f"{label}: n_hours indisponible."})
+
+    if _finite(coverage_price) and _finite(coverage_load_total):
+        cov_p = float(coverage_price)
+        cov_l = float(coverage_load_total)
+        if cov_p >= 0.99 and cov_l >= 0.99:
+            checks.append(
+                {
+                    "status": "PASS",
+                    "code": "TEST_DATA_002",
+                    "message": f"{label}: coverage price/load ok ({cov_p:.2%}/{cov_l:.2%}).",
+                }
+            )
+        elif cov_p >= 0.95 and cov_l >= 0.95:
+            checks.append(
+                {
+                    "status": "WARN",
+                    "code": "TEST_DATA_002",
+                    "message": f"{label}: coverage price/load limite ({cov_p:.2%}/{cov_l:.2%}).",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "TEST_DATA_002",
+                    "message": f"{label}: coverage price/load insuffisante ({cov_p:.2%}/{cov_l:.2%}).",
+                }
+            )
+    else:
+        checks.append({"status": "WARN", "code": "TEST_DATA_002", "message": f"{label}: coverage price/load indisponible."})
+
+    price_candidates = {
+        "price_eur_mwh": row.get("price_eur_mwh", np.nan),
+        "baseload_price_eur_mwh": row.get("baseload_price_eur_mwh", np.nan),
+        "offpeak_price_eur_mwh": row.get("offpeak_price_eur_mwh", np.nan),
+        "peakload_price_eur_mwh": row.get("peakload_price_eur_mwh", np.nan),
+        "ttl_eur_mwh": row.get("ttl_eur_mwh", np.nan),
+    }
+    outliers = []
+    for name, value in price_candidates.items():
+        if not _finite(value):
+            continue
+        val = float(value)
+        if val < -500.0 or val > 5000.0:
+            outliers.append((name, val))
+    if outliers:
+        details = "; ".join([f"{name}={val:.2f}" for name, val in outliers[:3]])
+        checks.append(
+            {
+                "status": "WARN",
+                "code": "TEST_DATA_003",
+                "message": f"{label}: {len(outliers)} prix hors plage [-500,5000] ({details}).",
+            }
+        )
+    else:
+        checks.append({"status": "PASS", "code": "TEST_DATA_003", "message": f"{label}: prix dans plage large attendue."})
 
     if _finite(sr) and not (0.0 <= float(sr) <= 1.0):
         checks.append({"status": "FAIL", "code": "RC_SR_RANGE", "message": f"{label}: SR hors [0,1]."})

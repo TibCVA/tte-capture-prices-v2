@@ -46,7 +46,7 @@ QUESTION_SUB_QUESTIONS: dict[str, str] = {
 2. Les signaux marche (heures negatives, capture ratio, spread) et physiques (SR, FAR, IR) sont-ils concordants ?
 3. Quelle est la confiance dans la bascule (nombre d'indicateurs concordants) ?
 4. Les seuils utilises sont-ils robustes (sensibilite a +/-50%) ?
-5. Comment les scenarios prospectifs (DEMAND_UP, FLEX_UP, LOW_RIGIDITY) modifient-ils l'annee de bascule ?
+5. Comment les scenarios prospectifs (DEMAND_UP, LOW_RIGIDITY) modifient-ils l'annee de bascule ?
 6. Quels pays sont les plus avances en phase 2 et pourquoi ?""",
     "Q2": """\
 1. Quelle est la pente de cannibalisation par pays et par techno (PV, wind) ?

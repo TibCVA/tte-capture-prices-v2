@@ -14,7 +14,7 @@ def _annual_hist_fixture() -> pd.DataFrame:
 
 
 def _phase2_fixture() -> pd.DataFrame:
-    scenarios = ["BASE", "DEMAND_UP", "FLEX_UP", "LOW_RIGIDITY", "HIGH_CO2", "HIGH_GAS", "HIGH_BOTH"]
+    scenarios = ["BASE", "DEMAND_UP", "LOW_RIGIDITY", "HIGH_CO2", "HIGH_GAS", "HIGH_BOTH"]
     rows = []
     for scenario_id in scenarios:
         for country in ["FR", "DE"]:
@@ -36,7 +36,7 @@ def test_build_default_selection_contract_q1_to_q5() -> None:
     q1 = llm_batch.build_default_selection("Q1", annual_hist, assumptions_phase2, countries_cfg)
     assert q1["countries"] == ["DE", "FR"]
     assert q1["years"] == list(range(2018, 2025))
-    assert q1["scenario_ids"] == ["BASE", "DEMAND_UP", "FLEX_UP", "LOW_RIGIDITY"]
+    assert q1["scenario_ids"] == ["BASE", "DEMAND_UP", "LOW_RIGIDITY"]
     assert q1["scenario_years"] == [2025, 2030, 2035]
 
     q2 = llm_batch.build_default_selection("Q2", annual_hist, assumptions_phase2, countries_cfg)
@@ -44,7 +44,7 @@ def test_build_default_selection_contract_q1_to_q5() -> None:
     assert q2["scenario_ids"] == ["BASE", "HIGH_CO2", "HIGH_GAS"]
 
     q3 = llm_batch.build_default_selection("Q3", annual_hist, assumptions_phase2, countries_cfg)
-    assert q3["scenario_ids"] == ["BASE", "DEMAND_UP", "FLEX_UP", "LOW_RIGIDITY"]
+    assert q3["scenario_ids"] == ["BASE", "DEMAND_UP", "LOW_RIGIDITY"]
 
     q4 = llm_batch.build_default_selection("Q4", annual_hist, assumptions_phase2, countries_cfg)
     assert q4["country"] == "FR"
@@ -52,7 +52,7 @@ def test_build_default_selection_contract_q1_to_q5() -> None:
     assert q4["year"] == 2024
     assert q4["years"] == [2024]
     assert q4["objective"] == "FAR_TARGET"
-    assert q4["scenario_ids"] == ["BASE", "FLEX_UP", "HIGH_CO2", "HIGH_GAS"]
+    assert q4["scenario_ids"] == ["BASE", "HIGH_CO2", "HIGH_GAS"]
     assert q4["scenario_years"] == [2035]
 
     q5 = llm_batch.build_default_selection("Q5", annual_hist, assumptions_phase2, countries_cfg)

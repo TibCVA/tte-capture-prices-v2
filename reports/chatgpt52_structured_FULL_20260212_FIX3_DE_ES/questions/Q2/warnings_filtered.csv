@@ -1,0 +1,13 @@
+question_id,status,code,message,scope,scenario_id,mentioned_countries,is_global
+Q2,WARN,QUESTION_WARNING,BASE: DE-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,BASE: DE-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,BASE: ES-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False
+Q2,WARN,QUESTION_WARNING,BASE: ES-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False
+Q2,WARN,QUESTION_WARNING,HIGH_CO2: DE-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,HIGH_CO2: DE-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,HIGH_CO2: ES-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False
+Q2,WARN,QUESTION_WARNING,HIGH_CO2: ES-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False
+Q2,WARN,QUESTION_WARNING,HIGH_GAS: DE-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,HIGH_GAS: DE-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,HIGH_GAS: ES-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False
+Q2,WARN,QUESTION_WARNING,HIGH_GAS: ES-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False

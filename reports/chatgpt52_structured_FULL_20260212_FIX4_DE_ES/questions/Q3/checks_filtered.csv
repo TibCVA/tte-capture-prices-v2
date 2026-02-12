@@ -1,0 +1,180 @@
+status,code,message,scope,scenario_id,question_id,mentioned_countries,is_global
+WARN,TEST_Q3_001,Colonnes predicted/target non disponibles dans Q3_status; test non applicable.,HIST,,Q3,,True
+PASS,TEST_DATA_001,DE-2018: n_hours=8760 coherent.,HIST,,Q3,DE,False
+PASS,TEST_DATA_002,DE-2018: coverage price/load ok (100.00%/99.89%).,HIST,,Q3,DE,False
+PASS,TEST_DATA_003,DE-2018: prix dans plage large attendue.,HIST,,Q3,DE,False
+PASS,TEST_DATA_001,DE-2019: n_hours=8760 coherent.,HIST,,Q3,DE,False
+PASS,TEST_DATA_002,DE-2019: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,DE,False
+PASS,TEST_DATA_003,DE-2019: prix dans plage large attendue.,HIST,,Q3,DE,False
+PASS,TEST_DATA_001,DE-2020: n_hours=8784 coherent.,HIST,,Q3,DE,False
+PASS,TEST_DATA_002,DE-2020: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,DE,False
+PASS,TEST_DATA_003,DE-2020: prix dans plage large attendue.,HIST,,Q3,DE,False
+PASS,TEST_DATA_001,DE-2021: n_hours=8760 coherent.,HIST,,Q3,DE,False
+PASS,TEST_DATA_002,DE-2021: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,DE,False
+PASS,TEST_DATA_003,DE-2021: prix dans plage large attendue.,HIST,,Q3,DE,False
+PASS,TEST_DATA_001,DE-2022: n_hours=8760 coherent.,HIST,,Q3,DE,False
+PASS,TEST_DATA_002,DE-2022: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,DE,False
+PASS,TEST_DATA_003,DE-2022: prix dans plage large attendue.,HIST,,Q3,DE,False
+PASS,TEST_DATA_001,DE-2023: n_hours=8760 coherent.,HIST,,Q3,DE,False
+PASS,TEST_DATA_002,DE-2023: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,DE,False
+PASS,TEST_DATA_003,DE-2023: prix dans plage large attendue.,HIST,,Q3,DE,False
+PASS,TEST_DATA_001,DE-2024: n_hours=8784 coherent.,HIST,,Q3,DE,False
+PASS,TEST_DATA_002,DE-2024: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,DE,False
+PASS,TEST_DATA_003,DE-2024: prix dans plage large attendue.,HIST,,Q3,DE,False
+PASS,TEST_DATA_001,ES-2018: n_hours=8760 coherent.,HIST,,Q3,ES,False
+PASS,TEST_DATA_002,ES-2018: coverage price/load ok (99.99%/99.97%).,HIST,,Q3,ES,False
+PASS,TEST_DATA_003,ES-2018: prix dans plage large attendue.,HIST,,Q3,ES,False
+PASS,TEST_DATA_001,ES-2019: n_hours=8760 coherent.,HIST,,Q3,ES,False
+PASS,TEST_DATA_002,ES-2019: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,ES,False
+PASS,TEST_DATA_003,ES-2019: prix dans plage large attendue.,HIST,,Q3,ES,False
+PASS,TEST_DATA_001,ES-2020: n_hours=8784 coherent.,HIST,,Q3,ES,False
+PASS,TEST_DATA_002,ES-2020: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,ES,False
+PASS,TEST_DATA_003,ES-2020: prix dans plage large attendue.,HIST,,Q3,ES,False
+PASS,TEST_DATA_001,ES-2021: n_hours=8760 coherent.,HIST,,Q3,ES,False
+PASS,TEST_DATA_002,ES-2021: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,ES,False
+PASS,TEST_DATA_003,ES-2021: prix dans plage large attendue.,HIST,,Q3,ES,False
+PASS,TEST_DATA_001,ES-2022: n_hours=8760 coherent.,HIST,,Q3,ES,False
+PASS,TEST_DATA_002,ES-2022: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,ES,False
+PASS,TEST_DATA_003,ES-2022: prix dans plage large attendue.,HIST,,Q3,ES,False
+PASS,TEST_DATA_001,ES-2023: n_hours=8760 coherent.,HIST,,Q3,ES,False
+PASS,TEST_DATA_002,ES-2023: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,ES,False
+PASS,TEST_DATA_003,ES-2023: prix dans plage large attendue.,HIST,,Q3,ES,False
+PASS,TEST_DATA_001,ES-2024: n_hours=8784 coherent.,HIST,,Q3,ES,False
+PASS,TEST_DATA_002,ES-2024: coverage price/load ok (99.99%/99.99%).,HIST,,Q3,ES,False
+PASS,TEST_DATA_003,ES-2024: prix dans plage large attendue.,HIST,,Q3,ES,False
+WARN,TEST_Q3_001,Colonnes predicted/target non disponibles dans Q3_status; test non applicable.,SCEN,DEMAND_UP,Q3,,True
+PASS,TEST_DATA_001,DE-2025: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2025: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2025: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2026: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2026: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2026: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2027: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2027: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2027: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2028: n_hours=8784 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2028: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2028: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2029: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2029: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2029: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2030: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2030: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2030: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2031: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2031: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2031: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2032: n_hours=8784 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2032: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2032: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2033: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2033: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2033: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2034: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2034: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2034: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,DE-2035: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_002,DE-2035: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_003,DE-2035: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,DE,False
+PASS,TEST_DATA_001,ES-2025: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2025: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2025: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2026: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2026: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2026: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2027: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2027: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2027: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2028: n_hours=8784 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2028: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2028: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2029: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2029: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2029: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2030: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2030: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2030: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2031: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2031: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2031: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2032: n_hours=8784 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2032: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2032: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2033: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2033: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2033: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2034: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2034: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2034: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_001,ES-2035: n_hours=8760 coherent.,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_002,ES-2035: coverage price/load ok (100.00%/100.00%).,SCEN,DEMAND_UP,Q3,ES,False
+PASS,TEST_DATA_003,ES-2035: prix dans plage large attendue.,SCEN,DEMAND_UP,Q3,ES,False
+WARN,TEST_Q3_001,Colonnes predicted/target non disponibles dans Q3_status; test non applicable.,SCEN,LOW_RIGIDITY,Q3,,True
+PASS,TEST_DATA_001,DE-2025: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2025: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2025: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2026: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2026: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2026: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2027: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2027: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2027: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2028: n_hours=8784 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2028: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2028: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2029: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2029: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2029: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2030: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2030: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2030: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2031: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2031: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2031: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2032: n_hours=8784 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2032: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2032: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2033: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2033: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2033: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2034: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2034: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2034: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,DE-2035: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_002,DE-2035: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_003,DE-2035: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,DE,False
+PASS,TEST_DATA_001,ES-2025: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2025: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2025: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2026: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2026: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2026: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2027: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2027: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2027: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2028: n_hours=8784 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2028: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2028: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2029: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2029: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2029: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2030: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2030: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2030: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2031: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2031: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2031: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2032: n_hours=8784 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2032: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2032: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2033: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2033: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2033: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2034: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2034: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2034: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_001,ES-2035: n_hours=8760 coherent.,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_002,ES-2035: coverage price/load ok (100.00%/100.00%).,SCEN,LOW_RIGIDITY,Q3,ES,False
+PASS,TEST_DATA_003,ES-2035: prix dans plage large attendue.,SCEN,LOW_RIGIDITY,Q3,ES,False
+WARN,BUNDLE_LEDGER_STATUS,"ledger: FAIL=0, WARN=2",BUNDLE,,Q3,,True
+WARN,BUNDLE_INFORMATIVENESS,share_tests_informatifs=100.00% ; share_compare_informatifs=14.29%,BUNDLE,,Q3,,True

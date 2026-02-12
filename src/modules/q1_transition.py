@@ -15,7 +15,7 @@ from src.modules.common import assumptions_subset
 from src.modules.reality_checks import build_common_checks
 from src.modules.result import ModuleResult
 
-Q1_RULE_VERSION = "q1_rule_v4_2026_02_11"
+Q1_RULE_VERSION = "q1_rule_v5_2026_02_12"
 DEFAULT_CRISIS_YEARS = {2022}
 DATA_QUALITY_BLOCKING_FLAGS = {
     "FAIL",
@@ -31,8 +31,10 @@ DATA_QUALITY_BLOCKING_FLAGS = {
 Q1_PARAMS = [
     "h_negative_stage2_min",
     "h_below_5_stage2_min",
+    "low_price_hours_share_stage2_min",
     "capture_ratio_pv_stage2_max",
     "capture_ratio_wind_stage2_max",
+    "sr_energy_stage2_min",
     "sr_hours_stage2_min",
     "low_residual_hours_stage2_min",
     "far_stage2_min",
@@ -41,6 +43,7 @@ Q1_PARAMS = [
     "avg_daily_spread_crisis_min",
     "stage1_capture_ratio_pv_min",
     "stage1_capture_ratio_wind_min",
+    "stage1_sr_energy_max",
     "stage1_sr_hours_max",
     "stage1_far_min",
     "stage1_ir_p10_max",
@@ -150,19 +153,38 @@ def _resolve_crisis_years(selection: dict[str, Any]) -> tuple[set[int], dict[str
     return out_global, out_country
 
 
+def _stage1_score_components(row: pd.Series, p: dict[str, float]) -> tuple[int, bool, bool, bool, bool, bool]:
+    h_neg_ok = bool(
+        _safe_float(row.get("h_negative_obs"), np.nan)
+        <= _safe_param(p, "stage1_h_negative_max", _safe_param(p, "h_negative_stage2_min", 200.0))
+    )
+    h_below_ok = bool(
+        _safe_float(row.get("h_below_5_obs"), np.nan)
+        <= _safe_param(p, "stage1_h_below_5_max", _safe_param(p, "h_below_5_stage2_min", 500.0))
+    )
+    pv_ratio = _safe_float(row.get("capture_ratio_pv"), np.nan)
+    wind_ratio = _safe_float(row.get("capture_ratio_wind"), np.nan)
+    capture_ok = False
+    if np.isfinite(pv_ratio):
+        capture_ok = bool(pv_ratio >= _safe_param(p, "stage1_capture_ratio_pv_min", 0.85))
+    elif np.isfinite(wind_ratio):
+        capture_ok = bool(wind_ratio >= _safe_param(p, "stage1_capture_ratio_wind_min", 0.90))
+    sr_energy_val = _safe_float(row.get("sr_energy_share_gen", row.get("sr_energy", np.nan)), np.nan)
+    sr_ok = bool(sr_energy_val <= _safe_param(p, "stage1_sr_energy_max", _safe_param(p, "sr_energy_stage2_min", 0.01)))
+    stage1_score = int(h_neg_ok) + int(h_below_ok) + int(capture_ok) + int(sr_ok)
+    return stage1_score, h_neg_ok, h_below_ok, capture_ok, sr_ok, bool(stage1_score >= 3)
+
+
 def _is_stage1(row: pd.Series, p: dict[str, float]) -> bool:
-    low_price_ok = bool(
-        float(row.get("h_negative_obs", np.nan)) < _safe_param(p, "stage1_h_negative_max", _safe_param(p, "h_negative_stage2_min", 200.0))
-        and float(row.get("h_below_5_obs", np.nan)) < _safe_param(p, "stage1_h_below_5_max", _safe_param(p, "h_below_5_stage2_min", 500.0))
+    stage1_score, _, _, _, _, score_ok = _stage1_score_components(row, p)
+    capture_degradation = bool(
+        row.get(
+            "CAPTURE_DEGRADATION_FLAG",
+            (_safe_float(row.get("capture_ratio_pv"), np.nan) <= _safe_param(p, "capture_ratio_pv_stage2_max", 0.80))
+            or (_safe_float(row.get("capture_ratio_wind"), np.nan) <= _safe_param(p, "capture_ratio_wind_stage2_max", 0.90)),
+        )
     )
-    return bool(
-        low_price_ok
-        and float(row.get("capture_ratio_pv", np.nan)) >= _safe_param(p, "stage1_capture_ratio_pv_min", 0.85)
-        and float(row.get("capture_ratio_wind", np.nan)) >= _safe_param(p, "stage1_capture_ratio_wind_min", 0.90)
-        and float(row.get("sr_hours_share", np.nan)) <= _safe_param(p, "stage1_sr_hours_max", 0.05)
-        and float(row.get("far_observed", np.nan)) >= _safe_param(p, "stage1_far_min", 0.95)
-        and float(row.get("ir_p10", np.nan)) <= _safe_param(p, "stage1_ir_p10_max", 1.5)
-    )
+    return bool(score_ok and stage1_score >= 3 and (not capture_degradation))
 
 
 def _build_rule_definition(params: dict[str, float], crisis_years: set[int]) -> pd.DataFrame:
@@ -172,8 +194,14 @@ def _build_rule_definition(params: dict[str, float], crisis_years: set[int]) -> 
                 "q1_rule_version": Q1_RULE_VERSION,
                 "h_negative_stage2_min": _safe_param(params, "h_negative_stage2_min", 200.0),
                 "h_below_5_stage2_min": _safe_param(params, "h_below_5_stage2_min", 500.0),
+                "low_price_hours_share_stage2_min": _safe_param(
+                    params,
+                    "low_price_hours_share_stage2_min",
+                    _safe_param(params, "h_below_5_stage2_min", 500.0) / 8760.0,
+                ),
                 "capture_ratio_pv_stage2_max": _safe_param(params, "capture_ratio_pv_stage2_max", 0.80),
                 "capture_ratio_wind_stage2_max": _safe_param(params, "capture_ratio_wind_stage2_max", 0.90),
+                "sr_energy_stage2_min": _safe_param(params, "sr_energy_stage2_min", _safe_param(params, "sr_energy_material_min", 0.01)),
                 "sr_hours_stage2_min": _safe_param(params, "sr_hours_stage2_min", 0.10),
                 "low_residual_hours_stage2_min": _safe_param(
                     params,
@@ -186,17 +214,22 @@ def _build_rule_definition(params: dict[str, float], crisis_years: set[int]) -> 
                 "avg_daily_spread_crisis_min": _safe_param(params, "avg_daily_spread_crisis_min", 50.0),
                 "stage1_capture_ratio_pv_min": _safe_param(params, "stage1_capture_ratio_pv_min", 0.85),
                 "stage1_capture_ratio_wind_min": _safe_param(params, "stage1_capture_ratio_wind_min", 0.90),
+                "stage1_sr_energy_max": _safe_param(
+                    params,
+                    "stage1_sr_energy_max",
+                    _safe_param(params, "sr_energy_stage2_min", _safe_param(params, "sr_energy_material_min", 0.01)),
+                ),
                 "stage1_sr_hours_max": _safe_param(params, "stage1_sr_hours_max", 0.05),
                 "stage1_far_min": _safe_param(params, "stage1_far_min", 0.95),
                 "stage1_ir_p10_max": _safe_param(params, "stage1_ir_p10_max", 1.5),
                 "persistence_window_years": _safe_param(params, "q1_persistence_window_years", 2.0),
                 "crisis_years_explicit": ",".join([str(int(y)) for y in sorted(crisis_years)]),
                 "rule_logic": (
-                    "stage2_candidate_tech=(>=2 familles actives parmi LOW_PRICE/PHYSICAL/VALUE_TECH) "
-                    "avec persistence sur 2 annees non-crise; "
-                    "bascule_country=min(bascule_pv,bascule_wind). "
-                    "stage1_candidate=(familles toutes inactives) hors crise. "
-                    "NEG_NOT_IN_AB reste informatif; RC principal=AB_OR_LOW_RESIDUAL."
+                    "is_phase2_market := LOW_PRICE_FLAG AND CAPTURE_DEGRADATION_FLAG; "
+                    "is_phase2_physical := PHYSICAL_STRESS_FLAG. "
+                    "LOW_PRICE_FLAG uses h_negative OR h_below_5 OR low_price_hours_share. "
+                    "PHYSICAL_STRESS_FLAG uses sr_energy OR sr_hours OR ir_p10. "
+                    "is_stage1 := stage1_score>=3 AND NOT CAPTURE_DEGRADATION_FLAG (hors crise/qualite OK)."
                 ),
             }
         ]
@@ -211,8 +244,10 @@ def _flag_list(row: pd.Series) -> str:
         "physical_family",
         "flag_h_negative_stage2",
         "flag_h_below_5_stage2",
+        "flag_low_price_share_high",
         "flag_capture_pv_low",
         "flag_capture_wind_low",
+        "flag_sr_energy_high",
         "flag_sr_hours_high",
         "flag_low_residual_high",
         "flag_far_low",
@@ -235,9 +270,9 @@ def _apply_phase2_logic(
     out = panel.copy()
     crisis_years_by_country = crisis_years_by_country or {}
     if "capture_ratio_pv" not in out.columns:
-        out["capture_ratio_pv"] = out.get("capture_ratio_pv_vs_baseload", np.nan)
+        out["capture_ratio_pv"] = out.get("capture_ratio_pv_vs_baseload", out.get("capture_ratio_pv_vs_ttl", np.nan))
     if "capture_ratio_wind" not in out.columns:
-        out["capture_ratio_wind"] = out.get("capture_ratio_wind_vs_baseload", np.nan)
+        out["capture_ratio_wind"] = out.get("capture_ratio_wind_vs_baseload", out.get("capture_ratio_wind_vs_ttl", np.nan))
     if "sr_energy_share_load" not in out.columns:
         out["sr_energy_share_load"] = out.get("sr_energy", np.nan)
     if "sr_hours_share" not in out.columns:
@@ -276,8 +311,25 @@ def _apply_phase2_logic(
 
     h_neg = pd.to_numeric(out.get("h_negative_obs"), errors="coerce")
     h_low = pd.to_numeric(out.get("h_below_5_obs"), errors="coerce")
+    low_price_raw = out.get("low_price_hours_share", pd.Series(np.nan, index=out.index))
+    if isinstance(low_price_raw, pd.Series):
+        low_price_share = pd.to_numeric(low_price_raw, errors="coerce")
+    else:
+        low_price_share = pd.Series(low_price_raw, index=out.index, dtype=float)
+    if low_price_share.notna().sum() == 0:
+        hours_raw = out.get("n_hours_expected", pd.Series(np.nan, index=out.index))
+        if isinstance(hours_raw, pd.Series):
+            hours = pd.to_numeric(hours_raw, errors="coerce")
+        else:
+            hours = pd.Series(hours_raw, index=out.index, dtype=float)
+        hours = hours.replace(0.0, np.nan)
+        if hours.notna().sum() == 0:
+            hours = pd.Series(8760.0, index=out.index, dtype=float)
+        low_price_share = h_low / hours
+    out["low_price_hours_share"] = low_price_share
     cr_pv = pd.to_numeric(out.get("capture_ratio_pv"), errors="coerce")
     cr_wind = pd.to_numeric(out.get("capture_ratio_wind"), errors="coerce")
+    sr_energy = pd.to_numeric(out.get("sr_energy_share_gen", out.get("sr_energy")), errors="coerce")
     sr_h = pd.to_numeric(out.get("sr_hours_share"), errors="coerce")
     far = pd.to_numeric(out.get("far_observed"), errors="coerce")
     ir = pd.to_numeric(out.get("ir_p10"), errors="coerce")
@@ -285,12 +337,19 @@ def _apply_phase2_logic(
 
     out["flag_h_negative_stage2"] = h_neg >= _safe_param(p, "h_negative_stage2_min", 200.0)
     out["flag_h_below_5_stage2"] = h_low >= _safe_param(p, "h_below_5_stage2_min", 500.0)
-    out["flag_capture_pv_low"] = (
-        cr_pv <= _safe_param(p, "capture_ratio_pv_stage2_max", 0.80)
+    out["flag_low_price_share_high"] = low_price_share >= _safe_param(
+        p,
+        "low_price_hours_share_stage2_min",
+        _safe_param(p, "h_below_5_stage2_min", 500.0) / 8760.0,
     )
+    out["flag_capture_pv_low"] = cr_pv <= _safe_param(p, "capture_ratio_pv_stage2_max", 0.80)
     out["flag_capture_wind_low"] = cr_wind <= _safe_param(p, "capture_ratio_wind_stage2_max", 0.90)
+    out["flag_sr_energy_high"] = sr_energy >= _safe_param(
+        p,
+        "sr_energy_stage2_min",
+        _safe_param(p, "sr_energy_material_min", 0.01),
+    )
     out["flag_sr_hours_high"] = sr_h >= _safe_param(p, "sr_hours_stage2_min", 0.10)
-    # Backward-compatible alias used by some pages/tests.
     out["flag_sr_high"] = out["flag_sr_hours_high"]
     out["flag_low_residual_high"] = low_residual_share >= _safe_param(
         p,
@@ -299,7 +358,11 @@ def _apply_phase2_logic(
     )
     out["flag_far_low"] = far < _safe_param(p, "far_stage2_min", 0.95)
     out["flag_ir_high"] = ir >= _safe_param(p, "ir_p10_stage2_min", 1.5)
-    out["flag_spread_high"] = pd.to_numeric(out.get("days_spread_gt50"), errors="coerce") >= _safe_param(p, "days_spread_gt50_stage2_min", 150.0)
+    out["flag_spread_high"] = pd.to_numeric(out.get("days_spread_gt50"), errors="coerce") >= _safe_param(
+        p,
+        "days_spread_gt50_stage2_min",
+        150.0,
+    )
     crisis = pd.Series(False, index=out.index, dtype=bool)
     for i, row in out[["country", "year"]].iterrows():
         country = str(row.get("country", ""))
@@ -311,35 +374,36 @@ def _apply_phase2_logic(
         crisis.at[i] = y in years_set
     out["crisis_year"] = crisis
 
-    out["low_price_family"] = out["flag_h_negative_stage2"] | out["flag_h_below_5_stage2"] | out["flag_spread_high"]
+    out["LOW_PRICE_FLAG"] = (
+        out["flag_h_negative_stage2"]
+        | out["flag_h_below_5_stage2"]
+        | out["flag_low_price_share_high"]
+    )
+    out["CAPTURE_DEGRADATION_FLAG"] = out["flag_capture_pv_low"] | out["flag_capture_wind_low"]
+    out["PHYSICAL_STRESS_FLAG"] = out["flag_sr_energy_high"] | out["flag_sr_hours_high"] | out["flag_ir_high"]
+
+    out["low_price_family"] = out["LOW_PRICE_FLAG"]
     out["value_family_pv"] = out["flag_capture_pv_low"]
     out["value_family_wind"] = out["flag_capture_wind_low"]
-    out["value_family"] = out["value_family_pv"] | out["value_family_wind"]
-    out["physical_family"] = out["flag_sr_hours_high"] | out["flag_far_low"] | out["flag_ir_high"] | out["flag_low_residual_high"]
+    out["value_family"] = out["CAPTURE_DEGRADATION_FLAG"]
+    out["physical_family"] = out["PHYSICAL_STRESS_FLAG"]
 
     out["low_price_flags_count"] = (
-        out[["flag_h_negative_stage2", "flag_h_below_5_stage2"]]
-        .fillna(False)
-        .astype(int)
-        .sum(axis=1)
+        out[["flag_h_negative_stage2", "flag_h_below_5_stage2", "flag_low_price_share_high"]].fillna(False).astype(int).sum(axis=1)
     )
     out["capture_flags_count"] = out[["flag_capture_pv_low", "flag_capture_wind_low"]].fillna(False).astype(int).sum(axis=1)
-    out["physical_flags_count"] = out[
-        ["flag_sr_hours_high", "flag_far_low", "flag_ir_high", "flag_low_residual_high"]
-    ].fillna(False).astype(int).sum(axis=1)
+    out["physical_flags_count"] = out[["flag_sr_energy_high", "flag_sr_hours_high", "flag_ir_high"]].fillna(False).astype(int).sum(axis=1)
 
     out["family_count"] = out[["low_price_family", "value_family", "physical_family"]].fillna(False).astype(int).sum(axis=1)
-    out["family_count_pv"] = (
-        out[["low_price_family", "physical_family", "value_family_pv"]].fillna(False).astype(int).sum(axis=1)
-    )
-    out["family_count_wind"] = (
-        out[["low_price_family", "physical_family", "value_family_wind"]].fillna(False).astype(int).sum(axis=1)
-    )
-    out["stage2_points_low_price"] = out["low_price_family"].fillna(False).astype(int)
-    out["stage2_points_capture"] = out["value_family"].fillna(False).astype(int)
-    out["stage2_points_physical"] = out["physical_family"].fillna(False).astype(int)
+    out["family_count_pv"] = out[["low_price_family", "physical_family", "value_family_pv"]].fillna(False).astype(int).sum(axis=1)
+    out["family_count_wind"] = out[["low_price_family", "physical_family", "value_family_wind"]].fillna(False).astype(int).sum(axis=1)
+    out["stage2_points_low_price"] = out["LOW_PRICE_FLAG"].fillna(False).astype(int)
+    out["stage2_points_capture"] = out["CAPTURE_DEGRADATION_FLAG"].fillna(False).astype(int)
+    out["stage2_points_physical"] = out["PHYSICAL_STRESS_FLAG"].fillna(False).astype(int)
     out["stage2_points_vol"] = out["crisis_year"].fillna(False).astype(int)
-    out["stage2_market_score"] = out["family_count"]
+    out["stage2_market_score"] = (
+        out["stage2_points_low_price"] + out["stage2_points_capture"] + out["stage2_points_physical"] + out["stage2_points_vol"]
+    )
     out["score_breakdown"] = out.apply(
         lambda r: f"low={int(r['stage2_points_low_price'])};value={int(r['stage2_points_capture'])};physical={int(r['stage2_points_physical'])};crisis={int(r['stage2_points_vol'])}",
         axis=1,
@@ -382,58 +446,47 @@ def _apply_phase2_logic(
     )
     out["market_physical_gap_flag"] = out["market_physical_gap_flag"].fillna(False).astype(bool)
 
-    out["stage2_candidate_year_pv"] = (
-        (out["family_count_pv"] >= 2)
-        & out["quality_ok"].fillna(False)
-        & (~out["crisis_year"].fillna(False))
-    )
-    out["stage2_candidate_year_wind"] = (
-        (out["family_count_wind"] >= 2)
-        & out["quality_ok"].fillna(False)
-        & (~out["crisis_year"].fillna(False))
-    )
-    out["stage2_candidate_year_country"] = out["stage2_candidate_year_pv"] | out["stage2_candidate_year_wind"]
-    out["stage2_candidate_year"] = (
-        (out["family_count"] >= 2)
-        & out["quality_ok"].fillna(False)
-        & (~out["crisis_year"].fillna(False))
-    )
-    out["stage2_candidate_year"] = out["stage2_candidate_year"] | out["stage2_candidate_year_country"]
+    phase2_market_core = out["LOW_PRICE_FLAG"] & out["CAPTURE_DEGRADATION_FLAG"]
+    out["is_phase2_market"] = phase2_market_core & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
+    out["is_phase2_physical"] = out["PHYSICAL_STRESS_FLAG"] & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
+    out["stage2_candidate_year"] = out["is_phase2_market"]
+    out["stage2_candidate_year_pv"] = out["is_phase2_market"] & out["flag_capture_pv_low"]
+    out["stage2_candidate_year_wind"] = out["is_phase2_market"] & out["flag_capture_wind_low"]
+    out["stage2_candidate_year_country"] = out["is_phase2_market"]
     out["phase2_candidate_year"] = out["stage2_candidate_year"]
-    out["flag_capture_only_stage2"] = out["value_family"] & (~out["low_price_family"]) & (~out["physical_family"])
-    out["is_phase2_market"] = out["stage2_candidate_year"]
-    out["physical_candidate_year"] = (
-        out["physical_family"]
-        & out["quality_ok"].fillna(False)
-        & (~out["crisis_year"].fillna(False))
-    )
-    out["is_phase2_physical"] = out["physical_candidate_year"]
+    out["flag_capture_only_stage2"] = out["CAPTURE_DEGRADATION_FLAG"] & (~out["LOW_PRICE_FLAG"]) & (~out["PHYSICAL_STRESS_FLAG"])
+    out["physical_candidate_year"] = out["is_phase2_physical"]
     out["signal_low_price"] = out["low_price_family"]
     out["signal_value"] = out["value_family"]
     out["signal_physical"] = out["physical_family"]
     out["flag_non_capture_stage2"] = out["low_price_family"].astype(int) + out["physical_family"].astype(int)
     out["active_flags"] = out.apply(_flag_list, axis=1)
 
+    stage_components = out.apply(lambda row: _stage1_score_components(row, p), axis=1)
+    out["stage1_score"] = stage_components.apply(lambda x: int(x[0]))
+    out["stage1_h_negative_ok"] = stage_components.apply(lambda x: bool(x[1]))
+    out["stage1_h_below_5_ok"] = stage_components.apply(lambda x: bool(x[2]))
+    out["stage1_capture_ok"] = stage_components.apply(lambda x: bool(x[3]))
+    out["stage1_sr_ok"] = stage_components.apply(lambda x: bool(x[4]))
     out["is_stage1_criteria"] = (
         out.apply(lambda row: _is_stage1(row, p), axis=1)
         & out["quality_ok"].fillna(False)
         & (~out["crisis_year"].fillna(False))
     )
+    out["is_stage1"] = out["is_stage1_criteria"]
     out["stage1_candidate_year"] = out["is_stage1_criteria"]
     out["phase_market"] = np.select(
-        [out["is_phase2_market"], out["is_stage1_criteria"]],
-        ["phase2", "phase1"],
+        [out["is_stage1_criteria"], out["is_phase2_market"]],
+        ["phase1", "phase2"],
         default="uncertain",
     )
     out["stress_phys_state"] = np.select(
         [
-            pd.to_numeric(out["sr_hours_share"], errors="coerce") < _safe_param(p, "sr_hours_stage2_min", 0.10),
-            (pd.to_numeric(out["sr_hours_share"], errors="coerce") >= _safe_param(p, "sr_hours_stage2_min", 0.10))
-            & (pd.to_numeric(out["far_observed"], errors="coerce") >= _safe_param(p, "far_stage2_min", 0.95)),
-            (pd.to_numeric(out["sr_hours_share"], errors="coerce") >= _safe_param(p, "sr_hours_stage2_min", 0.10))
-            & (pd.to_numeric(out["far_observed"], errors="coerce") < _safe_param(p, "far_stage2_min", 0.95)),
+            ~out["PHYSICAL_STRESS_FLAG"],
+            out["PHYSICAL_STRESS_FLAG"] & out["LOW_PRICE_FLAG"],
+            out["PHYSICAL_STRESS_FLAG"] & (~out["LOW_PRICE_FLAG"]),
         ],
-        ["pas_de_surplus_structurel", "surplus_present_mais_absorbe", "surplus_non_absorbe"],
+        ["pas_de_stress_physique", "stress_physique_avec_signal_prix", "stress_physique_sans_signal_prix"],
         default="unknown",
     )
     return out
@@ -552,6 +605,10 @@ def _drivers_at_bascule(row: pd.Series, p: dict[str, float]) -> str:
             drivers.append(
                 f"LOW_PRICE:h_below_5_obs>={_safe_param(p, 'h_below_5_stage2_min', 500.0)} ({_safe_float(row.get('h_below_5_obs'), np.nan):.1f})"
             )
+        if bool(row.get("flag_low_price_share_high", False)):
+            drivers.append(
+                f"LOW_PRICE:low_price_hours_share>={_safe_param(p, 'low_price_hours_share_stage2_min', _safe_param(p, 'h_below_5_stage2_min', 500.0)/8760.0):.3f} ({_safe_float(row.get('low_price_hours_share'), np.nan):.3f})"
+            )
     if bool(row.get("value_family", False)):
         if bool(row.get("flag_capture_pv_low", False)):
             drivers.append(
@@ -562,6 +619,10 @@ def _drivers_at_bascule(row: pd.Series, p: dict[str, float]) -> str:
                 f"VALUE:capture_ratio_wind<={_safe_param(p, 'capture_ratio_wind_stage2_max', 0.90):.2f} ({_safe_float(row.get('capture_ratio_wind'), np.nan):.3f})"
             )
     if bool(row.get("physical_family", False)):
+        if bool(row.get("flag_sr_energy_high", False)):
+            drivers.append(
+                f"PHYSICAL:sr_energy>={_safe_param(p, 'sr_energy_stage2_min', _safe_param(p, 'sr_energy_material_min', 0.01)):.3f} ({_safe_float(row.get('sr_energy_share_gen', row.get('sr_energy')), np.nan):.3f})"
+            )
         if bool(row.get("flag_sr_hours_high", False)):
             drivers.append(
                 f"PHYSICAL:sr_hours>={_safe_param(p, 'sr_hours_stage2_min', 0.10):.2f} ({_safe_float(row.get('sr_hours_share'), np.nan):.3f})"
@@ -1034,12 +1095,29 @@ def run_q1(
                     "message": f"{row['country']} {int(row['year'])}: capture-only sans low-price ni stress physique.",
                 }
             )
-        if bool(row.get("is_phase2_market", False)) and int(_safe_float(row.get("low_price_flags_count"), 0.0)) == 0 and int(_safe_float(row.get("physical_flags_count"), 0.0)) == 0:
+        if bool(row.get("is_phase2_market", False)) and (
+            (not bool(row.get("LOW_PRICE_FLAG", False)))
+            or (not bool(row.get("CAPTURE_DEGRADATION_FLAG", False)))
+        ):
             checks.append(
                 {
-                    "status": "WARN",
+                    "status": "FAIL",
                     "code": "Q1_NO_FALSE_PHASE2_WITHOUT_LOW_PRICE",
-                    "message": f"{row['country']} {int(row['year'])}: Phase2 detectee sans LOW-PRICE ni PHYSICAL flags.",
+                    "message": (
+                        f"{row['country']} {int(row['year'])}: is_phase2_market doit exiger LOW_PRICE_FLAG "
+                        "et CAPTURE_DEGRADATION_FLAG."
+                    ),
+                }
+            )
+        if bool(row.get("is_phase2_market", False)) and (
+            (not bool(row.get("LOW_PRICE_FLAG", False)))
+            and (not bool(row.get("PHYSICAL_STRESS_FLAG", False)))
+        ):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q1_NO_FALSE_PHASE2_WITHOUT_LOW_PRICE_AND_PHYSICAL",
+                    "message": f"{row['country']} {int(row['year'])}: impossible d'avoir phase2 sans LOW_PRICE et sans PHYSICAL.",
                 }
             )
         capture_ratio_pv = _safe_float(row.get("capture_ratio_pv"), np.nan)
@@ -1052,10 +1130,8 @@ def run_q1(
                 }
             )
         healthy = bool(
-            (capture_ratio_pv >= _safe_param(params, "stage1_capture_ratio_pv_min", 0.85))
-            and (_safe_float(row.get("capture_ratio_wind"), np.nan) >= _safe_param(params, "stage1_capture_ratio_wind_min", 0.90))
-            and (not bool(row.get("low_price_family", False)))
-            and (not bool(row.get("physical_family", False)))
+            int(_safe_float(row.get("stage1_score"), 0.0)) >= 3
+            and (not bool(row.get("CAPTURE_DEGRADATION_FLAG", False)))
         )
         if healthy and bool(row.get("quality_ok", False)) and (not bool(row.get("crisis_year", False))) and not bool(row.get("is_stage1_criteria", False)):
             checks.append(
@@ -1063,6 +1139,14 @@ def run_q1(
                     "status": "FAIL",
                     "code": "Q1_STAGE1_HEALTHY_NOT_TAGGED",
                     "message": f"{row['country']} {int(row['year'])}: annee saine non marquee stage1.",
+                }
+            )
+        if bool(row.get("phase_market") == "phase1") and bool(row.get("CAPTURE_DEGRADATION_FLAG", False)) and bool(row.get("LOW_PRICE_FLAG", False)):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q1_PHASE1_CONTRADICTION",
+                    "message": f"{row['country']} {int(row['year'])}: phase1 incompatible avec LOW_PRICE_FLAG et CAPTURE_DEGRADATION_FLAG.",
                 }
             )
         if str(selection.get("mode", "HIST")).upper() == "SCEN":
@@ -1075,6 +1159,54 @@ def run_q1(
                         "message": f"{row['country']} {int(row['year'])}: far_observed manquant en scenario.",
                     }
                 )
+        for share_col in ["must_run_share_load", "must_run_share_netdemand"]:
+            share_val = _safe_float(row.get(share_col), np.nan)
+            if np.isfinite(share_val) and not (0.0 <= share_val <= 1.0):
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q1_MUSTRUN_SHARE_OUT_OF_RANGE",
+                        "message": f"{row['country']} {int(row['year'])}: {share_col} hors [0,1].",
+                    }
+                )
+
+    stage2_mask = panel.get("is_phase2_market", pd.Series(False, index=panel.index)).fillna(False).astype(bool)
+    if bool(stage2_mask.any()):
+        h_neg_thr = _safe_param(params, "h_negative_stage2_min", 200.0)
+        h_low_thr = _safe_param(params, "h_below_5_stage2_min", 500.0)
+        spread_thr = _safe_param(params, "days_spread_gt50_stage2_min", 150.0)
+        h_neg = pd.to_numeric(panel.get("h_negative_obs"), errors="coerce")
+        h_low = pd.to_numeric(panel.get("h_below_5_obs"), errors="coerce")
+        spread = pd.to_numeric(panel.get("days_spread_gt50"), errors="coerce")
+        if spread.notna().sum() == 0:
+            spread = pd.to_numeric(panel.get("days_spread_50_obs"), errors="coerce")
+        low_price_evidence = (h_neg >= h_neg_thr) | (h_low >= h_low_thr) | (spread >= spread_thr)
+        invalid = stage2_mask & (~low_price_evidence.fillna(False))
+        if bool(invalid.any()):
+            for _, bad_row in panel.loc[invalid, ["country", "year", "h_negative_obs", "h_below_5_obs"]].iterrows():
+                bad_year = _safe_float(bad_row.get("year"), np.nan)
+                bad_year_txt = str(int(bad_year)) if np.isfinite(bad_year) else "NA"
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "TEST_Q1_001",
+                        "message": (
+                            f"{bad_row['country']}-{bad_year_txt}: stage2 sans evidence low-price "
+                            f"(h_negative={_safe_float(bad_row.get('h_negative_obs'), np.nan):.1f}, "
+                            f"h_below_5={_safe_float(bad_row.get('h_below_5_obs'), np.nan):.1f})."
+                        ),
+                    }
+                )
+        else:
+            checks.append(
+                {
+                    "status": "PASS",
+                    "code": "TEST_Q1_001",
+                    "message": "Toutes les lignes stage2 ont au moins un signal low-price (h_negative/h_below_5/days_spread_gt50).",
+                }
+            )
+    else:
+        checks.append({"status": "WARN", "code": "TEST_Q1_001", "message": "Aucune ligne stage2 observee; test non applicable."})
 
     summary = pd.DataFrame(summary_rows)
     for col, default in {
@@ -1105,14 +1237,25 @@ def run_q1(
         "active_flags",
         "flag_h_negative_stage2",
         "flag_h_below_5_stage2",
+        "flag_low_price_share_high",
         "flag_capture_pv_low",
         "flag_capture_wind_low",
+        "flag_sr_energy_high",
         "flag_sr_hours_high",
         "flag_low_residual_high",
         "flag_sr_high",
         "flag_far_low",
         "flag_ir_high",
         "flag_spread_high",
+        "LOW_PRICE_FLAG",
+        "CAPTURE_DEGRADATION_FLAG",
+        "PHYSICAL_STRESS_FLAG",
+        "stage1_score",
+        "stage1_h_negative_ok",
+        "stage1_h_below_5_ok",
+        "stage1_capture_ok",
+        "stage1_sr_ok",
+        "is_stage1",
         "market_physical_gap_flag",
         "neg_price_explained_by_surplus_ratio",
         "low_price_family",

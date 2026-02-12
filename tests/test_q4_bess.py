@@ -57,7 +57,7 @@ def test_q4_reduces_negative_hours_when_present(make_raw_panel, countries_cfg, t
     f = res.tables["Q4_bess_frontier"].copy()
     h_before = pd.to_numeric(f["h_negative_before"], errors="coerce")
     if pd.notna(h_before).any() and float(h_before.max()) > 0:
-        assert (pd.to_numeric(f["delta_h_negative"], errors="coerce") < 0).any()
+        assert (pd.to_numeric(f["delta_h_negative"], errors="coerce") <= 0).all()
     fail_codes = {str(c.get("code", "")) for c in res.checks if str(c.get("status", "")).upper() == "FAIL"}
     assert "Q4_BESS_INEFFECTIVE" not in fail_codes
 
@@ -70,7 +70,7 @@ def test_q4_monotonic_surplus_reduction(make_raw_panel, countries_cfg, threshold
     assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
     res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
 
-    f = res.tables["Q4_bess_frontier"].sort_values("required_bess_power_mw")
+    f = res.tables["Q4_bess_frontier"].sort_values("bess_power_mw_test")
     if len(f) >= 2:
         assert f["surplus_unabs_energy_after"].iloc[-1] <= f["surplus_unabs_energy_after"].iloc[0]
 
@@ -215,7 +215,7 @@ def test_q4_soc_end_zero_in_default_mode(make_raw_panel, countries_cfg, threshol
     res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
     f = res.tables["Q4_bess_frontier"].copy()
     end = pd.to_numeric(f["soc_end_mwh"], errors="coerce").fillna(0.0).abs()
-    e = pd.to_numeric(f["required_bess_energy_mwh"], errors="coerce").fillna(0.0)
+    e = pd.to_numeric(f["bess_energy_mwh_test"], errors="coerce").fillna(0.0)
     tol = (e.clip(lower=1.0) * 1e-6) + 1e-9
     assert (end <= tol).all()
 
@@ -238,6 +238,105 @@ def test_q4_already_met_has_no_objective_not_reached_warning(make_raw_panel, cou
     }
     assert "Q4_OBJECTIVE_NOT_REACHED_GRID" not in objective_warn_codes
     assert "Q4_OBJECTIVE_UNREACHABLE" not in objective_warn_codes
+
+
+def test_q4_emits_test_q4_reality_checks(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
+
+    q4_001 = [c for c in res.checks if str(c.get("code")) == "TEST_Q4_001"]
+    q4_002 = [c for c in res.checks if str(c.get("code")) == "TEST_Q4_002"]
+    assert q4_001 and any(str(c.get("status")) == "PASS" for c in q4_001)
+    assert q4_002 and any(str(c.get("status")) == "PASS" for c in q4_002)
+
+
+def test_q4_zero_size_after_equals_before(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    raw.loc[raw.index[:120], "price_da_eur_mwh"] = -20.0
+    raw.loc[raw.index[120:], "price_da_eur_mwh"] = 70.0
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(
+        hourly,
+        assumptions,
+        {
+            "country": "FR",
+            "year": 2024,
+            "objective": "LOW_PRICE_TARGET",
+            "power_grid": [0.0, 200.0],
+            "duration_grid": [0.0, 2.0],
+            "force_recompute": True,
+        },
+        "test",
+        dispatch_mode="SURPLUS_FIRST",
+    )
+    f = res.tables["Q4_bess_frontier"].copy()
+    zero = (
+        pd.to_numeric(f["bess_power_mw_test"], errors="coerce").fillna(0.0).abs() <= 1e-9
+    ) | (
+        pd.to_numeric(f["bess_energy_mwh_test"], errors="coerce").fillna(0.0).abs() <= 1e-9
+    )
+    z = f[zero]
+    assert not z.empty
+    for after_col, before_col in [
+        ("h_negative_after", "h_negative_before"),
+        ("h_below_5_after", "h_below_5_before"),
+        ("capture_ratio_pv_after", "capture_ratio_pv_before"),
+        ("capture_ratio_wind_after", "capture_ratio_wind_before"),
+    ]:
+        a = pd.to_numeric(z[after_col], errors="coerce")
+        b = pd.to_numeric(z[before_col], errors="coerce")
+        assert ((a - b).abs() <= 1e-9).all()
+
+
+def test_q4_monotonic_hneg_and_unabs_on_grid(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    raw.loc[raw.index[:120], "price_da_eur_mwh"] = -10.0
+    raw.loc[raw.index[120:], "price_da_eur_mwh"] = 80.0
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(
+        hourly,
+        assumptions,
+        {
+            "country": "FR",
+            "year": 2024,
+            "objective": "LOW_PRICE_TARGET",
+            "power_grid": [0.0, 100.0, 300.0],
+            "duration_grid": [1.0, 2.0, 4.0],
+            "force_recompute": True,
+        },
+        "test",
+        dispatch_mode="SURPLUS_FIRST",
+    )
+    f = res.tables["Q4_bess_frontier"].copy()
+
+    for d in sorted(pd.to_numeric(f["bess_duration_h_test"], errors="coerce").dropna().unique().tolist()):
+        g = f[pd.to_numeric(f["bess_duration_h_test"], errors="coerce") == float(d)].sort_values("bess_power_mw_test")
+        if len(g) >= 2:
+            assert (pd.to_numeric(g["surplus_unabs_energy_after"], errors="coerce").diff().dropna() <= 1e-9).all()
+            assert (pd.to_numeric(g["h_negative_after"], errors="coerce").diff().dropna() <= 1e-9).all()
+
+    for p in sorted(pd.to_numeric(f["bess_power_mw_test"], errors="coerce").dropna().unique().tolist()):
+        g = f[pd.to_numeric(f["bess_power_mw_test"], errors="coerce") == float(p)].sort_values("bess_energy_mwh_test")
+        if len(g) >= 2:
+            assert (pd.to_numeric(g["surplus_unabs_energy_after"], errors="coerce").diff().dropna() <= 1e-9).all()
+            assert (pd.to_numeric(g["h_negative_after"], errors="coerce").diff().dropna() <= 1e-9).all()
+
+
+def test_q4_no_charge_above_surplus_in_surplus_first(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(hourly, assumptions, _selection(force_recompute=True), "test", dispatch_mode="SURPLUS_FIRST")
+    f = res.tables["Q4_bess_frontier"]
+    assert (pd.to_numeric(f["charge_vs_surplus_violation_hours"], errors="coerce").fillna(0.0) <= 0.0).all()
 
 
 @pytest.mark.performance

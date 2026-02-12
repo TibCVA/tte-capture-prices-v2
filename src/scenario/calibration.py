@@ -223,7 +223,6 @@ def calibrate_country_bundle(
     vre_floor_map = {
         "BASE": 1.00,
         "DEMAND_UP": 1.00,
-        "FLEX_UP": 1.00,
         "LOW_RIGIDITY": 1.00,
         "HIGH_CO2": 1.00,
         "HIGH_GAS": 1.00,

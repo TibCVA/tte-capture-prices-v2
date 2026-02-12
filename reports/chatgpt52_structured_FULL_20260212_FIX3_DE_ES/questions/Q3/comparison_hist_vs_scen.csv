@@ -1,0 +1,13 @@
+country,scenario_id,metric,hist_value,scen_value,delta,hist_status,scen_status,interpretability_status,interpretability_reason
+DE,BASE,inversion_k_demand,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+DE,BASE,inversion_r_mustrun,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+ES,BASE,inversion_k_demand,0.0053734043843405,0.0,-0.0053734043843405,CONTINUES,BACK_TO_STAGE1,INFORMATIVE,delta_interpretable
+ES,BASE,inversion_r_mustrun,0.74346923828125,0.0,-0.74346923828125,CONTINUES,BACK_TO_STAGE1,INFORMATIVE,delta_interpretable
+DE,DEMAND_UP,inversion_k_demand,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+DE,DEMAND_UP,inversion_r_mustrun,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+ES,DEMAND_UP,inversion_k_demand,0.0053734043843405,0.0,-0.0053734043843405,CONTINUES,BACK_TO_STAGE1,INFORMATIVE,delta_interpretable
+ES,DEMAND_UP,inversion_r_mustrun,0.74346923828125,0.0,-0.74346923828125,CONTINUES,BACK_TO_STAGE1,INFORMATIVE,delta_interpretable
+DE,LOW_RIGIDITY,inversion_k_demand,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+DE,LOW_RIGIDITY,inversion_r_mustrun,0.0,0.0,0.0,CONTINUES,BACK_TO_STAGE1,FRAGILE,delta_quasi_nul_vs_historique
+ES,LOW_RIGIDITY,inversion_k_demand,0.0053734043843405,0.0,-0.0053734043843405,CONTINUES,BACK_TO_STAGE1,INFORMATIVE,delta_interpretable
+ES,LOW_RIGIDITY,inversion_r_mustrun,0.74346923828125,0.0,-0.74346923828125,CONTINUES,BACK_TO_STAGE1,INFORMATIVE,delta_interpretable

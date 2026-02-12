@@ -64,6 +64,38 @@ def _safe_float(value: Any, default: float = np.nan) -> float:
     return out if np.isfinite(out) else float(default)
 
 
+def _required_abs_and_delta(
+    *,
+    ttl_target: float,
+    ttl_anchor_formula: float,
+    assumed_value: float,
+    derivative: float,
+    fixed_term: float,
+    vom: float,
+) -> tuple[float, float, float]:
+    """Return (required_abs, delta_vs_scenario, raw_required_abs)."""
+
+    if not (
+        np.isfinite(ttl_target)
+        and np.isfinite(ttl_anchor_formula)
+        and np.isfinite(assumed_value)
+        and np.isfinite(derivative)
+        and derivative > 0.0
+        and np.isfinite(fixed_term)
+        and np.isfinite(vom)
+    ):
+        return np.nan, np.nan, np.nan
+
+    if ttl_target <= ttl_anchor_formula:
+        return float(assumed_value), 0.0, float(assumed_value)
+
+    raw = (ttl_target - fixed_term - vom) / derivative
+    if not np.isfinite(raw):
+        return np.nan, np.nan, np.nan
+    required_abs = max(0.0, float(raw))
+    return required_abs, required_abs - float(assumed_value), float(raw)
+
+
 def _tech_params(assumptions_df: pd.DataFrame, tech: str) -> tuple[float, float, float, float]:
     params = {
         str(r["param_name"]): float(r["param_value"])
@@ -190,6 +222,8 @@ def run_q5(
     ttl_physical_margin_eur_mwh: float | None = None,
 ) -> ModuleResult:
     country = str(selection.get("country", ""))
+    mode = str(selection.get("mode", "HIST")).upper()
+    scenario_id_effective = str(selection.get("scenario_id") or ("HIST" if mode == "HIST" else "SCEN"))
     override_tech = str(selection.get("marginal_tech", "")).upper().strip() or None
 
     if commodity_daily is None:
@@ -199,13 +233,26 @@ def run_q5(
         empty = pd.DataFrame(
             [
                 {
+                    "scenario_id": scenario_id_effective,
                     "country": country,
                     "chosen_anchor_tech": "",
                     "ttl_obs": np.nan,
                     "ttl_anchor": np.nan,
+                    "ttl_anchor_formula": np.nan,
                     "anchor_distribution_error_p90_p95": np.nan,
+                    "assumed_co2_price_eur_t": np.nan,
+                    "assumed_gas_price_eur_mwh_th": np.nan,
+                    "assumed_coal_price_eur_mwh_th": np.nan,
+                    "assumed_efficiency": np.nan,
+                    "assumed_emission_factor_t_per_mwh_th": np.nan,
+                    "assumed_vom_eur_mwh": np.nan,
+                    "assumed_fuel_multiplier_vs_gas": np.nan,
                     "required_co2_eur_t": np.nan,
                     "required_gas_eur_mwh_th": np.nan,
+                    "required_co2_abs_eur_t": np.nan,
+                    "required_gas_abs_eur_mwh_th": np.nan,
+                    "delta_co2_vs_scenario": np.nan,
+                    "delta_gas_vs_scenario": np.nan,
                     "co2_required_base_non_negative": np.nan,
                     "co2_required_gas_override_non_negative": np.nan,
                     "warnings_quality": "missing_commodities",
@@ -223,8 +270,8 @@ def run_q5(
             narrative_md="Q5 ne peut pas s'executer sans series journaliere gaz/CO2.",
             checks=checks,
             warnings=["Missing commodity daily series."],
-            mode=str(selection.get("mode", "HIST")).upper(),
-            scenario_id=selection.get("scenario_id"),
+            mode=mode,
+            scenario_id=scenario_id_effective,
             horizon_year=selection.get("horizon_year"),
         )
 
@@ -348,18 +395,46 @@ def run_q5(
     # Backward-compatible gas-equivalent derivative for existing outputs/tests.
     dgas = fuel_mult / eff if eff > 0 else np.nan
 
-    fuel_term_p95 = float((pd.to_numeric(ref_hourly["gas_price_eur_mwh_th"], errors="coerce") * fuel_mult / eff).quantile(0.95)) if not ref_hourly.empty else np.nan
-    co2_term_p95 = float((pd.to_numeric(ref_hourly["co2_price_eur_t"], errors="coerce") * (ef / eff)).quantile(0.95)) if not ref_hourly.empty else np.nan
-    anchor_status = "ok"
-    if np.isfinite(ttl_obs) and np.isfinite(ttl_target) and ttl_obs >= ttl_target:
-        required_co2 = 0.0
-        required_gas = 0.0
-        anchor_status = "already_above_target"
+    assumed_gas = (
+        float(pd.to_numeric(ref_hourly["gas_price_eur_mwh_th"], errors="coerce").quantile(0.95))
+        if not ref_hourly.empty
+        else np.nan
+    )
+    assumed_co2 = (
+        float(pd.to_numeric(ref_hourly["co2_price_eur_t"], errors="coerce").quantile(0.95))
+        if not ref_hourly.empty
+        else np.nan
+    )
+    assumed_coal = assumed_gas * fuel_mult if np.isfinite(assumed_gas) and str(chosen_tech).upper() in {"COAL", "LIGNITE"} else np.nan
+
+    fuel_term_ref = assumed_gas * fuel_mult / eff if np.isfinite(assumed_gas) and eff > 0 else np.nan
+    co2_term_ref = assumed_co2 * dco2 if np.isfinite(assumed_co2) and np.isfinite(dco2) else np.nan
+    ttl_anchor_formula = fuel_term_ref + co2_term_ref + vom if np.isfinite(fuel_term_ref) and np.isfinite(co2_term_ref) else np.nan
+    anchor_gap_to_target = ttl_target - ttl_anchor_formula if np.isfinite(ttl_target) and np.isfinite(ttl_anchor_formula) else np.nan
+    if np.isfinite(ttl_target) and np.isfinite(ttl_anchor_formula):
+        anchor_status = "already_above_target" if ttl_target <= ttl_anchor_formula else "target_above_anchor"
     else:
-        required_co2 = (ttl_target - fuel_term_p95 - vom) / dco2 if np.isfinite(ttl_target) and np.isfinite(fuel_term_p95) and np.isfinite(dco2) and dco2 > 0 else np.nan
-        required_gas = (ttl_target - co2_term_p95 - vom) / dgas if np.isfinite(ttl_target) and np.isfinite(co2_term_p95) and np.isfinite(dgas) and dgas > 0 else np.nan
-        required_co2 = max(0.0, float(required_co2)) if np.isfinite(required_co2) else np.nan
-        required_gas = max(0.0, float(required_gas)) if np.isfinite(required_gas) else np.nan
+        anchor_status = "insufficient_anchor_inputs"
+
+    required_co2_abs, delta_co2_vs_scenario, raw_required_co2 = _required_abs_and_delta(
+        ttl_target=ttl_target,
+        ttl_anchor_formula=ttl_anchor_formula,
+        assumed_value=assumed_co2,
+        derivative=dco2,
+        fixed_term=fuel_term_ref,
+        vom=vom,
+    )
+    required_gas_abs, delta_gas_vs_scenario, raw_required_gas = _required_abs_and_delta(
+        ttl_target=ttl_target,
+        ttl_anchor_formula=ttl_anchor_formula,
+        assumed_value=assumed_gas,
+        derivative=dgas,
+        fixed_term=co2_term_ref,
+        vom=vom,
+    )
+    # Legacy compatibility field names.
+    required_co2 = required_co2_abs
+    required_gas = required_gas_abs
 
     thermal_share = np.nan
     thermal_cols = [c for c in ["gen_gas_mw", "gen_coal_mw", "gen_lignite_mw", "gen_oil_mw", "gen_other_mw"] if c in h.columns]
@@ -410,6 +485,49 @@ def run_q5(
         )
     if np.isfinite(corr_cd) and corr_cd < 0.2:
         checks.append({"status": "INFO", "code": "Q5_LOW_CORR_CD", "message": "Corr horaire faible mais non bloquante (fit distributionnel prioritaire)."})
+    if np.isfinite(ttl_target) and np.isfinite(ttl_anchor_formula):
+        if ttl_target > ttl_anchor_formula and np.isfinite(dco2) and dco2 > 0.0:
+            if not (np.isfinite(delta_co2_vs_scenario) and delta_co2_vs_scenario > 0.0):
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q5_REQUIRED_CO2_DELTA_NON_POSITIVE",
+                        "message": "ttl_target > ttl_anchor avec dTCA/dCO2>0 doit donner delta_co2_vs_scenario > 0.",
+                    }
+                )
+            if not (np.isfinite(required_co2_abs) and required_co2_abs > 0.0):
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q5_REQUIRED_CO2_NOT_FINITE",
+                        "message": "required_co2_abs_eur_t doit etre fini et >0 quand la cible depasse l'ancre.",
+                    }
+                )
+        if ttl_target > ttl_anchor_formula and np.isfinite(dgas) and dgas > 0.0:
+            if not (np.isfinite(delta_gas_vs_scenario) and delta_gas_vs_scenario > 0.0):
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q5_REQUIRED_GAS_DELTA_NON_POSITIVE",
+                        "message": "ttl_target > ttl_anchor avec dTCA/dGas>0 doit donner delta_gas_vs_scenario > 0.",
+                    }
+                )
+            if not (np.isfinite(required_gas_abs) and required_gas_abs > 0.0):
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "Q5_REQUIRED_GAS_NOT_FINITE",
+                        "message": "required_gas_abs_eur_mwh_th doit etre fini et >0 quand la cible depasse l'ancre.",
+                    }
+                )
+        if ttl_target <= ttl_anchor_formula:
+            checks.append(
+                {
+                    "status": "INFO",
+                    "code": "Q5_TARGET_ALREADY_MET",
+                    "message": "ttl_target <= ttl_anchor_formula: deltas requis fixes a 0.",
+                }
+            )
     if ttl_reference_mode == "year_specific" and np.isfinite(_safe_float(ref_year_used, np.nan)) and not annual_ttl.empty:
         annual_same = annual_ttl[annual_ttl["year"] == int(ref_year_used)]
         ttl_annual_same_year = _safe_float(annual_same["ttl_eur_mwh"].iloc[0], np.nan) if not annual_same.empty else np.nan
@@ -430,6 +548,7 @@ def run_q5(
     summary = pd.DataFrame(
         [
             {
+                "scenario_id": scenario_id_effective,
                 "country": country,
                 "year_range_used": f"{int(h['year'].min())}-{int(h['year'].max())}" if "year" in h.columns and h["year"].notna().any() else "",
                 "ttl_reference_mode": ttl_reference_mode,
@@ -437,6 +556,13 @@ def run_q5(
                 "marginal_tech": chosen_tech,
                 "chosen_anchor_tech": chosen_tech,
                 "fuel_used": fuel_used,
+                "assumed_co2_price_eur_t": assumed_co2,
+                "assumed_gas_price_eur_mwh_th": assumed_gas,
+                "assumed_coal_price_eur_mwh_th": assumed_coal,
+                "assumed_efficiency": eff,
+                "assumed_emission_factor_t_per_mwh_th": ef,
+                "assumed_vom_eur_mwh": vom,
+                "assumed_fuel_multiplier_vs_gas": fuel_mult,
                 "ttl_obs": ttl_obs,
                 "ttl_obs_price_cd": ttl_obs,
                 "ttl_annual_metrics_same_year": _safe_float(
@@ -446,6 +572,7 @@ def run_q5(
                 if np.isfinite(_safe_float(ref_year_used, np.nan))
                 else np.nan,
                 "ttl_anchor": ttl_anchor,
+                "ttl_anchor_formula": ttl_anchor_formula,
                 "ttl_physical": ttl_anchor,
                 "ttl_regression": np.nan,
                 "ttl_method": "anchor_distributional",
@@ -464,8 +591,15 @@ def run_q5(
                 "eta_implicit_from_dTCA_dFuel": eta_implicit,
                 "ef_implicit_t_per_mwh_e": ef_implicit_e,
                 "ttl_target": ttl_target,
+                "anchor_gap_to_target": anchor_gap_to_target,
                 "required_co2_eur_t": required_co2,
                 "required_gas_eur_mwh_th": required_gas,
+                "required_co2_abs_eur_t": required_co2_abs,
+                "required_gas_abs_eur_mwh_th": required_gas_abs,
+                "delta_co2_vs_scenario": delta_co2_vs_scenario,
+                "delta_gas_vs_scenario": delta_gas_vs_scenario,
+                "required_co2_abs_raw_eur_t": raw_required_co2,
+                "required_gas_abs_raw_eur_mwh_th": raw_required_gas,
                 "co2_required_base": required_co2,
                 "co2_required_gas_override": np.nan if gas_override_eur_mwh_th is None else required_co2,
                 "co2_required_base_non_negative": required_co2 if np.isfinite(required_co2) else np.nan,
@@ -478,7 +612,7 @@ def run_q5(
     narrative = (
         "Q5 ancre TTL a partir d'un cout thermique explicite (fuel/eta + CO2*EF/eta + VOM), "
         "selectionne la techno marginale la plus explicative via fit distributionnel (p90/p95), "
-        "et calcule required_co2/required_gas sans valeurs negatives."
+        "et calcule required_co2/required_gas en niveau absolu et en delta vs hypotheses scenario."
     )
 
     return ModuleResult(
@@ -494,13 +628,15 @@ def run_q5(
             "dTCA_dCO2": dco2,
             "dTCA_dFuel": dfuel,
             "dTCA_dGas": dgas,
+            "delta_co2_vs_scenario": delta_co2_vs_scenario,
+            "delta_gas_vs_scenario": delta_gas_vs_scenario,
         },
         tables={"Q5_summary": summary},
         figures=[],
         narrative_md=narrative,
         checks=checks,
         warnings=warnings,
-        mode=str(selection.get("mode", "HIST")).upper(),
-        scenario_id=selection.get("scenario_id"),
+        mode=mode,
+        scenario_id=scenario_id_effective,
         horizon_year=selection.get("horizon_year"),
     )

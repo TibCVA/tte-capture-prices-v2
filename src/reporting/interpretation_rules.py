@@ -295,13 +295,112 @@ def _question_specific_commentary(qid: str, hist_tables: dict[str, pd.DataFrame]
             lines.append("Synthese sizing historique Q4:\n" + _to_markdown(h, max_rows=20))
         f = hist_tables.get("Q4_bess_frontier", pd.DataFrame())
         if not f.empty:
-            subset = f[[c for c in ["dispatch_mode", "required_bess_power_mw", "required_bess_duration_h", "far_after", "surplus_unabs_energy_after", "pv_capture_price_after"] if c in f.columns]]
+            subset = f[
+                [
+                    c
+                    for c in [
+                        "dispatch_mode",
+                        "bess_power_mw_test",
+                        "bess_duration_h_test",
+                        "far_after",
+                        "surplus_unabs_energy_after",
+                        "pv_capture_price_after",
+                    ]
+                    if c in f.columns
+                ]
+            ]
             lines.append("Apercu frontiere historique Q4:\n" + _to_markdown(subset, max_rows=30))
 
     elif qid == "Q5":
         h = hist_tables.get("Q5_summary", pd.DataFrame())
         if not h.empty:
             lines.append("Synthese historique Q5:\n" + _to_markdown(h, max_rows=20))
+
+    return lines
+
+
+def _question_audit_block(qid: str, hist_tables: dict[str, pd.DataFrame]) -> list[str]:
+    lines: list[str] = []
+    lines.append("### Audit block")
+    lines.append("- Definitions: negative price = `price < 0`, low-price hours = `price < 5`.")
+    lines.append("- Definitions: `load_mw = load_total_mw - psh_pumping_mw`; PSH pumping is counted as a flexibility sink and not double-counted in load.")
+
+    if qid == "Q1":
+        rules = hist_tables.get("Q1_rule_definition", pd.DataFrame())
+        panel = hist_tables.get("Q1_year_panel", pd.DataFrame())
+        if not rules.empty:
+            r = rules.iloc[0]
+            lines.append(
+                "- Thresholds: "
+                f"h_negative>={_fmt_value(r.get('h_negative_stage2_min'))}, "
+                f"h_below_5>={_fmt_value(r.get('h_below_5_stage2_min'))}, "
+                f"low_price_share>={_fmt_value(r.get('low_price_hours_share_stage2_min'))}, "
+                f"capture_ratio_pv<={_fmt_value(r.get('capture_ratio_pv_stage2_max'))}, "
+                f"capture_ratio_wind<={_fmt_value(r.get('capture_ratio_wind_stage2_max'))}, "
+                f"sr_energy>={_fmt_value(r.get('sr_energy_stage2_min'))}, "
+                f"sr_hours>={_fmt_value(r.get('sr_hours_stage2_min'))}, "
+                f"ir_p10>={_fmt_value(r.get('ir_p10_stage2_min'))}."
+            )
+        if not panel.empty:
+            years = sorted(pd.to_numeric(panel.get("year"), errors="coerce").dropna().astype(int).unique().tolist())
+            qflags = panel.get("quality_flag", pd.Series(dtype=str)).astype(str).value_counts().to_dict()
+            lines.append(f"- Years used: {years if years else 'n/a'}.")
+            lines.append(f"- Quality flags: {qflags if qflags else {'n/a': 0}}.")
+
+    elif qid == "Q2":
+        slopes = hist_tables.get("Q2_country_slopes", pd.DataFrame())
+        if not slopes.empty:
+            years_tokens = (
+                slopes.get("years_used", pd.Series(dtype=str))
+                .astype(str)
+                .str.split(",")
+                .explode()
+                .dropna()
+                .astype(str)
+                .str.strip()
+            )
+            years = sorted({int(y) for y in years_tokens.tolist() if y.isdigit()})
+            x_axes = sorted(slopes.get("x_axis_used", pd.Series(dtype=str)).astype(str).dropna().unique().tolist())
+            robust = slopes.get("robust_flag", pd.Series(dtype=str)).astype(str).value_counts().to_dict()
+            lines.append(f"- Years used for regressions: {years if years else 'n/a'}.")
+            lines.append(f"- Regression x-axis: {x_axes if x_axes else ['n/a']}.")
+            lines.append(f"- Robustness flags: {robust if robust else {'n/a': 0}}.")
+
+    elif qid == "Q3":
+        status = hist_tables.get("Q3_status", pd.DataFrame())
+        if not status.empty:
+            years = sorted(pd.to_numeric(status.get("reference_year"), errors="coerce").dropna().astype(int).unique().tolist())
+            qflags = status.get("warnings_quality", pd.Series(dtype=str)).astype(str).value_counts().to_dict()
+            lines.append(f"- Years used: {years if years else 'n/a'}.")
+            lines.append(f"- Quality flags: {qflags if qflags else {'n/a': 0}}.")
+            cols = [c for c in ["scenario_id", "assumed_demand_multiplier", "assumed_must_run_reduction_factor", "assumed_flex_multiplier"] if c in status.columns]
+            if cols:
+                lines.append("- Scenario assumptions present in rows: " + ", ".join(cols) + ".")
+
+    elif qid == "Q4":
+        frontier = hist_tables.get("Q4_bess_frontier", pd.DataFrame())
+        summary = hist_tables.get("Q4_sizing_summary", pd.DataFrame())
+        if not frontier.empty:
+            modes = sorted(frontier.get("dispatch_mode", pd.Series(dtype=str)).astype(str).dropna().unique().tolist())
+            years = sorted(pd.to_numeric(frontier.get("year"), errors="coerce").dropna().astype(int).unique().tolist())
+            lines.append(f"- Years used: {years if years else 'n/a'}.")
+            lines.append(f"- Dispatch modes: {modes if modes else ['n/a']}.")
+            lines.append("- Grid columns: `bess_power_mw_test`, `bess_energy_mwh_test`, `bess_duration_h_test`.")
+        if not summary.empty:
+            reasons = summary.get("objective_reason", pd.Series(dtype=str)).astype(str).value_counts().to_dict()
+            lines.append(f"- Quality/status flags: {reasons if reasons else {'n/a': 0}}.")
+
+    elif qid == "Q5":
+        summ = hist_tables.get("Q5_summary", pd.DataFrame())
+        if not summ.empty:
+            years = sorted(pd.to_numeric(summ.get("ttl_reference_year"), errors="coerce").dropna().astype(int).unique().tolist())
+            lines.append(f"- Years used: {years if years else 'n/a'}.")
+            lines.append(
+                "- Anchor assumptions columns: `scenario_id`, `assumed_co2_price_eur_t`, `assumed_gas_price_eur_mwh_th`, "
+                "`assumed_efficiency`, `assumed_emission_factor_t_per_mwh_th`, `chosen_anchor_tech`."
+            )
+            qflags = summ.get("anchor_status", pd.Series(dtype=str)).astype(str).value_counts().to_dict()
+            lines.append(f"- Quality flags: {qflags if qflags else {'n/a': 0}}.")
 
     return lines
 
@@ -393,6 +492,9 @@ def build_question_narrative(block: QuestionTestResultBlock, country_scope: list
         "Les resultats historiques et prospectifs sont presentes separement puis compares."
     )
     sections.append(_tests_summary(block))
+    sections.append("")
+
+    sections.extend(_question_audit_block(qid, hist_tables))
     sections.append("")
 
     sections.append("### Resultats historiques test par test")

@@ -1,0 +1,11 @@
+question_id,status,code,message,scope,scenario_id,mentioned_countries,is_global
+Q2,WARN,QUESTION_WARNING,"BASE: scenario_build_error: Could not open Parquet input source '<Buffer>': Couldn't deserialize thrift: TProtocolException: Invalid data
+",GLOBAL,,,True
+Q2,WARN,QUESTION_WARNING,HIGH_CO2: DE-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,HIGH_CO2: DE-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,HIGH_CO2: ES-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False
+Q2,WARN,QUESTION_WARNING,HIGH_CO2: ES-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False
+Q2,WARN,QUESTION_WARNING,HIGH_GAS: DE-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,HIGH_GAS: DE-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,DE,False
+Q2,WARN,QUESTION_WARNING,HIGH_GAS: ES-PV: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False
+Q2,WARN,QUESTION_WARNING,HIGH_GAS: ES-WIND: aucun point phase2 Q1 exploitable.,GLOBAL,,ES,False

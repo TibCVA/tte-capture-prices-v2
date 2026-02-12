@@ -1,0 +1,22 @@
+status,code,message,question_id,mentioned_countries,is_global
+PASS,TEST_Q4_001,"Invariants physiques batterie (SOC, puissance, energie) valides.",Q4,,True
+PASS,TEST_Q4_002,Monotonicite respectee (augmentation bess_power/energy ne degrade pas le surplus).,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+PASS,TEST_Q4_001,"Invariants physiques batterie (SOC, puissance, energie) valides.",Q4,,True
+PASS,TEST_Q4_002,Monotonicite respectee (augmentation bess_power/energy ne degrade pas le surplus).,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+PASS,TEST_Q4_001,"Invariants physiques batterie (SOC, puissance, energie) valides.",Q4,,True
+PASS,TEST_Q4_002,Monotonicite respectee (augmentation bess_power/energy ne degrade pas le surplus).,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+PASS,TEST_Q4_001,"Invariants physiques batterie (SOC, puissance, energie) valides.",Q4,,True
+PASS,TEST_Q4_002,Monotonicite respectee (augmentation bess_power/energy ne degrade pas le surplus).,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+PASS,TEST_Q4_001,"Invariants physiques batterie (SOC, puissance, energie) valides.",Q4,,True
+PASS,TEST_Q4_002,Monotonicite respectee (augmentation bess_power/energy ne degrade pas le surplus).,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+PASS,TEST_Q4_001,"Invariants physiques batterie (SOC, puissance, energie) valides.",Q4,,True
+PASS,TEST_Q4_002,Monotonicite respectee (augmentation bess_power/energy ne degrade pas le surplus).,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
+PASS,TEST_Q4_001,"Invariants physiques batterie (SOC, puissance, energie) valides.",Q4,,True
+PASS,TEST_Q4_002,Monotonicite respectee (augmentation bess_power/energy ne degrade pas le surplus).,Q4,,True
+INFO,Q4_CACHE_HIT,Resultat charge depuis cache persistant Q4.,Q4,,True
