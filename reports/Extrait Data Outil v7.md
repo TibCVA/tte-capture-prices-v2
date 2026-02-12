@@ -7,8 +7,8 @@
 #### run_metadata
 ```json
 {
-  "run_id": "FULL_20260212_FIX4",
-  "run_dir": "C:\\Users\\cval-tlacour\\OneDrive - CVA corporate value associate GmbH\\Desktop\\automation-stack\\projects\\tte-capture-prices-v2\\outputs\\combined\\FULL_20260212_FIX4",
+  "run_id": "FULL_20260212_ALLQ",
+  "run_dir": "C:\\Users\\cval-tlacour\\OneDrive - CVA corporate value associate GmbH\\Desktop\\automation-stack\\projects\\tte-capture-prices-v2\\outputs\\combined\\FULL_20260212_ALLQ",
   "countries": [
     "DE",
     "ES",
