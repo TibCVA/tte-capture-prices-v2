@@ -1,20 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+import json
 
 import pandas as pd
 import streamlit as st
 
 _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
-_PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = False
-
-
-def _page_utils_missing(*, feature: str, root_error: Exception | None = None) -> None:
-    raise RuntimeError(
-        f"app.page_utils indisponible ({feature}). "
-        f"Cause: {root_error}" if root_error else f"app.page_utils indisponible ({feature})."
-    )
-
+_PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = True
 
 try:
     import app.page_utils as _page_utils
@@ -26,37 +20,214 @@ try:
 
     load_question_bundle_from_combined_run = getattr(_page_utils, "load_question_bundle_from_combined_run", None)
     if callable(load_question_bundle_from_combined_run):
-        _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = True
+        pass
     else:
+        _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = False
         load_question_bundle_from_combined_run = None
 except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud stale caches
     _PAGE_UTILS_IMPORT_ERROR = exc
+    _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = False
 
     def refresh_all_analyses_no_cache_ui(*args, **kwargs):  # type: ignore[no-redef]
-        _page_utils_missing(feature="refresh_all_analyses_no_cache_ui", root_error=exc)
+        raise RuntimeError(f"app.page_utils indisponible (refresh_all_analyses_no_cache_ui). Cause: {exc}")
 
     def load_annual_metrics(*args, **kwargs):  # type: ignore[no-redef]
-        _page_utils_missing(feature="load_annual_metrics", root_error=exc)
+        raise RuntimeError(f"app.page_utils indisponible (load_annual_metrics). Cause: {exc}")
 
     def build_bundle_hash(*args, **kwargs):  # type: ignore[no-redef]
-        _page_utils_missing(feature="build_bundle_hash", root_error=exc)
+        raise RuntimeError(f"app.page_utils indisponible (build_bundle_hash). Cause: {exc}")
 
     def load_question_bundle_from_combined_run(*args, **kwargs):  # type: ignore[no-redef]
-        _page_utils_missing(feature="load_question_bundle_from_combined_run", root_error=exc)
+        raise RuntimeError(f"app.page_utils indisponible (load_question_bundle_from_combined_run). Cause: {exc}")
 
     def load_phase2_assumptions_table(*args, **kwargs):  # type: ignore[no-redef]
-        _page_utils_missing(feature="load_phase2_assumptions_table", root_error=exc)
+        raise RuntimeError(f"app.page_utils indisponible (load_phase2_assumptions_table). Cause: {exc}")
 
 
-if not _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE and _PAGE_UTILS_IMPORT_ERROR is None:
-    _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR = RuntimeError(
-        "Signature incompatible: load_question_bundle_from_combined_run absent dans app.page_utils."
+if not _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE:
+    _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR = (
+        _PAGE_UTILS_IMPORT_ERROR
+        if _PAGE_UTILS_IMPORT_ERROR is not None
+        else RuntimeError(
+            "app.page_utils ne contient pas load_question_bundle_from_combined_run (fallback local activé)."
+        )
     )
-
-    def load_question_bundle_from_combined_run(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("app.page_utils ne contient pas load_question_bundle_from_combined_run.")
 else:
     _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR = None
+
+from src.modules.bundle_result import QuestionBundleResult
+from src.modules.result import ModuleResult
+
+
+def _to_abs_project_path(path_like: str | Path) -> Path:
+    path = Path(path_like)
+    app_root = Path(__file__).resolve().parents[2]
+    return path if path.is_absolute() else app_root / path
+
+
+def _safe_read_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _safe_read_text(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def _safe_read_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _load_tables_dir(tables_dir: Path) -> dict[str, pd.DataFrame]:
+    out: dict[str, pd.DataFrame] = {}
+    if not tables_dir.exists():
+        return out
+    for csv_path in sorted(tables_dir.glob("*.csv")):
+        out[csv_path.stem] = _safe_read_csv(csv_path)
+    return out
+
+
+def _load_module_result_from_export(
+    module_dir: Path,
+    *,
+    default_mode: str,
+    default_run_id: str,
+    default_selection: dict,
+    default_module_id: str,
+    scenario_id: str | None = None,
+) -> ModuleResult:
+    summary = _safe_read_json(module_dir / "summary.json")
+    if not summary:
+        raise FileNotFoundError(f"summary.json manquant/invalide: {module_dir / 'summary.json'}")
+    checks = summary.get("checks", [])
+    if not isinstance(checks, list):
+        checks = []
+    warnings = summary.get("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+    kpis = summary.get("kpis", {})
+    if not isinstance(kpis, dict):
+        kpis = {}
+    selection = summary.get("selection", default_selection)
+    if not isinstance(selection, dict):
+        selection = default_selection
+
+    horizon_year_raw = summary.get("horizon_year", None)
+    try:
+        horizon_year = int(horizon_year_raw) if horizon_year_raw is not None else None
+    except Exception:
+        horizon_year = None
+
+    scenario = summary.get("scenario_id", scenario_id)
+    if scenario is not None:
+        scenario = str(scenario)
+
+    return ModuleResult(
+        module_id=str(summary.get("module_id", default_module_id)),
+        run_id=str(summary.get("run_id", default_run_id)),
+        selection=selection,
+        assumptions_used=summary.get("assumptions_used", []),
+        kpis=kpis,
+        tables=_load_tables_dir(module_dir / "tables"),
+        figures=[],
+        narrative_md=_safe_read_text(module_dir / "narrative.md"),
+        checks=checks,
+        warnings=[str(w) for w in warnings],
+        mode=str(summary.get("mode", default_mode)).upper(),
+        scenario_id=scenario,
+        horizon_year=horizon_year,
+    )
+
+
+def _load_question_bundle_from_combined_run_local(
+    run_id: str,
+    question_id: str,
+    base_dir: str = "outputs/combined",
+) -> tuple[QuestionBundleResult, Path]:
+    qid = str(question_id).upper()
+    if not str(run_id).strip():
+        raise ValueError("run_id vide.")
+    q_dir = _to_abs_project_path(base_dir) / str(run_id) / qid
+    if not q_dir.exists():
+        raise FileNotFoundError(f"Bundle introuvable: {q_dir}")
+
+    bundle_summary = _safe_read_json(q_dir / "summary.json")
+    if not bundle_summary:
+        raise FileNotFoundError(f"summary.json manquant/invalide: {q_dir / 'summary.json'}")
+
+    default_selection = bundle_summary.get("selection", {})
+    if not isinstance(default_selection, dict):
+        default_selection = {}
+
+    hist_dir = q_dir / "hist"
+    if not hist_dir.exists():
+        raise FileNotFoundError(f"Resultat historique introuvable: {hist_dir}")
+
+    hist_result = _load_module_result_from_export(
+        hist_dir,
+        default_mode="HIST",
+        default_run_id=str(bundle_summary.get("run_id", run_id)),
+        default_selection=default_selection,
+        default_module_id=qid,
+        scenario_id=None,
+    )
+
+    scen_results: dict[str, ModuleResult] = {}
+    scen_root = q_dir / "scen"
+    if scen_root.exists():
+        for scen_dir in sorted([p for p in scen_root.iterdir() if p.is_dir()]):
+            scen_id = str(scen_dir.name)
+            scen_results[scen_id] = _load_module_result_from_export(
+                scen_dir,
+                default_mode="SCEN",
+                default_run_id=str(bundle_summary.get("run_id", run_id)),
+                default_selection=default_selection,
+                default_module_id=qid,
+                scenario_id=scen_id,
+            )
+
+    checks = bundle_summary.get("checks", [])
+    if not isinstance(checks, list):
+        checks = []
+    warnings = bundle_summary.get("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+
+    bundle = QuestionBundleResult(
+        question_id=qid,
+        run_id=str(bundle_summary.get("run_id", run_id)),
+        selection=default_selection,
+        hist_result=hist_result,
+        scen_results=scen_results,
+        test_ledger=_safe_read_csv(q_dir / "test_ledger.csv"),
+        comparison_table=_safe_read_csv(q_dir / "comparison_hist_vs_scen.csv"),
+        checks=checks,
+        warnings=[str(w) for w in warnings],
+        narrative_md=_safe_read_text(q_dir / "narrative.md"),
+    )
+    return bundle, q_dir
+
+
+if load_question_bundle_from_combined_run is None:  # type: ignore[comparison-overlap]
+    if _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR is None:
+        _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR = RuntimeError(
+            "app.page_utils ne contient pas load_question_bundle_from_combined_run (fallback local activé)."
+        )
+    load_question_bundle_from_combined_run = _load_question_bundle_from_combined_run_local
 
 _LLM_BATCH_IMPORT_ERROR: Exception | None = None
 try:
