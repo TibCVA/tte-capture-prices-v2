@@ -8,7 +8,9 @@ import streamlit as st
 _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
 try:
     from app.page_utils import (
+        build_bundle_hash,
         load_annual_metrics,
+        load_question_bundle_from_combined_run,
         load_phase2_assumptions_table,
         refresh_all_analyses_no_cache_ui,
     )
@@ -26,6 +28,12 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
 
     def load_phase2_assumptions_table(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("load_phase2_assumptions_table indisponible.")
+
+    def load_question_bundle_from_combined_run(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("load_question_bundle_from_combined_run indisponible.")
+
+    def build_bundle_hash(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("build_bundle_hash indisponible.")
 
 _LLM_BATCH_IMPORT_ERROR: Exception | None = None
 try:
@@ -68,7 +76,90 @@ from app.ui_components import (
     render_question_box,
 )
 from src.constants import DEFAULT_COUNTRIES, DEFAULT_YEAR_END, DEFAULT_YEAR_START
+from src.modules.bundle_result import export_question_bundle
 from src.reporting.interpretation_rules import QUESTION_BUSINESS_TEXT
+
+_RESULT_STATE_KEY_BY_QUESTION = {
+    "Q1": "q1_bundle_result",
+    "Q2": "q2_bundle_result",
+    "Q3": "q3_bundle_result",
+    "Q4": "q4_bundle_result",
+    "Q5": "q5_bundle_result",
+}
+
+
+def _hydrate_question_pages_from_run(run_id: str) -> tuple[list[str], dict[str, str]]:
+    loaded: list[str] = []
+    failed: dict[str, str] = {}
+    assumptions_phase1 = pd.DataFrame()
+    assumptions_phase2 = pd.DataFrame()
+    try:
+        assumptions_phase1 = load_assumptions_table()
+        assumptions_phase2 = load_phase2_assumptions_table()
+    except Exception:
+        pass
+    for qid_raw in QUESTION_ORDER:
+        qid = str(qid_raw).upper()
+        result_key = _RESULT_STATE_KEY_BY_QUESTION.get(qid)
+        if not result_key:
+            continue
+        try:
+            bundle, out_dir = load_question_bundle_from_combined_run(run_id=run_id, question_id=qid)
+        except Exception as exc:
+            failed[qid] = str(exc)
+            continue
+        bundle_hash = f"{run_id}_{qid}"
+        if isinstance(bundle.selection, dict) and not assumptions_phase1.empty:
+            try:
+                bundle_hash = build_bundle_hash(qid, bundle.selection, assumptions_phase1, assumptions_phase2)
+            except Exception:
+                bundle_hash = f"{run_id}_{qid}"
+        st.session_state[result_key] = {
+            "bundle": bundle,
+            "out_dir": str(out_dir),
+            "bundle_hash": bundle_hash,
+        }
+        loaded.append(qid)
+    return loaded, failed
+
+
+def _hydrate_question_pages_from_prepared(prepared_items: list[dict]) -> tuple[list[str], dict[str, str]]:
+    loaded: list[str] = []
+    failed: dict[str, str] = {}
+    for item in prepared_items:
+        qid = str(item.get("question_id", "")).upper()
+        if not qid:
+            continue
+        result_key = _RESULT_STATE_KEY_BY_QUESTION.get(qid)
+        if not result_key:
+            continue
+        if str(item.get("status", "")).upper() == "FAILED_PREP":
+            failed[qid] = str(item.get("error", "Preparation echouee."))
+            continue
+
+        bundle = item.get("bundle", None)
+        if bundle is None:
+            failed[qid] = "Bundle absent apres preparation."
+            continue
+
+        bundle_hash = str(item.get("bundle_hash", "")).strip()
+        if not bundle_hash:
+            failed[qid] = "Bundle hash absent apres preparation."
+            continue
+
+        try:
+            out_dir = export_question_bundle(bundle)
+        except Exception as exc:
+            failed[qid] = f"Export bundle impossible: {exc}"
+            continue
+
+        st.session_state[result_key] = {
+            "bundle": bundle,
+            "out_dir": str(out_dir),
+            "bundle_hash": bundle_hash,
+        }
+        loaded.append(qid)
+    return loaded, failed
 
 
 def render() -> None:
@@ -158,6 +249,15 @@ def render() -> None:
                     run_id = str(refresh_summary.get("run_id", "UNKNOWN"))
                     st.session_state["last_full_refresh_run_id"] = run_id
                     st.success(f"Refresh termine. Nouveau run combine: {run_id}")
+                    with st.spinner("Chargement automatique des resultats Q1..Q5 dans les pages..."):
+                        loaded_q, failed_q = _hydrate_question_pages_from_run(run_id)
+                    if loaded_q:
+                        st.info(f"Sections prechargees: {', '.join(loaded_q)}")
+                    if failed_q:
+                        st.warning(
+                            "Prechargement incomplet: "
+                            + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()])
+                        )
                     with st.expander("Details techniques du refresh", expanded=False):
                         st.json(refresh_summary)
 
@@ -217,6 +317,9 @@ def render() -> None:
                     prepared_items.append(prepared)
                     prep_progress.progress(idx / max(total_q * 2, 1))
 
+                prep_status.text("Prechargement des sections Q1..Q5...")
+                loaded_q, failed_q = _hydrate_question_pages_from_prepared(prepared_items)
+
                 prep_status.text("Generation IA en parallele en cours...")
                 with st.spinner("Appels IA Q1->Q5 en execution parallele..."):
                     rows = run_parallel_llm_generation(
@@ -234,6 +337,13 @@ def render() -> None:
                     "generated_at_utc": datetime.now(timezone.utc).isoformat(),
                     "rows": rows,
                 }
+                if loaded_q:
+                    st.info(f"Sections prechargees apres batch IA: {', '.join(loaded_q)}")
+                if failed_q:
+                    st.warning(
+                        "Prechargement partiel apres batch IA: "
+                        + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()])
+                    )
                 if fail_count == 0:
                     st.success(f"Generation IA terminee: {ok_count}/{len(rows)} questions traitees.")
                 else:

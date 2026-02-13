@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import subprocess
@@ -14,6 +15,7 @@ from src.config_loader import load_countries, load_phase2_assumptions
 from src.hash_utils import hash_object
 from src.modules.bundle_result import QuestionBundleResult
 from src.modules.question_bundle_runner import run_question_bundle
+from src.modules.result import ModuleResult
 from src.pipeline import build_country_year, load_assumptions_table
 from src.scenario.phase2_engine import run_phase2_scenario
 from src.storage import (
@@ -520,3 +522,161 @@ def run_question_bundle_cached(question_id: str, bundle_hash: str, selection: di
         selection=selection,
         run_id=run_id,
     )
+
+
+def _safe_read_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _safe_read_text(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def _safe_read_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _load_tables_dir(tables_dir: Path) -> dict[str, pd.DataFrame]:
+    out: dict[str, pd.DataFrame] = {}
+    if not tables_dir.exists():
+        return out
+    for csv_path in sorted(tables_dir.glob("*.csv")):
+        out[csv_path.stem] = _safe_read_csv(csv_path)
+    return out
+
+
+def _load_module_result_from_export(
+    module_dir: Path,
+    *,
+    default_mode: str,
+    default_run_id: str,
+    default_selection: dict,
+    default_module_id: str,
+    scenario_id: str | None = None,
+) -> ModuleResult:
+    summary = _safe_read_json(module_dir / "summary.json")
+    checks = summary.get("checks", [])
+    if not isinstance(checks, list):
+        checks = []
+    warnings = summary.get("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+    assumptions_used = summary.get("assumptions_used", [])
+    if not isinstance(assumptions_used, list):
+        assumptions_used = []
+    kpis = summary.get("kpis", {})
+    if not isinstance(kpis, dict):
+        kpis = {}
+    selection = summary.get("selection", default_selection)
+    if not isinstance(selection, dict):
+        selection = default_selection
+
+    horizon_year_raw = summary.get("horizon_year", None)
+    try:
+        horizon_year = int(horizon_year_raw) if horizon_year_raw is not None else None
+    except Exception:
+        horizon_year = None
+
+    scenario = summary.get("scenario_id", scenario_id)
+    if scenario is not None:
+        scenario = str(scenario)
+
+    return ModuleResult(
+        module_id=str(summary.get("module_id", default_module_id)),
+        run_id=str(summary.get("run_id", default_run_id)),
+        selection=selection,
+        assumptions_used=assumptions_used,
+        kpis=kpis,
+        tables=_load_tables_dir(module_dir / "tables"),
+        figures=[],
+        narrative_md=_safe_read_text(module_dir / "narrative.md"),
+        checks=checks,
+        warnings=[str(w) for w in warnings],
+        mode=str(summary.get("mode", default_mode)).upper(),
+        scenario_id=scenario,
+        horizon_year=horizon_year,
+    )
+
+
+def load_question_bundle_from_combined_run(
+    run_id: str,
+    question_id: str,
+    base_dir: str = "outputs/combined",
+) -> tuple[QuestionBundleResult, Path]:
+    qid = str(question_id).upper()
+    if not str(run_id).strip():
+        raise ValueError("run_id vide.")
+
+    q_dir = Path(base_dir) / str(run_id) / qid
+    if not q_dir.exists():
+        raise FileNotFoundError(f"Bundle introuvable: {q_dir}")
+
+    bundle_summary = _safe_read_json(q_dir / "summary.json")
+    if not bundle_summary:
+        raise FileNotFoundError(f"summary.json manquant/invalide: {q_dir / 'summary.json'}")
+
+    default_selection = bundle_summary.get("selection", {})
+    if not isinstance(default_selection, dict):
+        default_selection = {}
+
+    hist_dir = q_dir / "hist"
+    if not hist_dir.exists():
+        raise FileNotFoundError(f"Resultat historique introuvable: {hist_dir}")
+    hist_result = _load_module_result_from_export(
+        hist_dir,
+        default_mode="HIST",
+        default_run_id=str(bundle_summary.get("run_id", run_id)),
+        default_selection=default_selection,
+        default_module_id=qid,
+        scenario_id=None,
+    )
+
+    scen_results: dict[str, ModuleResult] = {}
+    scen_root = q_dir / "scen"
+    if scen_root.exists():
+        for scen_dir in sorted([p for p in scen_root.iterdir() if p.is_dir()]):
+            scen_id = str(scen_dir.name)
+            scen_results[scen_id] = _load_module_result_from_export(
+                scen_dir,
+                default_mode="SCEN",
+                default_run_id=str(bundle_summary.get("run_id", run_id)),
+                default_selection=default_selection,
+                default_module_id=qid,
+                scenario_id=scen_id,
+            )
+
+    checks = bundle_summary.get("checks", [])
+    if not isinstance(checks, list):
+        checks = []
+    warnings = bundle_summary.get("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+
+    bundle = QuestionBundleResult(
+        question_id=qid,
+        run_id=str(bundle_summary.get("run_id", run_id)),
+        selection=default_selection,
+        hist_result=hist_result,
+        scen_results=scen_results,
+        test_ledger=_safe_read_csv(q_dir / "test_ledger.csv"),
+        comparison_table=_safe_read_csv(q_dir / "comparison_hist_vs_scen.csv"),
+        checks=checks,
+        warnings=[str(w) for w in warnings],
+        narrative_md=_safe_read_text(q_dir / "narrative.md"),
+    )
+    return bundle, q_dir
