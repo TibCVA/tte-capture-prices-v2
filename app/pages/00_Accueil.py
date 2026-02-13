@@ -280,9 +280,29 @@ _RESULT_STATE_KEY_BY_QUESTION = {
     "Q4": "q4_bundle_result",
     "Q5": "q5_bundle_result",
 }
+_RESULT_STATE_KEYS = tuple(_RESULT_STATE_KEY_BY_QUESTION.values())
+
+
+def _clear_question_bundle_session_state() -> None:
+    for key in _RESULT_STATE_KEYS:
+        st.session_state.pop(key, None)
+    st.session_state.pop("last_full_refresh_run_id", None)
+
+
+def _hard_clear_runtime_cache() -> None:
+    _clear_question_bundle_session_state()
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
 
 
 def _hydrate_question_pages_from_run(run_id: str) -> tuple[list[str], dict[str, str]]:
+    _clear_question_bundle_session_state()
     loaded: list[str] = []
     failed: dict[str, str] = {}
     assumptions_phase1 = pd.DataFrame()
@@ -318,6 +338,7 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[list[str], dict[str, 
 
 
 def _hydrate_question_pages_from_prepared(prepared_items: list[dict]) -> tuple[list[str], dict[str, str]]:
+    _clear_question_bundle_session_state()
     loaded: list[str] = []
     failed: dict[str, str] = {}
     for item in prepared_items:
@@ -429,6 +450,7 @@ def render() -> None:
         st.code(str(_PAGE_UTILS_IMPORT_ERROR))
     else:
         if st.button("Lancer / rafraichir toutes les analyses (sans cache calcule)", type="primary"):
+            _hard_clear_runtime_cache()
             with st.spinner("Refresh global en cours (rebuild historique + run combine Q1..Q5)..."):
                 try:
                     refresh_summary = refresh_all_analyses_no_cache_ui(
@@ -561,3 +583,5 @@ def render() -> None:
         "Suivre ce parcours dans l'ordre garantit que chaque etape repose sur des donnees validees. "
         "Ne pas sauter directement aux conclusions sans avoir verifie la qualite des donnees."
     )
+
+
