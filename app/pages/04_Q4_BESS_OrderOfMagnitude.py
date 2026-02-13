@@ -72,6 +72,30 @@ def _spec_table() -> pd.DataFrame:
     return pd.DataFrame([s.to_dict() for s in get_question_tests("Q4")])
 
 
+def _resolve_frontier_plot_columns(frontier: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str], list[str]]:
+    normalized = frontier.copy()
+    resolved: dict[str, str] = {}
+    issues: list[str] = []
+
+    candidates: dict[str, list[str]] = {
+        "power": ["bess_power_mw_test", "required_bess_power_mw", "bess_power_mw"],
+        "energy": ["bess_energy_mwh_test", "required_bess_energy_mwh", "bess_energy_mwh"],
+        "duration": ["bess_duration_h_test", "required_bess_duration_h", "duration_h"],
+        "far_after": ["far_after"],
+        "surplus_after": ["surplus_unabs_energy_after"],
+    }
+
+    for metric, cols in candidates.items():
+        chosen = next((col for col in cols if col in normalized.columns), None)
+        if chosen is None:
+            issues.append(f"{metric}: colonne manquante ({', '.join(cols)}).")
+            continue
+        resolved[metric] = chosen
+        normalized[chosen] = pd.to_numeric(normalized[chosen], errors="coerce")
+
+    return normalized, resolved, issues
+
+
 def render() -> None:
     if _PAGE_UTILS_IMPORT_ERROR is not None:
         st.error("Impossible de charger les utilitaires de page (page_utils).")
@@ -249,20 +273,67 @@ def render() -> None:
             st.dataframe(summary, use_container_width=True)
         if not frontier.empty:
             st.dataframe(frontier, use_container_width=True)
-            fig1 = px.line(frontier.sort_values("required_bess_power_mw"), x="required_bess_power_mw", y="far_after", color="required_bess_duration_h", title="Historique: FAR apres vs puissance")
-            fig1.update_layout(xaxis_title="Puissance BESS (MW)", yaxis_title="FAR apres BESS")
-            render_plotly_styled(
-                fig1,
-                "Chaque courbe = une duree de stockage. Le plateau indique le seuil au-dela duquel ajouter de la puissance n'ameliore plus FAR.",
-                key="q4_hist_far",
+            frontier_plot, frontier_cols, frontier_issues = _resolve_frontier_plot_columns(frontier)
+            if frontier_issues:
+                st.warning("Frontier Q4 partielle: " + " | ".join(frontier_issues))
+
+            fallback_active = any(
+                frontier_cols.get(metric) != preferred
+                for metric, preferred in {
+                    "power": "bess_power_mw_test",
+                    "energy": "bess_energy_mwh_test",
+                    "duration": "bess_duration_h_test",
+                }.items()
+                if metric in frontier_cols
             )
-            fig2 = px.line(frontier.sort_values("required_bess_energy_mwh"), x="required_bess_energy_mwh", y="surplus_unabs_energy_after", color="required_bess_duration_h", title="Historique: surplus non absorbe apres vs energie")
-            fig2.update_layout(xaxis_title="Energie BESS (MWh)", yaxis_title="Surplus non absorbe (MWh)")
-            render_plotly_styled(
-                fig2,
-                "Capacite en MWh necessaire pour absorber le surplus residuel. Au-dela d'un seuil, le gain marginal diminue.",
-                key="q4_hist_surplus",
-            )
+            if fallback_active:
+                st.info("Schema frontier legacy/partiel detecte: trace en mode compatible.")
+
+            if {"power", "duration", "far_after"}.issubset(frontier_cols):
+                fig1_df = frontier_plot.dropna(
+                    subset=[frontier_cols["power"], frontier_cols["duration"], frontier_cols["far_after"]]
+                )
+                if fig1_df.empty:
+                    st.warning("Donnees insuffisantes pour tracer FAR apres vs puissance.")
+                else:
+                    fig1 = px.line(
+                        fig1_df.sort_values(frontier_cols["power"]),
+                        x=frontier_cols["power"],
+                        y=frontier_cols["far_after"],
+                        color=frontier_cols["duration"],
+                        title="Historique: FAR apres vs puissance",
+                    )
+                    fig1.update_layout(xaxis_title="Puissance BESS (MW)", yaxis_title="FAR apres BESS")
+                    render_plotly_styled(
+                        fig1,
+                        "Chaque courbe = une duree de stockage. Le plateau indique le seuil au-dela duquel ajouter de la puissance n'ameliore plus FAR.",
+                        key="q4_hist_far",
+                    )
+            else:
+                st.warning("Colonnes manquantes pour le graphe FAR apres vs puissance.")
+
+            if {"energy", "duration", "surplus_after"}.issubset(frontier_cols):
+                fig2_df = frontier_plot.dropna(
+                    subset=[frontier_cols["energy"], frontier_cols["duration"], frontier_cols["surplus_after"]]
+                )
+                if fig2_df.empty:
+                    st.warning("Donnees insuffisantes pour tracer surplus non absorbe vs energie.")
+                else:
+                    fig2 = px.line(
+                        fig2_df.sort_values(frontier_cols["energy"]),
+                        x=frontier_cols["energy"],
+                        y=frontier_cols["surplus_after"],
+                        color=frontier_cols["duration"],
+                        title="Historique: surplus non absorbe apres vs energie",
+                    )
+                    fig2.update_layout(xaxis_title="Energie BESS (MWh)", yaxis_title="Surplus non absorbe (MWh)")
+                    render_plotly_styled(
+                        fig2,
+                        "Capacite en MWh necessaire pour absorber le surplus residuel. Au-dela d'un seuil, le gain marginal diminue.",
+                        key="q4_hist_surplus",
+                    )
+            else:
+                st.warning("Colonnes manquantes pour le graphe surplus non absorbe vs energie.")
 
     with tab_scen:
         if not bundle.scen_results:

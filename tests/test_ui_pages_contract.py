@@ -43,3 +43,10 @@ def test_q_pages_no_hardcoded_2030_2040_year_list() -> None:
     for page in Q_PAGES:
         content = _read(page)
         assert "[2030, 2040]" not in content, f"Hardcoded [2030, 2040] found in {page}"
+
+
+def test_q4_frontier_schema_helper_contract() -> None:
+    content = _read(Path("app/pages/04_Q4_BESS_OrderOfMagnitude.py"))
+    assert "def _resolve_frontier_plot_columns(" in content
+    assert 'sort_values("required_bess_power_mw")' not in content
+    assert 'sort_values("required_bess_energy_mwh")' not in content
