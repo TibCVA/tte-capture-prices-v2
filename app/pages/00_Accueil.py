@@ -7,6 +7,12 @@ import json
 import pandas as pd
 import streamlit as st
 
+from src.reporting.evidence_loader import (
+    compute_question_bundle_signature,
+    discover_complete_runs,
+    validate_combined_run,
+)
+
 _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
 _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = True
 
@@ -19,11 +25,17 @@ try:
     build_bundle_hash = _page_utils.build_bundle_hash
 
     load_question_bundle_from_combined_run = getattr(_page_utils, "load_question_bundle_from_combined_run", None)
-    if callable(load_question_bundle_from_combined_run):
-        pass
+    load_question_bundle_from_combined_run_safe = getattr(
+        _page_utils,
+        "load_question_bundle_from_combined_run_safe",
+        load_question_bundle_from_combined_run,
+    )
+    if callable(load_question_bundle_from_combined_run) and callable(load_question_bundle_from_combined_run_safe):
+        _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = True
     else:
         _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = False
         load_question_bundle_from_combined_run = None
+        load_question_bundle_from_combined_run_safe = None
 except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud stale caches
     _PAGE_UTILS_IMPORT_ERROR = exc
     _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = False
@@ -40,6 +52,11 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
     def load_question_bundle_from_combined_run(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError(f"app.page_utils indisponible (load_question_bundle_from_combined_run). Cause: {exc}")
 
+    def load_question_bundle_from_combined_run_safe(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError(
+            f"app.page_utils indisponible (load_question_bundle_from_combined_run_safe). Cause: {exc}"
+        )
+
     def load_phase2_assumptions_table(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError(f"app.page_utils indisponible (load_phase2_assumptions_table). Cause: {exc}")
 
@@ -49,7 +66,7 @@ if not _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE:
         _PAGE_UTILS_IMPORT_ERROR
         if _PAGE_UTILS_IMPORT_ERROR is not None
         else RuntimeError(
-            "app.page_utils ne contient pas load_question_bundle_from_combined_run (fallback local activé)."
+            "app.page_utils ne contient pas load_question_bundle_from_combined_run (fallback local actif)."
         )
     )
 else:
@@ -225,7 +242,7 @@ def _load_question_bundle_from_combined_run_local(
 if load_question_bundle_from_combined_run is None:  # type: ignore[comparison-overlap]
     if _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR is None:
         _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR = RuntimeError(
-            "app.page_utils ne contient pas load_question_bundle_from_combined_run (fallback local activé)."
+            "app.page_utils ne contient pas load_question_bundle_from_combined_run (fallback local actif)."
         )
     load_question_bundle_from_combined_run = _load_question_bundle_from_combined_run_local
 
@@ -270,7 +287,7 @@ from app.ui_components import (
     render_question_box,
 )
 from src.constants import DEFAULT_COUNTRIES, DEFAULT_YEAR_END, DEFAULT_YEAR_START
-from src.modules.bundle_result import export_question_bundle
+from src.modules.bundle_result import QuestionBundleResult, export_question_bundle
 from src.reporting.interpretation_rules import QUESTION_BUSINESS_TEXT
 
 _RESULT_STATE_KEY_BY_QUESTION = {
@@ -281,6 +298,69 @@ _RESULT_STATE_KEY_BY_QUESTION = {
     "Q5": "q5_bundle_result",
 }
 _RESULT_STATE_KEYS = tuple(_RESULT_STATE_KEY_BY_QUESTION.values())
+_ACCUEIL_QUESTION_ORDER = tuple(QUESTION_ORDER)
+
+
+def _snapshot_question_bundle_session_state() -> dict[str, object]:
+    state_snapshot: dict[str, object] = {}
+    for key in _RESULT_STATE_KEYS + ("last_full_refresh_run_id",):
+        if key in st.session_state:
+            state_snapshot[key] = st.session_state.get(key)
+    return state_snapshot
+
+
+def _restore_question_bundle_session_state(snapshot: dict[str, object]) -> None:
+    for key in _RESULT_STATE_KEYS:
+        st.session_state.pop(key, None)
+    st.session_state.pop("last_full_refresh_run_id", None)
+    for key, value in snapshot.items():
+        st.session_state[key] = value
+
+
+def _extract_check_counts(checks: list[dict] | object) -> dict[str, int]:
+    counts: dict[str, int] = {"PASS": 0, "WARN": 0, "FAIL": 0, "NON_TESTABLE": 0, "UNKNOWN": 0}
+    if not isinstance(checks, list):
+        return counts
+    for raw in checks:
+        if not isinstance(raw, dict):
+            counts["UNKNOWN"] += 1
+            continue
+        status = str(raw.get("status", "UNKNOWN")).upper().strip()
+        if status in counts:
+            counts[status] += 1
+        else:
+            counts["UNKNOWN"] += 1
+    return counts
+
+
+def _load_preferred_run_id(
+    requested_run_id: str | None,
+    base_dir: str = "outputs/combined",
+) -> tuple[str, bool]:
+    base = _to_abs_project_path(base_dir)
+    requested = str(requested_run_id or "").strip()
+    if requested:
+        candidate = base / requested
+        if candidate.exists() and candidate.is_dir():
+            valid, _ = validate_combined_run(candidate)
+            if valid:
+                return requested, False
+    # fallback to latest complete run
+    runs = discover_complete_runs(base)
+    if not runs:
+        raise FileNotFoundError("Aucun run combine complet disponible pour le prechargement auto.")
+    for run in runs:
+        valid, issues = validate_combined_run(run)
+        if valid:
+            return run.name, True
+    raise FileNotFoundError(
+        "Aucun run combine strictement valide pour le prechargement auto: " + " | ".join(issues)
+    )
+
+
+def _make_bundle_signature(run_id: str, question_id: str, run_dir: Path) -> str:
+    _ = run_id
+    return compute_question_bundle_signature(run_dir, question_id)
 
 
 def _clear_question_bundle_session_state() -> None:
@@ -289,8 +369,153 @@ def _clear_question_bundle_session_state() -> None:
     st.session_state.pop("last_full_refresh_run_id", None)
 
 
-def _hard_clear_runtime_cache() -> None:
+def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, object]]:
+    previous_state = _snapshot_question_bundle_session_state()
+    run_id_clean = str(run_id).strip()
+    if not run_id_clean:
+        _restore_question_bundle_session_state(previous_state)
+        return False, {"loaded": [], "failed": {"run": "run_id vide."}, "checks": {}, "signatures": {}, "preload_status": "PASS1_FAIL"}
+
+    base = _to_abs_project_path("outputs/combined")
+    run_dir = base / run_id_clean
+    pass1_ok, pass1_issues = validate_combined_run(run_dir)
+    if not pass1_ok:
+        _restore_question_bundle_session_state(previous_state)
+        return False, {
+            "loaded": [],
+            "failed": {"run": " | ".join(pass1_issues)},
+            "checks": {},
+            "signatures": {},
+            "preload_status": "PASS1_FAIL",
+        }
+
+    pass1_signatures: dict[str, str] = {}
+    for qid in _ACCUEIL_QUESTION_ORDER:
+        pass1_signatures[qid] = _make_bundle_signature(run_id_clean, qid, run_dir)
+
+    assumptions_phase1 = pd.DataFrame()
+    assumptions_phase2 = pd.DataFrame()
+    try:
+        assumptions_phase1 = load_assumptions_table()
+        assumptions_phase2 = load_phase2_assumptions_table()
+    except Exception:
+        pass
+
+    loaded_payloads: dict[str, dict[str, object]] = {}
+    failed: dict[str, str] = {}
+    pass2_signatures: dict[str, str] = {}
+    pass2_checks: dict[str, dict[str, int]] = {}
+
+    for qid_raw in _ACCUEIL_QUESTION_ORDER:
+        qid = str(qid_raw).upper()
+        result_key = _RESULT_STATE_KEY_BY_QUESTION.get(qid)
+        if not result_key:
+            failed[qid] = "Cle de session manquante."
+            continue
+        try:
+            bundle, out_dir = load_question_bundle_from_combined_run(
+                run_id=run_id_clean,
+                question_id=qid,
+            )
+        except Exception as exc:
+            failed[qid] = str(exc)
+            continue
+
+        if not isinstance(bundle, QuestionBundleResult):
+            failed[qid] = "Type de bundle invalide."
+            continue
+        if bundle.run_id != run_id_clean:
+            failed[qid] = f"run_id incoherent: {bundle.run_id}"
+            continue
+
+        checks = _extract_check_counts(bundle.checks)
+        if checks.get("FAIL", 0) > 0:
+            failed[qid] = f"Checks FAIL detectes: {checks}"
+            continue
+
+        signature = compute_question_bundle_signature(run_dir, qid)
+        if signature != pass1_signatures.get(qid):
+            failed[qid] = "Signature incoherente entre passes."
+            continue
+        pass2_signatures[qid] = signature
+        pass2_checks[qid] = checks
+
+        bundle_hash = f"{run_id_clean}_{qid}"
+        if isinstance(bundle.selection, dict) and not assumptions_phase1.empty:
+            try:
+                bundle_hash = build_bundle_hash(qid, bundle.selection, assumptions_phase1, assumptions_phase2)
+            except Exception:
+                bundle_hash = f"{run_id_clean}_{qid}"
+
+        loaded_payloads[qid] = {
+            "bundle": bundle,
+            "out_dir": str(out_dir),
+            "bundle_hash": bundle_hash,
+        }
+
+    # Pass 3: verification non destructive avant ecriture de session.
+    if len(loaded_payloads) != len(_ACCUEIL_QUESTION_ORDER) or failed:
+        _restore_question_bundle_session_state(previous_state)
+        return False, {
+            "loaded": [],
+            "failed": failed,
+            "checks": pass2_checks,
+            "signatures": pass2_signatures,
+            "preload_status": "PASS3_FAIL",
+            "pass2_signatures": pass2_signatures,
+        }
+
+    loaded_run_ids = {str(p["bundle"].run_id) for p in loaded_payloads.values() if isinstance(p.get("bundle"), QuestionBundleResult)}  # type: ignore[index]
+    if len(loaded_run_ids) != 1 or run_id_clean not in loaded_run_ids:
+        _restore_question_bundle_session_state(previous_state)
+        return False, {
+            "loaded": [],
+            "failed": {"run": "run_id incoherent entre questions."},
+            "checks": pass2_checks,
+            "signatures": pass2_signatures,
+            "preload_status": "PASS3_FAIL",
+            "pass2_signatures": pass2_signatures,
+        }
+
+    for qid in _ACCUEIL_QUESTION_ORDER:
+        if pass2_signatures.get(qid) != _make_bundle_signature(run_id_clean, qid, run_dir):
+            _restore_question_bundle_session_state(previous_state)
+            return False, {
+                "loaded": [],
+                "failed": {"run": "Signature incoherente entre pass2 et pass3."},
+                "checks": pass2_checks,
+                "signatures": pass2_signatures,
+                "preload_status": "PASS3_FAIL",
+                "pass2_signatures": pass2_signatures,
+            }
+
+    # Commit transactionnel: on clear puis on Ã©crit l'Ã©tat de session.
     _clear_question_bundle_session_state()
+    for qid, payload in loaded_payloads.items():
+        result_key = _RESULT_STATE_KEY_BY_QUESTION.get(qid)
+        if not result_key:
+            _restore_question_bundle_session_state(previous_state)
+            return False, {
+                "loaded": [],
+                "failed": {"run": "Cle de session manquante en commit."},
+                "checks": pass2_checks,
+                "signatures": pass2_signatures,
+                "preload_status": "PASS3_FAIL",
+                "pass2_signatures": pass2_signatures,
+            }
+        if not all(field in payload for field in ["bundle", "out_dir", "bundle_hash"]):
+            _restore_question_bundle_session_state(previous_state)
+            return False, {
+                "loaded": [],
+                "failed": {"run": f"Payload incomplet pour {qid}."},
+                "checks": pass2_checks,
+                "signatures": pass2_signatures,
+                "preload_status": "PASS3_FAIL",
+                "pass2_signatures": pass2_signatures,
+            }
+        st.session_state[result_key] = payload
+
+    st.session_state["last_full_refresh_run_id"] = run_id_clean
     try:
         st.cache_data.clear()
     except Exception:
@@ -299,42 +524,14 @@ def _hard_clear_runtime_cache() -> None:
         st.cache_resource.clear()
     except Exception:
         pass
-
-
-def _hydrate_question_pages_from_run(run_id: str) -> tuple[list[str], dict[str, str]]:
-    _clear_question_bundle_session_state()
-    loaded: list[str] = []
-    failed: dict[str, str] = {}
-    assumptions_phase1 = pd.DataFrame()
-    assumptions_phase2 = pd.DataFrame()
-    try:
-        assumptions_phase1 = load_assumptions_table()
-        assumptions_phase2 = load_phase2_assumptions_table()
-    except Exception:
-        pass
-    for qid_raw in QUESTION_ORDER:
-        qid = str(qid_raw).upper()
-        result_key = _RESULT_STATE_KEY_BY_QUESTION.get(qid)
-        if not result_key:
-            continue
-        try:
-            bundle, out_dir = load_question_bundle_from_combined_run(run_id=run_id, question_id=qid)
-        except Exception as exc:
-            failed[qid] = str(exc)
-            continue
-        bundle_hash = f"{run_id}_{qid}"
-        if isinstance(bundle.selection, dict) and not assumptions_phase1.empty:
-            try:
-                bundle_hash = build_bundle_hash(qid, bundle.selection, assumptions_phase1, assumptions_phase2)
-            except Exception:
-                bundle_hash = f"{run_id}_{qid}"
-        st.session_state[result_key] = {
-            "bundle": bundle,
-            "out_dir": str(out_dir),
-            "bundle_hash": bundle_hash,
-        }
-        loaded.append(qid)
-    return loaded, failed
+    return True, {
+        "loaded": sorted(_ACCUEIL_QUESTION_ORDER),
+        "failed": {},
+        "checks": pass2_checks,
+        "signatures": pass2_signatures,
+        "preload_status": "OK",
+        "pass2_signatures": pass2_signatures,
+    }
 
 
 def _hydrate_question_pages_from_prepared(prepared_items: list[dict]) -> tuple[list[str], dict[str, str]]:
@@ -450,7 +647,6 @@ def render() -> None:
         st.code(str(_PAGE_UTILS_IMPORT_ERROR))
     else:
         if st.button("Lancer / rafraichir toutes les analyses (sans cache calcule)", type="primary"):
-            _hard_clear_runtime_cache()
             with st.spinner("Refresh global en cours (rebuild historique + run combine Q1..Q5)..."):
                 try:
                     refresh_summary = refresh_all_analyses_no_cache_ui(
@@ -462,25 +658,74 @@ def render() -> None:
                 except Exception as exc:
                     st.error(f"Echec du refresh global: {exc}")
                 else:
-                    run_id = str(refresh_summary.get("run_id", "UNKNOWN"))
-                    st.session_state["last_full_refresh_run_id"] = run_id
-                    st.success(f"Refresh termine. Nouveau run combine: {run_id}")
-                    if _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR is not None:
-                        st.warning(
-                            "Prechargement auto indisponible: "
-                            + str(_PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR)
-                        )
-                    with st.spinner("Chargement automatique des resultats Q1..Q5 dans les pages..."):
-                        loaded_q, failed_q = _hydrate_question_pages_from_run(run_id)
-                    if loaded_q:
-                        st.info(f"Sections prechargees: {', '.join(loaded_q)}")
-                    if failed_q:
-                        st.warning(
-                            "Prechargement incomplet: "
-                            + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()])
-                        )
-                    with st.expander("Details techniques du refresh", expanded=False):
-                        st.json(refresh_summary)
+                    requested_run_id = str(refresh_summary.get("run_id", "")).strip()
+                    if not requested_run_id:
+                        st.error("Run_id invalide retourne par le refresh global.")
+                    else:
+                        try:
+                            resolved_run_id, fallback_run = _load_preferred_run_id(
+                                requested_run_id,
+                                base_dir="outputs/combined",
+                            )
+                        except Exception as exc:
+                            st.error(f"Prechargement impossible: {exc}")
+                            with st.expander("Details techniques du refresh", expanded=False):
+                                st.json(refresh_summary)
+                        else:
+                            if fallback_run:
+                                st.warning(
+                                    "Run_id demande introuvable ou incomplet, utilisation du run combine complet le plus recent: "
+                                    + resolved_run_id
+                                )
+                            if _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE is False:
+                                st.info(
+                                    "Prechargement local actif par compatibilite page_utils."
+                                )
+                            st.success(f"Refresh termine. Nouveau run combine: {resolved_run_id}")
+                            st.caption(
+                                f"Run choisi: {resolved_run_id} | "
+                                f"Questions lancees: Q1..Q5 | "
+                                f"Historique: {DEFAULT_YEAR_START}-{DEFAULT_YEAR_END} | "
+                                "Scenarios: 2025-2035"
+                            )
+                            if _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR is not None and fallback_run:
+                                st.info(
+                                    "Prechargement en mode fallback local actif via 00_Accueil (mode de compatibilite)."
+                                )
+                            with st.spinner("Chargement automatique des resultats Q1..Q5 dans les pages..."):
+                                preload_ok, preload_report = _hydrate_question_pages_from_run(resolved_run_id)
+
+                            if preload_ok:
+                                checks_by_q = preload_report.get("checks", {})
+                                if isinstance(checks_by_q, dict) and checks_by_q:
+                                    details = []
+                                    for qid in _ACCUEIL_QUESTION_ORDER:
+                                        q_checks = checks_by_q.get(qid, {})
+                                        if not isinstance(q_checks, dict):
+                                            continue
+                                        q_checks_parts = [f"{k}={v}" for k, v in q_checks.items()]
+                                        details.append(f"{qid}: " + ", ".join(q_checks_parts))
+                                    if details:
+                                        st.info("Checks par question: " + " | ".join(details))
+                                st.success("Prechargement auto complete des sections Q1..Q5.")
+                            else:
+                                failed_q = preload_report.get("failed", {})
+                                if isinstance(failed_q, dict) and failed_q:
+                                    st.error(
+                                        "Prechargement bloque par controle de qualite: "
+                                        + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()])
+                                    )
+                                else:
+                                    st.error("Prechargement bloque (raison inconnue).")
+                                if _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE is False and _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR is not None:
+                                    st.info(
+                                        "Prechargement local actif par compatibilite page_utils: "
+                                        + str(_PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR)
+                                    )
+                            with st.expander("Details techniques du refresh", expanded=False):
+                                st.json(refresh_summary)
+                                if isinstance(preload_report, dict):
+                                    st.code(preload_report)
 
     st.markdown("## Generation IA globale")
     st.caption(
@@ -583,5 +828,6 @@ def render() -> None:
         "Suivre ce parcours dans l'ordre garantit que chaque etape repose sur des donnees validees. "
         "Ne pas sauter directement aux conclusions sans avoir verifie la qualite des donnees."
     )
+
 
 
