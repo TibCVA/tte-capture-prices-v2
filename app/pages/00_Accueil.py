@@ -9,6 +9,8 @@ _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
 try:
     from app.page_utils import (
         load_annual_metrics,
+        load_question_bundle_from_combined_run,
+        build_bundle_hash,
         load_phase2_assumptions_table,
         refresh_all_analyses_no_cache_ui,
     )
@@ -24,20 +26,14 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
     def load_annual_metrics(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("load_annual_metrics indisponible.")
 
-    def load_phase2_assumptions_table(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("load_phase2_assumptions_table indisponible.")
-
-_PAGE_UTILS_OPTIONAL_IMPORT_ERROR: Exception | None = None
-try:
-    from app.page_utils import build_bundle_hash, load_question_bundle_from_combined_run
-except Exception as exc:  # pragma: no cover - optional helpers; keep refresh available
-    _PAGE_UTILS_OPTIONAL_IMPORT_ERROR = exc
+    def build_bundle_hash(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("build_bundle_hash indisponible.")
 
     def load_question_bundle_from_combined_run(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("load_question_bundle_from_combined_run indisponible.")
 
-    def build_bundle_hash(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("build_bundle_hash indisponible.")
+    def load_phase2_assumptions_table(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("load_phase2_assumptions_table indisponible.")
 
 _LLM_BATCH_IMPORT_ERROR: Exception | None = None
 try:
@@ -93,13 +89,6 @@ _RESULT_STATE_KEY_BY_QUESTION = {
 
 
 def _hydrate_question_pages_from_run(run_id: str) -> tuple[list[str], dict[str, str]]:
-    if _PAGE_UTILS_OPTIONAL_IMPORT_ERROR is not None:
-        return [], {
-            "GLOBAL": (
-                "Prechargement auto Q1..Q5 indisponible (imports partiels). "
-                "Le refresh global reste fonctionnel."
-            )
-        }
     loaded: list[str] = []
     failed: dict[str, str] = {}
     assumptions_phase1 = pd.DataFrame()
