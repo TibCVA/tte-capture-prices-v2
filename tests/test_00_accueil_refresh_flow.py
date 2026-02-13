@@ -162,22 +162,14 @@ def test_clear_question_bundle_session_state_removes_question_keys_and_last_run(
     assert session_state["other_key"] == "kept"
 
 
-def test_hydrate_blocks_when_check_fail_and_restores_previous_state(monkeypatch, tmp_path: Path) -> None:
+def test_hydrate_loads_when_check_fail_and_marks_quality(monkeypatch, tmp_path: Path) -> None:
     module = _load_accueil_module()
 
     base = tmp_path / "outputs" / "combined"
     _build_fake_run(base, run_id="RUN_FAIL")
     monkeypatch.setattr(module, "_to_abs_project_path", lambda path_like: base)
 
-    session_state = {
-        "q1_bundle_result": {"old": "v1"},
-        "q2_bundle_result": {"old": "v2"},
-        "q3_bundle_result": {"old": "v3"},
-        "q4_bundle_result": {"old": "v4"},
-        "q5_bundle_result": {"old": "v5"},
-        "last_full_refresh_run_id": "RUN_PREVIOUS",
-        "other": "kept",
-    }
+    session_state = {"other": "kept"}
     fake_st = SimpleNamespace(
         session_state=session_state,
         cache_data=SimpleNamespace(clear=lambda: None),
@@ -185,21 +177,22 @@ def test_hydrate_blocks_when_check_fail_and_restores_previous_state(monkeypatch,
     )
     module.st = fake_st
 
-    def fake_loader(run_id: str, question_id: str, base_dir: str = "outputs/combined"):  # noqa: ARG001
+    def fake_loader(run_id: str, question_id: str, base_dir: str = "outputs/combined", **kwargs):  # noqa: ARG001
         status = "FAIL" if question_id == "Q3" else "PASS"
         return _fake_bundle(question_id, run_id, status), base / run_id / question_id
 
-    module.load_question_bundle_from_combined_run = fake_loader
+    module.load_question_bundle_from_combined_run_safe = fake_loader
     module.load_assumptions_table = lambda: pd.DataFrame()
     module.load_phase2_assumptions_table = lambda: pd.DataFrame()
+    module._persist_session_cache_snapshot = lambda: (None, None)
 
     ok, report = module._hydrate_question_pages_from_run("RUN_FAIL")
 
-    assert ok is False
-    assert "Q3" in report["failed"]
-    assert "FAIL" in report["failed"]["Q3"]
-    assert session_state["last_full_refresh_run_id"] == "RUN_PREVIOUS"
-    assert session_state["q1_bundle_result"] == {"old": "v1"}
+    assert ok is True
+    assert report["failed"] == {}
+    assert session_state["last_full_refresh_run_id"] == "RUN_FAIL"
+    assert session_state["q3_bundle_result"]["quality_status"] == "FAIL"
+    assert int(session_state["q3_bundle_result"]["check_counts"]["FAIL"]) == 1
 
 
 def test_load_preferred_run_id_fallbacks_to_latest_valid_run(tmp_path: Path) -> None:
@@ -223,3 +216,31 @@ def test_load_preferred_run_id_fallbacks_to_latest_valid_run(tmp_path: Path) -> 
 
     assert fallback is True
     assert selected_run_id == "RUN_NEW"
+
+
+def test_hydrate_reports_cache_persistence_status(monkeypatch, tmp_path: Path) -> None:
+    module = _load_accueil_module()
+
+    base = tmp_path / "outputs" / "combined"
+    _build_fake_run(base, run_id="RUN_CACHE")
+    monkeypatch.setattr(module, "_to_abs_project_path", lambda path_like: base)
+    session_state: dict[str, object] = {}
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        cache_data=SimpleNamespace(clear=lambda: None),
+        cache_resource=SimpleNamespace(clear=lambda: None),
+    )
+    module.st = fake_st
+
+    def fake_loader(run_id: str, question_id: str, base_dir: str = "outputs/combined", **kwargs):  # noqa: ARG001
+        return _fake_bundle(question_id, run_id, "PASS"), base / run_id / question_id
+
+    module.load_question_bundle_from_combined_run_safe = fake_loader
+    module.load_assumptions_table = lambda: pd.DataFrame()
+    module.load_phase2_assumptions_table = lambda: pd.DataFrame()
+    module._persist_session_cache_snapshot = lambda: ("outputs/session_cache/session_state.json", None)
+
+    ok, report = module._hydrate_question_pages_from_run("RUN_CACHE")
+    assert ok is True
+    assert report["cache_path"] == "outputs/session_cache/session_state.json"
+    assert report["cache_error"] is None

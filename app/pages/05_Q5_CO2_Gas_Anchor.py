@@ -15,6 +15,7 @@ try:
         default_analysis_scenario_years,
         load_annual_metrics,
         load_phase2_assumptions_table,
+        restore_question_payload_from_session_cache,
         run_question_bundle_cached,
     )
 except Exception as exc:  # pragma: no cover
@@ -29,6 +30,7 @@ except Exception as exc:  # pragma: no cover
     default_analysis_scenario_years = _page_utils_unavailable  # type: ignore[assignment]
     load_annual_metrics = _page_utils_unavailable  # type: ignore[assignment]
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
+    restore_question_payload_from_session_cache = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
 from app.ui_shims import (
     guided_header,
@@ -173,11 +175,23 @@ def render() -> None:
         out_dir = export_question_bundle(bundle)
         st.session_state[RESULT_KEY] = {"bundle": bundle, "out_dir": str(out_dir), "bundle_hash": bundle_hash}
 
+    if RESULT_KEY not in st.session_state:
+        try:
+            restore_question_payload_from_session_cache("Q5", RESULT_KEY)
+        except Exception:
+            pass
     payload = st.session_state.get(RESULT_KEY)
     if not payload:
         return
 
     bundle = payload["bundle"]
+    if str(payload.get("quality_status", "")).upper() == "FAIL":
+        counts = payload.get("check_counts", {})
+        fail_codes = payload.get("fail_codes_top5", [])
+        fail_count = int(counts.get("FAIL", 0)) if isinstance(counts, dict) else 0
+        st.error(f"Analyses chargees malgre checks FAIL. Nombre de FAIL: {fail_count}.")
+        if isinstance(fail_codes, list) and fail_codes:
+            st.caption("Top FAIL codes: " + ", ".join(str(code) for code in fail_codes))
     render_status_banner(bundle.checks)
     render_status_interpretation(bundle.checks)
 

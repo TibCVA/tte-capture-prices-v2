@@ -101,3 +101,28 @@ def test_run_parallel_llm_generation_handles_partial_failures(monkeypatch, tmp_p
     assert by_q["Q3"]["status"] == "FAILED_PREP"
     assert "prep failed" in by_q["Q3"]["error"]
     assert set(called) == {"Q1", "Q2"}
+
+
+def test_validate_llm_batch_rows_flags_mismatch_duplicate_and_missing() -> None:
+    rows = [
+        {"question_id": "Q1", "status": "OK", "bundle_hash": "hash_ok_q1", "tokens_input": 1, "tokens_output": 2, "error": "", "report_file": "f1"},
+        {"question_id": "Q2", "status": "OK", "bundle_hash": "hash_bad", "tokens_input": 1, "tokens_output": 2, "error": "", "report_file": "f2"},
+        {"question_id": "Q3", "status": "OK", "bundle_hash": "hash_q3", "tokens_input": 1, "tokens_output": 2, "error": "", "report_file": "f3"},
+        {"question_id": "Q3", "status": "OK", "bundle_hash": "hash_q3", "tokens_input": 1, "tokens_output": 2, "error": "", "report_file": "f3b"},
+    ]
+    expected = {
+        "Q1": "hash_ok_q1",
+        "Q2": "hash_ok_q2",
+        "Q3": "hash_q3",
+        "Q4": "hash_q4",
+    }
+    normalized, issues = llm_batch.validate_llm_batch_rows(rows, expected)
+    by_q = {row["question_id"]: row for row in normalized}
+
+    assert by_q["Q1"]["status"] == "OK"
+    assert by_q["Q2"]["status"] == "FAILED_MISMATCH"
+    assert by_q["Q3"]["status"] == "FAILED_DUPLICATE"
+    assert by_q["Q4"]["status"] == "FAILED_INCOMPLETE"
+    assert any("incoherent" in issue for issue in issues)
+    assert any("Doublon" in issue for issue in issues)
+    assert any("manquante" in issue for issue in issues)

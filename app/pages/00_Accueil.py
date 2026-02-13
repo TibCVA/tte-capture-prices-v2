@@ -12,6 +12,7 @@ from src.reporting.evidence_loader import (
     discover_complete_runs,
     validate_combined_run,
 )
+from src.reporting.session_cache import clear_session_snapshot
 
 _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
 _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = True
@@ -23,6 +24,16 @@ try:
     load_phase2_assumptions_table = _page_utils.load_phase2_assumptions_table
     refresh_all_analyses_no_cache_ui = _page_utils.refresh_all_analyses_no_cache_ui
     build_bundle_hash = _page_utils.build_bundle_hash
+    restore_question_payload_from_session_cache = getattr(
+        _page_utils,
+        "restore_question_payload_from_session_cache",
+        None,
+    )
+    persist_question_payloads_to_session_cache = getattr(
+        _page_utils,
+        "persist_question_payloads_to_session_cache",
+        None,
+    )
 
     load_question_bundle_from_combined_run = getattr(_page_utils, "load_question_bundle_from_combined_run", None)
     load_question_bundle_from_combined_run_safe = getattr(
@@ -36,6 +47,10 @@ try:
         _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = False
         load_question_bundle_from_combined_run = None
         load_question_bundle_from_combined_run_safe = None
+        if not callable(restore_question_payload_from_session_cache):
+            restore_question_payload_from_session_cache = None
+        if not callable(persist_question_payloads_to_session_cache):
+            persist_question_payloads_to_session_cache = None
 except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud stale caches
     _PAGE_UTILS_IMPORT_ERROR = exc
     _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = False
@@ -59,6 +74,12 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
 
     def load_phase2_assumptions_table(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError(f"app.page_utils indisponible (load_phase2_assumptions_table). Cause: {exc}")
+
+    def restore_question_payload_from_session_cache(*args, **kwargs):  # type: ignore[no-redef]
+        return False
+
+    def persist_question_payloads_to_session_cache(*args, **kwargs):  # type: ignore[no-redef]
+        return None
 
 
 if not _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE:
@@ -246,6 +267,15 @@ if load_question_bundle_from_combined_run is None:  # type: ignore[comparison-ov
         )
     load_question_bundle_from_combined_run = _load_question_bundle_from_combined_run_local
 
+if not callable(load_question_bundle_from_combined_run_safe):
+    load_question_bundle_from_combined_run_safe = load_question_bundle_from_combined_run
+if not callable(restore_question_payload_from_session_cache):
+    def restore_question_payload_from_session_cache(*args, **kwargs):  # type: ignore[no-redef]
+        return False
+if not callable(persist_question_payloads_to_session_cache):
+    def persist_question_payloads_to_session_cache(*args, **kwargs):  # type: ignore[no-redef]
+        return None
+
 _LLM_BATCH_IMPORT_ERROR: Exception | None = None
 try:
     from app.llm_analysis import resolve_openai_api_key
@@ -254,6 +284,7 @@ try:
         build_default_selection,
         prepare_bundle_for_question,
         run_parallel_llm_generation,
+        validate_llm_batch_rows,
     )
     from src.config_loader import load_countries
     from src.pipeline import load_assumptions_table
@@ -272,6 +303,9 @@ except Exception as exc:  # pragma: no cover - defensive
 
     def run_parallel_llm_generation(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("run_parallel_llm_generation indisponible.")
+
+    def validate_llm_batch_rows(*args, **kwargs):  # type: ignore[no-redef]
+        return [], ["validate_llm_batch_rows indisponible."]
 
     def load_countries(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("load_countries indisponible.")
@@ -303,7 +337,7 @@ _ACCUEIL_QUESTION_ORDER = tuple(QUESTION_ORDER)
 
 def _snapshot_question_bundle_session_state() -> dict[str, object]:
     state_snapshot: dict[str, object] = {}
-    for key in _RESULT_STATE_KEYS + ("last_full_refresh_run_id",):
+    for key in _RESULT_STATE_KEYS + ("last_full_refresh_run_id", "last_llm_batch_result", "llm_batch_running"):
         if key in st.session_state:
             state_snapshot[key] = st.session_state.get(key)
     return state_snapshot
@@ -313,6 +347,8 @@ def _restore_question_bundle_session_state(snapshot: dict[str, object]) -> None:
     for key in _RESULT_STATE_KEYS:
         st.session_state.pop(key, None)
     st.session_state.pop("last_full_refresh_run_id", None)
+    st.session_state.pop("last_llm_batch_result", None)
+    st.session_state.pop("llm_batch_running", None)
     for key, value in snapshot.items():
         st.session_state[key] = value
 
@@ -331,6 +367,85 @@ def _extract_check_counts(checks: list[dict] | object) -> dict[str, int]:
         else:
             counts["UNKNOWN"] += 1
     return counts
+
+
+def _extract_fail_codes(checks: list[dict] | object, limit: int = 5) -> list[str]:
+    if not isinstance(checks, list):
+        return []
+    fail_codes: list[str] = []
+    for raw in checks:
+        if not isinstance(raw, dict):
+            continue
+        status = str(raw.get("status", "")).upper().strip()
+        if status != "FAIL":
+            continue
+        code = str(raw.get("code", "")).strip()
+        if not code:
+            continue
+        fail_codes.append(code)
+        if len(fail_codes) >= int(limit):
+            break
+    return fail_codes
+
+
+def _quality_status_from_counts(check_counts: dict[str, int]) -> str:
+    if int(check_counts.get("FAIL", 0)) > 0:
+        return "FAIL"
+    if int(check_counts.get("WARN", 0)) > 0:
+        return "WARN"
+    return "PASS"
+
+
+def _current_question_payloads() -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    for qid in _ACCUEIL_QUESTION_ORDER:
+        key = _RESULT_STATE_KEY_BY_QUESTION.get(qid)
+        if not key:
+            continue
+        payload = st.session_state.get(key)
+        if isinstance(payload, dict):
+            out[qid] = payload
+    return out
+
+
+def _persist_session_cache_snapshot() -> tuple[str | None, str | None]:
+    payloads = _current_question_payloads()
+    if not payloads:
+        return None, None
+    try:
+        cache_path = persist_question_payloads_to_session_cache(
+            payloads,
+            last_llm_batch_result=st.session_state.get("last_llm_batch_result"),
+            base_dir="outputs/combined",
+        )
+    except Exception as exc:
+        return None, str(exc)
+    if cache_path is None:
+        return None, None
+    return str(cache_path), None
+
+
+def _restore_session_from_disk_if_needed() -> tuple[list[str], dict[str, str]]:
+    restored: list[str] = []
+    failed: dict[str, str] = {}
+    for qid in _ACCUEIL_QUESTION_ORDER:
+        result_key = _RESULT_STATE_KEY_BY_QUESTION.get(qid)
+        if not result_key:
+            continue
+        if result_key in st.session_state:
+            continue
+        try:
+            ok = restore_question_payload_from_session_cache(
+                question_id=qid,
+                result_key=result_key,
+                base_dir="outputs/combined",
+            )
+        except Exception as exc:
+            failed[qid] = str(exc)
+            continue
+        if ok:
+            restored.append(qid)
+    return restored, failed
 
 
 def _load_preferred_run_id(
@@ -367,9 +482,11 @@ def _clear_question_bundle_session_state() -> None:
     for key in _RESULT_STATE_KEYS:
         st.session_state.pop(key, None)
     st.session_state.pop("last_full_refresh_run_id", None)
+    st.session_state.pop("last_llm_batch_result", None)
+    st.session_state.pop("llm_batch_running", None)
 
 
-def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, object]]:
+def _hydrate_question_pages_from_run(run_id: str, *, allow_fail_checks: bool = True) -> tuple[bool, dict[str, object]]:
     previous_state = _snapshot_question_bundle_session_state()
     run_id_clean = str(run_id).strip()
     if not run_id_clean:
@@ -405,6 +522,7 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
     failed: dict[str, str] = {}
     pass2_signatures: dict[str, str] = {}
     pass2_checks: dict[str, dict[str, int]] = {}
+    pass2_fail_codes: dict[str, list[str]] = {}
 
     for qid_raw in _ACCUEIL_QUESTION_ORDER:
         qid = str(qid_raw).upper()
@@ -413,9 +531,11 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
             failed[qid] = "Cle de session manquante."
             continue
         try:
-            bundle, out_dir = load_question_bundle_from_combined_run(
+            bundle, out_dir = load_question_bundle_from_combined_run_safe(
                 run_id=run_id_clean,
                 question_id=qid,
+                allow_fail_checks=allow_fail_checks,
+                expected_signature=pass1_signatures.get(qid),
             )
         except Exception as exc:
             failed[qid] = str(exc)
@@ -429,9 +549,11 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
             continue
 
         checks = _extract_check_counts(bundle.checks)
-        if checks.get("FAIL", 0) > 0:
+        if checks.get("FAIL", 0) > 0 and not allow_fail_checks:
             failed[qid] = f"Checks FAIL detectes: {checks}"
             continue
+        fail_codes = _extract_fail_codes(bundle.checks, limit=5)
+        quality_status = _quality_status_from_counts(checks)
 
         signature = compute_question_bundle_signature(run_dir, qid)
         if signature != pass1_signatures.get(qid):
@@ -439,6 +561,7 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
             continue
         pass2_signatures[qid] = signature
         pass2_checks[qid] = checks
+        pass2_fail_codes[qid] = fail_codes
 
         bundle_hash = f"{run_id_clean}_{qid}"
         if isinstance(bundle.selection, dict) and not assumptions_phase1.empty:
@@ -451,6 +574,9 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
             "bundle": bundle,
             "out_dir": str(out_dir),
             "bundle_hash": bundle_hash,
+            "quality_status": quality_status,
+            "check_counts": checks,
+            "fail_codes_top5": fail_codes,
         }
 
     # Pass 3: verification non destructive avant ecriture de session.
@@ -460,6 +586,7 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
             "loaded": [],
             "failed": failed,
             "checks": pass2_checks,
+            "fail_codes": pass2_fail_codes,
             "signatures": pass2_signatures,
             "preload_status": "PASS3_FAIL",
             "pass2_signatures": pass2_signatures,
@@ -472,6 +599,7 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
             "loaded": [],
             "failed": {"run": "run_id incoherent entre questions."},
             "checks": pass2_checks,
+            "fail_codes": pass2_fail_codes,
             "signatures": pass2_signatures,
             "preload_status": "PASS3_FAIL",
             "pass2_signatures": pass2_signatures,
@@ -484,6 +612,7 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
                 "loaded": [],
                 "failed": {"run": "Signature incoherente entre pass2 et pass3."},
                 "checks": pass2_checks,
+                "fail_codes": pass2_fail_codes,
                 "signatures": pass2_signatures,
                 "preload_status": "PASS3_FAIL",
                 "pass2_signatures": pass2_signatures,
@@ -499,6 +628,7 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
                 "loaded": [],
                 "failed": {"run": "Cle de session manquante en commit."},
                 "checks": pass2_checks,
+                "fail_codes": pass2_fail_codes,
                 "signatures": pass2_signatures,
                 "preload_status": "PASS3_FAIL",
                 "pass2_signatures": pass2_signatures,
@@ -509,6 +639,7 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
                 "loaded": [],
                 "failed": {"run": f"Payload incomplet pour {qid}."},
                 "checks": pass2_checks,
+                "fail_codes": pass2_fail_codes,
                 "signatures": pass2_signatures,
                 "preload_status": "PASS3_FAIL",
                 "pass2_signatures": pass2_signatures,
@@ -516,6 +647,7 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
         st.session_state[result_key] = payload
 
     st.session_state["last_full_refresh_run_id"] = run_id_clean
+    cache_path, cache_error = _persist_session_cache_snapshot()
     try:
         st.cache_data.clear()
     except Exception:
@@ -528,16 +660,19 @@ def _hydrate_question_pages_from_run(run_id: str) -> tuple[bool, dict[str, objec
         "loaded": sorted(_ACCUEIL_QUESTION_ORDER),
         "failed": {},
         "checks": pass2_checks,
+        "fail_codes": pass2_fail_codes,
         "signatures": pass2_signatures,
         "preload_status": "OK",
         "pass2_signatures": pass2_signatures,
+        "cache_path": cache_path,
+        "cache_error": cache_error,
     }
 
 
 def _hydrate_question_pages_from_prepared(prepared_items: list[dict]) -> tuple[list[str], dict[str, str]]:
-    _clear_question_bundle_session_state()
     loaded: list[str] = []
     failed: dict[str, str] = {}
+    loaded_run_ids: set[str] = set()
     for item in prepared_items:
         qid = str(item.get("question_id", "")).upper()
         if not qid:
@@ -565,13 +700,59 @@ def _hydrate_question_pages_from_prepared(prepared_items: list[dict]) -> tuple[l
             failed[qid] = f"Export bundle impossible: {exc}"
             continue
 
+        checks = _extract_check_counts(getattr(bundle, "checks", []))
+        fail_codes = _extract_fail_codes(getattr(bundle, "checks", []), limit=5)
         st.session_state[result_key] = {
             "bundle": bundle,
             "out_dir": str(out_dir),
             "bundle_hash": bundle_hash,
+            "quality_status": _quality_status_from_counts(checks),
+            "check_counts": checks,
+            "fail_codes_top5": fail_codes,
         }
+        loaded_run_ids.add(str(getattr(bundle, "run_id", "")).strip())
         loaded.append(qid)
+    run_ids = {rid for rid in loaded_run_ids if rid}
+    if len(run_ids) == 1:
+        st.session_state["last_full_refresh_run_id"] = next(iter(run_ids))
+    _persist_session_cache_snapshot()
     return loaded, failed
+
+
+def _merge_llm_batch_rows(
+    previous_rows: list[dict[str, object]],
+    new_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    anomaly_statuses = {"FAILED_MISMATCH", "FAILED_DUPLICATE", "FAILED_INCOMPLETE"}
+    merged: dict[str, dict[str, object]] = {}
+
+    for raw in previous_rows:
+        if not isinstance(raw, dict):
+            continue
+        qid = str(raw.get("question_id", "")).upper().strip()
+        if not qid:
+            continue
+        merged[qid] = dict(raw)
+
+    for raw in new_rows:
+        if not isinstance(raw, dict):
+            continue
+        qid = str(raw.get("question_id", "")).upper().strip()
+        if not qid:
+            continue
+        candidate = dict(raw)
+        status = str(candidate.get("status", "")).upper().strip()
+        existing = merged.get(qid)
+        if status in anomaly_statuses and isinstance(existing, dict):
+            if str(existing.get("status", "")).upper().strip() == "OK":
+                continue
+        merged[qid] = candidate
+
+    order = {qid: idx for idx, qid in enumerate(_ACCUEIL_QUESTION_ORDER)}
+    return sorted(
+        merged.values(),
+        key=lambda row: (order.get(str(row.get("question_id", "")).upper(), 99), str(row.get("question_id", ""))),
+    )
 
 
 def render() -> None:
@@ -582,6 +763,12 @@ def render() -> None:
         step_now="Accueil: comprendre le parcours",
         step_next="Mode d'emploi: definitions et methode",
     )
+    restored_q, _ = _restore_session_from_disk_if_needed()
+    if restored_q:
+        st.info(
+            "Restauration automatique des analyses depuis le cache local: "
+            + ", ".join(restored_q)
+        )
 
     render_kpi_cards_styled(
         [
@@ -642,6 +829,21 @@ def render() -> None:
         "Ce bouton reconstruit toutes les analyses (Q1..Q5) sans reutiliser les caches de calculs, "
         "tout en conservant les donnees ENTSO-E brutes deja telechargees en local."
     )
+    if st.button("Reinitialiser cache analyses"):
+        _clear_question_bundle_session_state()
+        try:
+            clear_session_snapshot()
+        except Exception as exc:
+            st.warning(f"Cache fichier non purge completement: {exc}")
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        try:
+            st.cache_resource.clear()
+        except Exception:
+            pass
+        st.success("Cache analyses reinitialise (session + persistance locale).")
     if _PAGE_UTILS_IMPORT_ERROR is not None:
         st.error("Impossible de charger le module de refresh global.")
         st.code(str(_PAGE_UTILS_IMPORT_ERROR))
@@ -693,28 +895,53 @@ def render() -> None:
                                     "Prechargement en mode fallback local actif via 00_Accueil (mode de compatibilite)."
                                 )
                             with st.spinner("Chargement automatique des resultats Q1..Q5 dans les pages..."):
-                                preload_ok, preload_report = _hydrate_question_pages_from_run(resolved_run_id)
+                                preload_ok, preload_report = _hydrate_question_pages_from_run(
+                                    resolved_run_id,
+                                    allow_fail_checks=True,
+                                )
 
                             if preload_ok:
                                 checks_by_q = preload_report.get("checks", {})
+                                fail_codes_by_q = preload_report.get("fail_codes", {})
                                 if isinstance(checks_by_q, dict) and checks_by_q:
                                     details = []
+                                    fail_q: list[str] = []
                                     for qid in _ACCUEIL_QUESTION_ORDER:
                                         q_checks = checks_by_q.get(qid, {})
                                         if not isinstance(q_checks, dict):
                                             continue
                                         q_checks_parts = [f"{k}={v}" for k, v in q_checks.items()]
                                         details.append(f"{qid}: " + ", ".join(q_checks_parts))
+                                        if int(q_checks.get("FAIL", 0)) > 0:
+                                            fail_q.append(qid)
                                     if details:
                                         st.info("Checks par question: " + " | ".join(details))
+                                    if fail_q:
+                                        st.warning(
+                                            "Analyses chargees malgre checks FAIL: "
+                                            + ", ".join(fail_q)
+                                            + ". Les onglets Q affichent les resultats avec alerte qualite."
+                                        )
+                                if isinstance(fail_codes_by_q, dict):
+                                    fail_details = []
+                                    for qid in _ACCUEIL_QUESTION_ORDER:
+                                        codes = fail_codes_by_q.get(qid, [])
+                                        if not isinstance(codes, list) or not codes:
+                                            continue
+                                        fail_details.append(f"{qid}: {', '.join(str(c) for c in codes)}")
+                                    if fail_details:
+                                        st.caption("Top FAIL codes: " + " | ".join(fail_details))
+                                cache_path = str(preload_report.get("cache_path", "")).strip()
+                                cache_error = str(preload_report.get("cache_error", "")).strip()
+                                if cache_path:
+                                    st.caption(f"Cache session mis a jour: {cache_path}")
+                                if cache_error:
+                                    st.warning(f"Cache session non persiste: {cache_error}")
                                 st.success("Prechargement auto complete des sections Q1..Q5.")
                             else:
                                 failed_q = preload_report.get("failed", {})
                                 if isinstance(failed_q, dict) and failed_q:
-                                    st.error(
-                                        "Prechargement bloque par controle de qualite: "
-                                        + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()])
-                                    )
+                                    st.error("Prechargement bloque: " + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()]))
                                 else:
                                     st.error("Prechargement bloque (raison inconnue).")
                                 if _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE is False and _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR is not None:
@@ -736,84 +963,109 @@ def render() -> None:
         st.error("Impossible de charger le module de batch IA.")
         st.code(str(_LLM_BATCH_IMPORT_ERROR))
     elif st.button("Generer toutes les analyses IA (Q1->Q5 en parallele)", type="primary"):
-        try:
-            annual_hist = load_annual_metrics()
-        except Exception as exc:
-            st.error(f"Impossible de charger annual_metrics: {exc}")
-            annual_hist = pd.DataFrame()
-
-        if annual_hist.empty:
-            st.error("Aucune metrique annuelle disponible. Le batch IA est bloque.")
+        if bool(st.session_state.get("llm_batch_running", False)):
+            st.warning("Un batch IA est deja en cours. Attendre la fin avant de relancer.")
         else:
-            api_key = resolve_openai_api_key()
-            if not api_key:
-                st.error("Cle OpenAI manquante. Configure OPENAI_API_KEY dans l'environnement ou les secrets Streamlit.")
-            else:
-                assumptions_phase1 = load_assumptions_table()
-                assumptions_phase2 = load_phase2_assumptions_table()
-                countries_cfg = load_countries()
+            st.session_state["llm_batch_running"] = True
+            try:
+                try:
+                    annual_hist = load_annual_metrics()
+                except Exception as exc:
+                    st.error(f"Impossible de charger annual_metrics: {exc}")
+                    annual_hist = pd.DataFrame()
 
-                prepared_items: list[dict] = []
-                prep_progress = st.progress(0.0)
-                prep_status = st.empty()
-                total_q = len(QUESTION_ORDER)
-
-                for idx, qid in enumerate(QUESTION_ORDER, start=1):
-                    prep_status.text(f"Preparation bundle {qid} ({idx}/{total_q})...")
-                    try:
-                        selection = build_default_selection(
-                            qid,
-                            annual_hist=annual_hist,
-                            assumptions_phase2=assumptions_phase2,
-                            countries_cfg=countries_cfg,
-                        )
-                        prepared = prepare_bundle_for_question(
-                            qid,
-                            selection=selection,
-                            assumptions_phase1=assumptions_phase1,
-                            assumptions_phase2=assumptions_phase2,
-                        )
-                    except Exception as exc:
-                        prepared = {
-                            "question_id": qid,
-                            "status": "FAILED_PREP",
-                            "bundle_hash": "",
-                            "error": str(exc),
-                        }
-                    prepared_items.append(prepared)
-                    prep_progress.progress(idx / max(total_q * 2, 1))
-
-                prep_status.text("Prechargement des sections Q1..Q5...")
-                loaded_q, failed_q = _hydrate_question_pages_from_prepared(prepared_items)
-
-                prep_status.text("Generation IA en parallele en cours...")
-                with st.spinner("Appels IA Q1->Q5 en execution parallele..."):
-                    rows = run_parallel_llm_generation(
-                        prepared_items=prepared_items,
-                        api_key=api_key,
-                        max_workers=5,
-                    )
-                prep_progress.progress(1.0)
-                prep_status.empty()
-                prep_progress.empty()
-
-                ok_count = sum(1 for row in rows if row.get("status") == "OK")
-                fail_count = len(rows) - ok_count
-                st.session_state["last_llm_batch_result"] = {
-                    "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-                    "rows": rows,
-                }
-                if loaded_q:
-                    st.info(f"Sections prechargees apres batch IA: {', '.join(loaded_q)}")
-                if failed_q:
-                    st.warning(
-                        "Prechargement partiel apres batch IA: "
-                        + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()])
-                    )
-                if fail_count == 0:
-                    st.success(f"Generation IA terminee: {ok_count}/{len(rows)} questions traitees.")
+                if annual_hist.empty:
+                    st.error("Aucune metrique annuelle disponible. Le batch IA est bloque.")
                 else:
-                    st.warning(f"Generation IA terminee avec erreurs: {ok_count} succes, {fail_count} echec(s).")
+                    api_key = resolve_openai_api_key()
+                    if not api_key:
+                        st.error("Cle OpenAI manquante. Configure OPENAI_API_KEY dans l'environnement ou les secrets Streamlit.")
+                    else:
+                        assumptions_phase1 = load_assumptions_table()
+                        assumptions_phase2 = load_phase2_assumptions_table()
+                        countries_cfg = load_countries()
+
+                        prepared_items: list[dict] = []
+                        prep_progress = st.progress(0.0)
+                        prep_status = st.empty()
+                        total_q = len(QUESTION_ORDER)
+
+                        for idx, qid in enumerate(QUESTION_ORDER, start=1):
+                            prep_status.text(f"Preparation bundle {qid} ({idx}/{total_q})...")
+                            try:
+                                selection = build_default_selection(
+                                    qid,
+                                    annual_hist=annual_hist,
+                                    assumptions_phase2=assumptions_phase2,
+                                    countries_cfg=countries_cfg,
+                                )
+                                prepared = prepare_bundle_for_question(
+                                    qid,
+                                    selection=selection,
+                                    assumptions_phase1=assumptions_phase1,
+                                    assumptions_phase2=assumptions_phase2,
+                                )
+                            except Exception as exc:
+                                prepared = {
+                                    "question_id": qid,
+                                    "status": "FAILED_PREP",
+                                    "bundle_hash": "",
+                                    "error": str(exc),
+                                }
+                            prepared_items.append(prepared)
+                            prep_progress.progress(idx / max(total_q * 2, 1))
+
+                        prep_status.text("Prechargement des sections Q1..Q5...")
+                        loaded_q, failed_q = _hydrate_question_pages_from_prepared(prepared_items)
+
+                        prep_status.text("Generation IA en parallele en cours...")
+                        with st.spinner("Appels IA Q1->Q5 en execution parallele..."):
+                            raw_rows = run_parallel_llm_generation(
+                                prepared_items=prepared_items,
+                                api_key=api_key,
+                                max_workers=5,
+                            )
+                        expected_by_qid = {
+                            str(item.get("question_id", "")).upper(): str(item.get("bundle_hash", "")).strip()
+                            for item in prepared_items
+                            if str(item.get("status", "")).upper() != "FAILED_PREP"
+                            and str(item.get("bundle_hash", "")).strip()
+                        }
+                        rows, row_issues = validate_llm_batch_rows(raw_rows, expected_by_qid)
+                        prep_progress.progress(1.0)
+                        prep_status.empty()
+                        prep_progress.empty()
+
+                        previous_batch = st.session_state.get("last_llm_batch_result")
+                        previous_rows = []
+                        if isinstance(previous_batch, dict) and isinstance(previous_batch.get("rows"), list):
+                            previous_rows = list(previous_batch.get("rows", []))
+                        merged_rows = _merge_llm_batch_rows(previous_rows, rows)
+                        st.session_state["last_llm_batch_result"] = {
+                            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+                            "rows": merged_rows,
+                        }
+                        _persist_session_cache_snapshot()
+
+                        if loaded_q:
+                            st.info(f"Sections prechargees apres batch IA: {', '.join(loaded_q)}")
+                        if failed_q:
+                            st.warning(
+                                "Prechargement partiel apres batch IA: "
+                                + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()])
+                            )
+                        if row_issues:
+                            st.warning("Controles batch IA: " + " | ".join(row_issues))
+                        ok_count = sum(1 for row in merged_rows if row.get("status") == "OK")
+                        fail_count = len(merged_rows) - ok_count
+                        if fail_count == 0:
+                            st.success(f"Generation IA terminee: {ok_count}/{len(merged_rows)} questions traitees.")
+                        else:
+                            st.warning(
+                                f"Generation IA terminee avec erreurs: {ok_count} succes, {fail_count} echec(s)."
+                            )
+            finally:
+                st.session_state["llm_batch_running"] = False
 
     last_batch = st.session_state.get("last_llm_batch_result")
     if isinstance(last_batch, dict) and isinstance(last_batch.get("rows"), list):

@@ -258,3 +258,87 @@ def run_parallel_llm_generation(
 
     order = {qid: idx for idx, qid in enumerate(QUESTION_ORDER)}
     return sorted(results, key=lambda row: (order.get(str(row.get("question_id", "")).upper(), 99), str(row.get("question_id", ""))))
+
+
+def validate_llm_batch_rows(
+    rows: list[dict[str, Any]],
+    expected_by_qid: dict[str, str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    issues: list[str] = []
+    normalized: list[dict[str, Any]] = []
+    by_qid: dict[str, list[dict[str, Any]]] = {}
+
+    for raw in rows:
+        if not isinstance(raw, dict):
+            issues.append("Ligne batch IA invalide (dict attendu).")
+            continue
+        qid = str(raw.get("question_id", "")).upper().strip()
+        if not qid:
+            issues.append("Ligne batch IA sans question_id.")
+            continue
+        row = dict(raw)
+        row["question_id"] = qid
+        by_qid.setdefault(qid, []).append(row)
+
+    for qid, expected_hash in expected_by_qid.items():
+        expected = str(expected_hash).strip()
+        q_rows = by_qid.get(qid, [])
+        if not q_rows:
+            issues.append(f"Ligne manquante pour {qid}.")
+            normalized.append(
+                {
+                    "question_id": qid,
+                    "status": "FAILED_INCOMPLETE",
+                    "bundle_hash": expected,
+                    "tokens_input": 0,
+                    "tokens_output": 0,
+                    "error": "Resultat manquant dans le batch IA.",
+                    "report_file": None,
+                }
+            )
+            continue
+        if len(q_rows) > 1:
+            issues.append(f"Doublon de lignes pour {qid}.")
+            normalized.append(
+                {
+                    "question_id": qid,
+                    "status": "FAILED_DUPLICATE",
+                    "bundle_hash": expected,
+                    "tokens_input": 0,
+                    "tokens_output": 0,
+                    "error": "Doublon detecte pour cette question dans le batch IA.",
+                    "report_file": None,
+                }
+            )
+            continue
+
+        row = q_rows[0]
+        observed_hash = str(row.get("bundle_hash", "")).strip()
+        if expected and observed_hash != expected:
+            issues.append(f"bundle_hash incoherent pour {qid}.")
+            normalized.append(
+                {
+                    "question_id": qid,
+                    "status": "FAILED_MISMATCH",
+                    "bundle_hash": observed_hash,
+                    "tokens_input": 0,
+                    "tokens_output": 0,
+                    "error": f"bundle_hash incoherent (attendu={expected}, observe={observed_hash}).",
+                    "report_file": None,
+                }
+            )
+            continue
+        normalized.append(row)
+
+    for qid, q_rows in by_qid.items():
+        if qid in expected_by_qid:
+            continue
+        for row in q_rows:
+            normalized.append(row)
+
+    order = {qid: idx for idx, qid in enumerate(QUESTION_ORDER)}
+    normalized = sorted(
+        normalized,
+        key=lambda row: (order.get(str(row.get("question_id", "")).upper(), 99), str(row.get("question_id", ""))),
+    )
+    return normalized, issues

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -27,14 +28,29 @@ from src.storage import (
 )
 try:
     from src.reporting.evidence_loader import (
+        compute_question_bundle_signature,
         load_question_bundle_from_combined_run_verified as _load_question_bundle_from_combined_run_verified,
         validate_combined_run,
     )
 except Exception:
+    compute_question_bundle_signature = None  # type: ignore[assignment]
     _load_question_bundle_from_combined_run_verified = None  # type: ignore[assignment]
     validate_combined_run = None  # type: ignore[assignment]
+from src.reporting.session_cache import (
+    build_question_snapshot_entry,
+    load_session_snapshot,
+    save_session_snapshot,
+    validate_session_snapshot,
+)
 
 APP_ROOT = Path(__file__).resolve().parents[1]
+_RESULT_STATE_KEY_BY_QUESTION = {
+    "Q1": "q1_bundle_result",
+    "Q2": "q2_bundle_result",
+    "Q3": "q3_bundle_result",
+    "Q4": "q4_bundle_result",
+    "Q5": "q5_bundle_result",
+}
 
 
 def _to_abs_project_path(path_like: str | Path) -> Path:
@@ -719,15 +735,238 @@ def load_question_bundle_from_combined_run_safe(
     run_id: str,
     question_id: str,
     base_dir: str = "outputs/combined",
+    *,
+    allow_fail_checks: bool = True,
+    expected_signature: str | None = None,
 ) -> tuple[QuestionBundleResult, Path]:
-    if _load_question_bundle_from_combined_run_verified is None:
-        return _load_question_bundle_from_combined_run_local(
+    try:
+        if _load_question_bundle_from_combined_run_verified is None:
+            bundle, out_dir = _load_question_bundle_from_combined_run_local(
+                run_id=run_id,
+                question_id=question_id,
+                base_dir=base_dir,
+            )
+        else:
+            bundle, out_dir = load_question_bundle_from_combined_run(
+                run_id=run_id,
+                question_id=question_id,
+                base_dir=base_dir,
+            )
+    except Exception:
+        bundle, out_dir = _load_question_bundle_from_combined_run_local(
             run_id=run_id,
             question_id=question_id,
             base_dir=base_dir,
         )
-    return load_question_bundle_from_combined_run(
-        run_id=run_id,
-        question_id=question_id,
-        base_dir=base_dir,
-    )
+
+    checks = _extract_check_counts(bundle.checks)
+    if not allow_fail_checks and checks.get("FAIL", 0) > 0:
+        raise ValueError(f"Checks FAIL detectes pour {str(question_id).upper()}: {checks}")
+
+    signature = str(expected_signature or "").strip()
+    if signature:
+        if compute_question_bundle_signature is None:
+            raise RuntimeError("compute_question_bundle_signature indisponible.")
+        run_dir = _to_abs_project_path(base_dir) / str(run_id)
+        actual_signature = compute_question_bundle_signature(run_dir, question_id)
+        if actual_signature != signature:
+            raise ValueError(
+                f"Signature incompatible pour {str(question_id).upper()} "
+                f"(attendu={signature}, observe={actual_signature})."
+            )
+
+    return bundle, out_dir
+
+
+def _extract_check_counts(checks: list[dict[str, Any]] | object) -> dict[str, int]:
+    counts: dict[str, int] = {"PASS": 0, "WARN": 0, "FAIL": 0, "NON_TESTABLE": 0, "UNKNOWN": 0}
+    if not isinstance(checks, list):
+        return counts
+    for raw in checks:
+        if not isinstance(raw, dict):
+            counts["UNKNOWN"] += 1
+            continue
+        status = str(raw.get("status", "UNKNOWN")).upper().strip()
+        if status in counts:
+            counts[status] += 1
+        else:
+            counts["UNKNOWN"] += 1
+    return counts
+
+
+def _extract_fail_codes(checks: list[dict[str, Any]] | object, limit: int = 5) -> list[str]:
+    if not isinstance(checks, list):
+        return []
+    fail_codes: list[str] = []
+    for raw in checks:
+        if not isinstance(raw, dict):
+            continue
+        status = str(raw.get("status", "")).upper().strip()
+        if status != "FAIL":
+            continue
+        code = str(raw.get("code", "")).strip()
+        if not code:
+            continue
+        fail_codes.append(code)
+        if len(fail_codes) >= int(limit):
+            break
+    return fail_codes
+
+
+def _quality_status_from_counts(check_counts: dict[str, int]) -> str:
+    if int(check_counts.get("FAIL", 0)) > 0:
+        return "FAIL"
+    if int(check_counts.get("WARN", 0)) > 0:
+        return "WARN"
+    return "PASS"
+
+
+def restore_question_payload_from_session_cache(
+    question_id: str,
+    result_key: str,
+    *,
+    base_dir: str = "outputs/combined",
+) -> bool:
+    qid = str(question_id).upper().strip()
+    if qid not in _RESULT_STATE_KEY_BY_QUESTION:
+        return False
+
+    snapshot = load_session_snapshot()
+    if not isinstance(snapshot, dict):
+        return False
+
+    combined_base = _to_abs_project_path(base_dir)
+    valid_snapshot, _ = validate_session_snapshot(snapshot, combined_base)
+    if not valid_snapshot:
+        return False
+
+    questions = snapshot.get("questions", {})
+    if not isinstance(questions, dict):
+        return False
+    entry = questions.get(qid)
+    if not isinstance(entry, dict):
+        return False
+
+    active_run_id = str(snapshot.get("active_run_id", "")).strip()
+    if not active_run_id:
+        return False
+
+    expected_signature = str(entry.get("signature", "")).strip() or None
+    bundle_hash = str(entry.get("bundle_hash", "")).strip()
+    saved_out_dir = str(entry.get("out_dir", "")).strip()
+    run_id = str(entry.get("run_id", "")).strip() or active_run_id
+    if not run_id or run_id == "MIXED":
+        return False
+
+    try:
+        bundle, out_dir = load_question_bundle_from_combined_run_safe(
+            run_id=run_id,
+            question_id=qid,
+            base_dir=base_dir,
+            allow_fail_checks=True,
+            expected_signature=expected_signature,
+        )
+    except Exception:
+        return False
+
+    check_counts = _extract_check_counts(bundle.checks)
+    quality_status = _quality_status_from_counts(check_counts)
+    fail_codes = _extract_fail_codes(bundle.checks, limit=5)
+
+    st.session_state[result_key] = {
+        "bundle": bundle,
+        "out_dir": saved_out_dir or str(out_dir),
+        "bundle_hash": bundle_hash or f"{bundle.run_id}_{qid}",
+        "quality_status": quality_status,
+        "check_counts": check_counts,
+        "fail_codes_top5": fail_codes,
+    }
+    if active_run_id != "MIXED":
+        st.session_state["last_full_refresh_run_id"] = active_run_id
+
+    last_batch = snapshot.get("last_llm_batch_result")
+    if isinstance(last_batch, dict) and isinstance(last_batch.get("rows"), list):
+        st.session_state["last_llm_batch_result"] = last_batch
+    return True
+
+
+def persist_question_payloads_to_session_cache(
+    payloads_by_question: dict[str, dict[str, Any]],
+    *,
+    last_llm_batch_result: dict[str, Any] | None = None,
+    base_dir: str = "outputs/combined",
+) -> Path | None:
+    if not isinstance(payloads_by_question, dict) or not payloads_by_question:
+        return None
+
+    prepared: dict[str, tuple[QuestionBundleResult, dict[str, Any]]] = {}
+    run_ids: set[str] = set()
+    for question_id, payload in payloads_by_question.items():
+        qid = str(question_id).upper().strip()
+        if qid not in _RESULT_STATE_KEY_BY_QUESTION:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        bundle = payload.get("bundle")
+        if not isinstance(bundle, QuestionBundleResult):
+            continue
+        bundle_run_id = str(bundle.run_id).strip()
+        if not bundle_run_id:
+            continue
+        run_ids.add(bundle_run_id)
+        prepared[qid] = (bundle, payload)
+
+    if not prepared:
+        return None
+
+    active_run_id = next(iter(run_ids)) if len(run_ids) == 1 else "MIXED"
+
+    if compute_question_bundle_signature is None:
+        return None
+
+    questions_payload: dict[str, dict[str, Any]] = {}
+    for qid, (bundle, payload) in prepared.items():
+        q_run_id = str(bundle.run_id).strip()
+        if not q_run_id:
+            continue
+        run_dir = _to_abs_project_path(base_dir) / q_run_id
+        if not run_dir.exists():
+            continue
+        check_counts = _extract_check_counts(bundle.checks)
+        quality_status = _quality_status_from_counts(check_counts)
+        fail_codes = _extract_fail_codes(bundle.checks, limit=5)
+        signature = compute_question_bundle_signature(run_dir, qid)
+        out_dir = str(payload.get("out_dir", "")).strip()
+        bundle_hash = str(payload.get("bundle_hash", "")).strip() or f"{bundle.run_id}_{qid}"
+
+        questions_payload[qid] = build_question_snapshot_entry(
+            question_id=qid,
+            result_key=_RESULT_STATE_KEY_BY_QUESTION[qid],
+            run_id=q_run_id,
+            out_dir=out_dir,
+            bundle_hash=bundle_hash,
+            signature=signature,
+            quality_status=quality_status,
+            check_counts=check_counts,
+            fail_codes_top5=fail_codes,
+        )
+
+    if not questions_payload:
+        return None
+
+    snapshot: dict[str, Any] = {
+        "active_run_id": active_run_id,
+        "questions": questions_payload,
+    }
+    if active_run_id != "MIXED":
+        run_dir = _to_abs_project_path(base_dir) / active_run_id
+        if run_dir.exists():
+            snapshot["run_dir_mtime_ns"] = int(run_dir.stat().st_mtime_ns)
+
+    if isinstance(last_llm_batch_result, dict) and isinstance(last_llm_batch_result.get("rows"), list):
+        snapshot["last_llm_batch_result"] = {
+            "generated_at_utc": str(last_llm_batch_result.get("generated_at_utc", "")),
+            "rows": list(last_llm_batch_result.get("rows", [])),
+        }
+
+    return save_session_snapshot(snapshot)

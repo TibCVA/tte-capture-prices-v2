@@ -8,6 +8,7 @@ import pytest
 
 import app.page_utils as page_utils
 from src.reporting.evidence_loader import (
+    compute_question_bundle_signature,
     load_question_bundle_from_combined_run_verified,
     validate_combined_run,
 )
@@ -159,3 +160,55 @@ def test_load_question_bundle_from_combined_run_verified_success(tmp_path: Path)
         assert bundle.run_id == "RUN_OK"
         assert q_dir == base / "RUN_OK" / question_id
         assert isinstance(bundle.test_ledger, pd.DataFrame)
+
+
+def test_load_question_bundle_from_combined_run_safe_allows_fail_checks_by_default(monkeypatch, tmp_path: Path) -> None:
+    base = tmp_path / "outputs" / "combined"
+    run_dir = _build_test_run(base, run_id="RUN_FAIL_ALLOWED", include_all_questions=True)
+    q1_summary = json.loads((run_dir / "Q1" / "summary.json").read_text(encoding="utf-8"))
+    q1_summary["checks"] = [{"status": "FAIL", "code": "Q1_FAIL", "message": "boom", "scope": "HIST", "scenario_id": ""}]
+    (run_dir / "Q1" / "summary.json").write_text(json.dumps(q1_summary, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(page_utils, "_load_question_bundle_from_combined_run_verified", None)
+    bundle, _ = page_utils.load_question_bundle_from_combined_run_safe(
+        run_id="RUN_FAIL_ALLOWED",
+        question_id="Q1",
+        base_dir=str(base),
+        allow_fail_checks=True,
+    )
+    assert bundle.question_id == "Q1"
+    assert any(str(check.get("status", "")).upper() == "FAIL" for check in bundle.checks)
+
+
+def test_load_question_bundle_from_combined_run_safe_rejects_fail_when_disallowed(monkeypatch, tmp_path: Path) -> None:
+    base = tmp_path / "outputs" / "combined"
+    run_dir = _build_test_run(base, run_id="RUN_FAIL_BLOCKED", include_all_questions=True)
+    q1_summary = json.loads((run_dir / "Q1" / "summary.json").read_text(encoding="utf-8"))
+    q1_summary["checks"] = [{"status": "FAIL", "code": "Q1_FAIL", "message": "boom", "scope": "HIST", "scenario_id": ""}]
+    (run_dir / "Q1" / "summary.json").write_text(json.dumps(q1_summary, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(page_utils, "_load_question_bundle_from_combined_run_verified", None)
+    with pytest.raises(ValueError, match="Checks FAIL detectes"):
+        page_utils.load_question_bundle_from_combined_run_safe(
+            run_id="RUN_FAIL_BLOCKED",
+            question_id="Q1",
+            base_dir=str(base),
+            allow_fail_checks=False,
+        )
+
+
+def test_load_question_bundle_from_combined_run_safe_rejects_signature_mismatch(monkeypatch, tmp_path: Path) -> None:
+    base = tmp_path / "outputs" / "combined"
+    _build_test_run(base, run_id="RUN_SIGNATURE", include_all_questions=True)
+    monkeypatch.setattr(page_utils, "_load_question_bundle_from_combined_run_verified", None)
+
+    run_dir = base / "RUN_SIGNATURE"
+    expected_signature = compute_question_bundle_signature(run_dir, "Q1")
+    wrong_signature = expected_signature + "_WRONG"
+    with pytest.raises(ValueError, match="Signature incompatible"):
+        page_utils.load_question_bundle_from_combined_run_safe(
+            run_id="RUN_SIGNATURE",
+            question_id="Q1",
+            base_dir=str(base),
+            expected_signature=wrong_signature,
+        )
