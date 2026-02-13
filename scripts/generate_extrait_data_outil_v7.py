@@ -29,6 +29,11 @@ def _parse_args() -> argparse.Namespace:
         default="reports/Extrait Data Outil v7.md",
         help="Markdown output path (same content, audit-friendly).",
     )
+    parser.add_argument(
+        "--skip-docx",
+        action="store_true",
+        help="Generate markdown only (no DOCX).",
+    )
     return parser.parse_args()
 
 
@@ -580,7 +585,14 @@ def _add_csv_block_to_doc(doc: Any, title: str, df: pd.DataFrame) -> None:
     doc.add_paragraph("```")
 
 
-def generate_extrait(run_id: str, countries: list[str], output_docx: Path, output_md: Path) -> dict[str, Any]:
+def generate_extrait(
+    run_id: str,
+    countries: list[str],
+    output_docx: Path,
+    output_md: Path,
+    *,
+    generate_docx: bool = True,
+) -> dict[str, Any]:
     run_dir = ROOT / "outputs" / "combined" / run_id
     if not run_dir.exists():
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
@@ -674,51 +686,53 @@ def generate_extrait(run_id: str, countries: list[str], output_docx: Path, outpu
     output_md.parent.mkdir(parents=True, exist_ok=True)
     output_md.write_text("\n".join(lines), encoding="utf-8")
 
-    try:
-        from docx import Document
-    except Exception as exc:
-        raise RuntimeError(f"python-docx unavailable: {exc}") from exc
+    if generate_docx:
+        try:
+            from docx import Document
+        except Exception as exc:
+            raise RuntimeError(f"python-docx unavailable: {exc}") from exc
 
-    doc = Document()
-    doc.add_heading("Extrait Data Outil v7", level=0)
-    doc.add_heading("AUDIT PAYLOAD", level=1)
-    doc.add_heading("Inputs", level=2)
-    doc.add_heading("run_metadata", level=3)
-    doc.add_paragraph("```json")
-    for line in json.dumps(meta, ensure_ascii=False, indent=2).splitlines():
-        doc.add_paragraph(line)
-    doc.add_paragraph("```")
+        doc = Document()
+        doc.add_heading("Extrait Data Outil v7", level=0)
+        doc.add_heading("AUDIT PAYLOAD", level=1)
+        doc.add_heading("Inputs", level=2)
+        doc.add_heading("run_metadata", level=3)
+        doc.add_paragraph("```json")
+        for line in json.dumps(meta, ensure_ascii=False, indent=2).splitlines():
+            doc.add_paragraph(line)
+        doc.add_paragraph("```")
 
-    doc.add_heading("Method Reference", level=3)
-    doc.add_paragraph("```text")
-    doc.add_paragraph(str(ROOT / "AUDIT_METHODS_Q1_Q5.md"))
-    doc.add_paragraph("```")
+        doc.add_heading("Method Reference", level=3)
+        doc.add_paragraph("```text")
+        doc.add_paragraph(str(ROOT / "AUDIT_METHODS_Q1_Q5.md"))
+        doc.add_paragraph("```")
 
-    _add_csv_block_to_doc(doc, "parameter_catalog", phase1_assumptions)
-    _add_csv_block_to_doc(doc, "Phase 2 assumptions", phase2_scope)
+        _add_csv_block_to_doc(doc, "parameter_catalog", phase1_assumptions)
+        _add_csv_block_to_doc(doc, "Phase 2 assumptions", phase2_scope)
 
-    doc.add_heading("RUN OUTPUTS", level=1)
-    _add_csv_block_to_doc(doc, "A.1 annual_metrics_phase1", annual_metrics_phase1)
-    _add_csv_block_to_doc(doc, "A.2 q1_transition_summary", q1_transition_summary)
-    _add_csv_block_to_doc(doc, "A.3 q2_slope_summary", q2_slope_summary)
-    _add_csv_block_to_doc(doc, "A.4 q3_inversion_requirements", q3_inversion_requirements)
-    _add_csv_block_to_doc(doc, "A.5 q4_bess_sizing_curve", q4_bess_sizing_curve)
-    _add_csv_block_to_doc(doc, "A.6 q5_anchor_sensitivity", q5_anchor_sensitivity)
+        doc.add_heading("RUN OUTPUTS", level=1)
+        _add_csv_block_to_doc(doc, "A.1 annual_metrics_phase1", annual_metrics_phase1)
+        _add_csv_block_to_doc(doc, "A.2 q1_transition_summary", q1_transition_summary)
+        _add_csv_block_to_doc(doc, "A.3 q2_slope_summary", q2_slope_summary)
+        _add_csv_block_to_doc(doc, "A.4 q3_inversion_requirements", q3_inversion_requirements)
+        _add_csv_block_to_doc(doc, "A.5 q4_bess_sizing_curve", q4_bess_sizing_curve)
+        _add_csv_block_to_doc(doc, "A.6 q5_anchor_sensitivity", q5_anchor_sensitivity)
 
-    doc.add_heading("TEST LEDGER", level=1)
-    doc.add_paragraph("```csv")
-    for line in _clean_df(test_ledger).to_csv(index=False, na_rep="NaN").rstrip().splitlines():
-        doc.add_paragraph(line)
-    doc.add_paragraph("```")
+        doc.add_heading("TEST LEDGER", level=1)
+        doc.add_paragraph("```csv")
+        for line in _clean_df(test_ledger).to_csv(index=False, na_rep="NaN").rstrip().splitlines():
+            doc.add_paragraph(line)
+        doc.add_paragraph("```")
 
-    output_docx.parent.mkdir(parents=True, exist_ok=True)
-    doc.save(str(output_docx))
+        output_docx.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(output_docx))
 
     return {
         "run_id": run_id,
         "countries": countries,
-        "output_docx": str(output_docx),
+        "output_docx": str(output_docx) if generate_docx else "",
         "output_md": str(output_md),
+        "docx_generated": bool(generate_docx),
         "rows": {k: int(len(v)) for k, v in outputs.items()},
     }
 
@@ -731,6 +745,7 @@ def main() -> int:
         countries=countries,
         output_docx=Path(args.output_docx),
         output_md=Path(args.output_md),
+        generate_docx=not bool(args.skip_docx),
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

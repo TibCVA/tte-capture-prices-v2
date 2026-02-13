@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -285,3 +286,55 @@ def test_hydrate_aggregates_duplicate_fail_codes(monkeypatch, tmp_path: Path) ->
     ok, _ = module._hydrate_question_pages_from_run("RUN_CODES")
     assert ok is True
     assert session_state["q1_bundle_result"]["fail_codes_top5"] == ["RC_IR_GT_1 (x5)", "RC_FAR_RANGE (x2)"]
+
+
+def test_build_auto_audit_bundle_after_refresh_uses_bundle_hashes(monkeypatch) -> None:
+    module = _load_accueil_module()
+    captured: dict[str, object] = {}
+
+    fake_audit_module = ModuleType("src.reporting.auto_audit_bundle")
+
+    def fake_build_auto_audit_bundle(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return {
+            "audit_dir": "outputs/audit_runs/RUN_AUDIT",
+            "detailed_markdown_path": "outputs/audit_runs/RUN_AUDIT/reports/detailed_es_de_RUN_AUDIT.md",
+            "warnings": [],
+        }
+
+    fake_audit_module.build_auto_audit_bundle = fake_build_auto_audit_bundle  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "src.reporting.auto_audit_bundle", fake_audit_module)
+
+    module.st = SimpleNamespace(
+        session_state={
+            "q1_bundle_result": {"bundle_hash": "Q1_HASH"},
+            "q2_bundle_result": {"bundle_hash": "Q2_HASH"},
+        }
+    )
+
+    ok, report = module._build_auto_audit_bundle_after_refresh("RUN_AUDIT")
+    assert ok is True
+    assert report["audit_dir"] == "outputs/audit_runs/RUN_AUDIT"
+    assert captured["run_id"] == "RUN_AUDIT"
+    assert captured["countries"] == ["ES", "DE"]
+    assert captured["include_llm_reports"] is True
+    assert captured["keep_last"] == 5
+    assert captured["bundle_hash_by_question"] == {"Q1": "Q1_HASH", "Q2": "Q2_HASH"}
+
+
+def test_build_auto_audit_bundle_after_refresh_non_blocking_on_error(monkeypatch) -> None:
+    module = _load_accueil_module()
+
+    fake_audit_module = ModuleType("src.reporting.auto_audit_bundle")
+
+    def fake_build_auto_audit_bundle(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        raise RuntimeError("boom-audit")
+
+    fake_audit_module.build_auto_audit_bundle = fake_build_auto_audit_bundle  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "src.reporting.auto_audit_bundle", fake_audit_module)
+
+    module.st = SimpleNamespace(session_state={})
+    ok, report = module._build_auto_audit_bundle_after_refresh("RUN_ERR")
+    assert ok is False
+    assert "boom-audit" in str(report.get("error", ""))

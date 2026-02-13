@@ -488,6 +488,43 @@ def _clear_question_bundle_session_state() -> None:
     st.session_state.pop("llm_batch_running", None)
 
 
+def _collect_bundle_hash_by_question() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for qid in _ACCUEIL_QUESTION_ORDER:
+        result_key = _RESULT_STATE_KEY_BY_QUESTION.get(qid)
+        if not result_key:
+            continue
+        payload = st.session_state.get(result_key)
+        if not isinstance(payload, dict):
+            continue
+        bundle_hash = str(payload.get("bundle_hash", "")).strip()
+        if bundle_hash:
+            out[qid] = bundle_hash
+    return out
+
+
+def _build_auto_audit_bundle_after_refresh(run_id: str) -> tuple[bool, dict[str, object]]:
+    run_id_clean = str(run_id).strip()
+    if not run_id_clean:
+        return False, {"error": "run_id vide"}
+    try:
+        from src.reporting.auto_audit_bundle import build_auto_audit_bundle
+    except Exception as exc:
+        return False, {"error": f"auto_audit_bundle import impossible: {exc}"}
+
+    try:
+        result = build_auto_audit_bundle(
+            run_id=run_id_clean,
+            countries=["ES", "DE"],
+            include_llm_reports=True,
+            bundle_hash_by_question=_collect_bundle_hash_by_question(),
+            keep_last=5,
+        )
+        return True, result
+    except Exception as exc:
+        return False, {"error": str(exc)}
+
+
 def _hydrate_question_pages_from_run(run_id: str, *, allow_fail_checks: bool = True) -> tuple[bool, dict[str, object]]:
     previous_state = _snapshot_question_bundle_session_state()
     run_id_clean = str(run_id).strip()
@@ -951,6 +988,24 @@ def render() -> None:
                                         "Prechargement local actif par compatibilite page_utils: "
                                         + str(_PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR)
                                     )
+                            with st.spinner("Generation du dossier d'audit automatique..."):
+                                audit_ok, audit_report = _build_auto_audit_bundle_after_refresh(resolved_run_id)
+                            refresh_summary["auto_audit_bundle"] = audit_report
+                            if audit_ok:
+                                audit_dir = str(audit_report.get("audit_dir", "")).strip()
+                                md_path = str(audit_report.get("detailed_markdown_path", "")).strip()
+                                if audit_dir:
+                                    st.success(f"Dossier audit genere automatiquement: {audit_dir}")
+                                if md_path:
+                                    st.caption(f"Markdown detaille ES/DE: {md_path}")
+                                warnings = audit_report.get("warnings", [])
+                                if isinstance(warnings, list) and warnings:
+                                    st.warning("Audit auto warnings: " + " | ".join([str(w) for w in warnings]))
+                            else:
+                                st.warning(
+                                    "Generation auto du dossier d'audit non bloquante: "
+                                    + str(audit_report.get("error", "erreur inconnue"))
+                                )
                             with st.expander("Details techniques du refresh", expanded=False):
                                 st.json(refresh_summary)
                                 if isinstance(preload_report, dict):

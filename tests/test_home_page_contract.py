@@ -18,6 +18,9 @@ def test_home_page_contains_session_cache_controls() -> None:
     assert "Reinitialiser cache analyses" in content
     assert "_restore_session_from_disk_if_needed()" in content
     assert "Analyses chargees malgre checks FAIL" in content
+    assert "_build_auto_audit_bundle_after_refresh(" in content
+    assert "Generation du dossier d'audit automatique" in content
+    assert "Dossier audit genere automatiquement" in content
 
 
 def test_checks_wording_is_explicit_and_not_global() -> None:
