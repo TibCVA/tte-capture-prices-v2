@@ -157,4 +157,28 @@ def test_q3_emits_test_q3_001_reality_check(annual_panel_fixture, make_raw_panel
     )
     checks = [c for c in res.checks if str(c.get("code")) == "TEST_Q3_001"]
     assert checks
-    assert all(str(c.get("status")) in {"PASS", "WARN", "FAIL"} for c in checks)
+    assert all(str(c.get("status")) in {"PASS", "WARN", "FAIL", "NON_TESTABLE"} for c in checks)
+
+
+def test_q3_no_stage2_outputs_are_non_testable(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):
+    from src.processing import build_hourly_table
+
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    panel = annual_panel_fixture[annual_panel_fixture["country"] == "FR"].copy()
+    panel["h_negative_obs"] = 0.0
+    panel["h_below_5_obs"] = 10.0
+    panel["capture_ratio_pv"] = 1.1
+    panel["capture_ratio_wind"] = 1.1
+    panel["sr_energy"] = 0.0
+    panel["sr_hours"] = 0.0
+    panel["far_energy"] = 0.99
+    panel["ir_p10"] = 0.5
+
+    res = run_q3(panel, {("FR", 2024): hourly}, assumptions, {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]}, "test")
+    out = res.tables["Q3_status"]
+    row = out.iloc[0]
+    assert str(row.get("reason_code", "")) == "no_stage2_detected"
+    assert pd.isna(pd.to_numeric(pd.Series([row.get("required_demand_uplift_mw")]), errors="coerce").iloc[0])
+    assert pd.isna(pd.to_numeric(pd.Series([row.get("required_mustrun_reduction_ratio")]), errors="coerce").iloc[0])

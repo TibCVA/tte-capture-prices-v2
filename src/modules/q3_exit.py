@@ -103,11 +103,9 @@ def _two_year_persistence_off(non_crisis_rows: pd.DataFrame, active_at_bascule: 
 def _low_price_flag_from_metrics(h_negative: float, h_below_5: float, low_price_share: float, params: dict[str, float]) -> bool:
     h_neg_thr = float(params.get("h_negative_stage2_min", 200.0))
     h_low_thr = float(params.get("h_below_5_stage2_min", 500.0))
-    share_thr = float(params.get("low_price_hours_share_stage2_min", h_low_thr / 8760.0))
     return bool(
         (np.isfinite(h_negative) and h_negative >= h_neg_thr)
         or (np.isfinite(h_below_5) and h_below_5 >= h_low_thr)
-        or (np.isfinite(low_price_share) and low_price_share >= share_thr)
     )
 
 
@@ -538,6 +536,24 @@ def run_q3(
             bascule_ref = np.nan
             bascule_source = "missing"
             c_sum_ref = None
+        stage2_hneg_min = float(all_params.get("h_negative_stage2_min", 200.0))
+        stage2_hb5_min = float(all_params.get("h_below_5_stage2_min", 500.0))
+        low_price_evidence_at_bascule = False
+        if np.isfinite(bascule_ref):
+            hneg_b = _safe_float(c_sum_ref.get("h_negative_at_bascule"), np.nan) if c_sum_ref is not None else np.nan
+            hb5_b = _safe_float(c_sum_ref.get("h_below_5_at_bascule"), np.nan) if c_sum_ref is not None else np.nan
+            if (not np.isfinite(hneg_b)) and (not np.isfinite(hb5_b)):
+                b_rows = c_panel[c_panel["year"] == int(bascule_ref)] if "year" in c_panel.columns else pd.DataFrame()
+                if not b_rows.empty:
+                    hneg_b = _safe_float(b_rows.iloc[0].get("h_negative_obs"), np.nan)
+                    hb5_b = _safe_float(b_rows.iloc[0].get("h_below_5_obs"), np.nan)
+            low_price_evidence_at_bascule = bool(
+                (np.isfinite(hneg_b) and hneg_b >= stage2_hneg_min)
+                or (np.isfinite(hb5_b) and hb5_b >= stage2_hb5_min)
+            )
+            if not low_price_evidence_at_bascule:
+                bascule_ref = np.nan
+                bascule_source = f"{bascule_source}_insufficient_low_price_evidence"
 
         audit_common = {
             "scenario_id": scenario_id,
@@ -567,11 +583,14 @@ def run_q3(
                     "target_absorption_twh": np.nan,
                     "demand_uplift_twh": np.nan,
                     "inversion_k_demand": np.nan,
+                    "required_demand_uplift_mw": np.nan,
                     "inversion_k_demand_status": "insufficient_scope",
                     "inversion_r_mustrun": np.nan,
+                    "required_mustrun_reduction_ratio": np.nan,
                     "inversion_r_mustrun_status": "proxy_not_computed",
                     "inversion_f_flex": np.nan,
                     "inversion_f_flex_status": "proxy_not_computed",
+                    "already_phase3": False,
                     "additional_absorbed_needed_TWh_year": np.nan,
                     "additional_sink_power_p95_mw": np.nan,
                     "additional_sink_profile_status": "hourly_profile_unavailable",
@@ -587,10 +606,10 @@ def run_q3(
                         "scenario_id": scenario_id,
                         "year": np.nan,
                         "lever": lever,
-                        "required_uplift": 0.0,
-                        "required_uplift_mw": 0.0,
-                        "required_uplift_pct_avg_load": 0.0,
-                        "required_uplift_twh_per_year": 0.0,
+                        "required_uplift": np.nan,
+                        "required_uplift_mw": np.nan,
+                        "required_uplift_pct_avg_load": np.nan,
+                        "required_uplift_twh_per_year": np.nan,
                         "within_bounds": False,
                         "target_sr": target_sr_energy,
                         "target_h_negative": target_h_negative_est,
@@ -602,7 +621,7 @@ def run_q3(
                         "predicted_h_negative_metric": "MARKET_PROXY_BUCKET_MODEL_EST",
                         "applicability_flag": "HORS_SCOPE_PHASE2",
                         "status": "hors_scope_phase2",
-                        "reason": "missing_panel",
+                        "reason": "no_stage2_detected",
                     }
                 )
             continue
@@ -616,8 +635,8 @@ def run_q3(
                     "reference_year": int(_safe_float(last_any.get("year"), np.nan)) if np.isfinite(_safe_float(last_any.get("year"), np.nan)) else np.nan,
                     "in_phase2": False,
                     "status": "HORS_SCOPE_PHASE2",
-                    "reason_code": "q1_no_bascule",
-                    "status_explanation": "Absence de bascule de reference.",
+                    "reason_code": "no_stage2_detected",
+                    "status_explanation": "Aucune phase2 valide detectee (bascule absente ou evidence low-price insuffisante).",
                     "stage3_ready_year": False,
                     "phase2_slope_capture_ratio_pv": np.nan,
                     "phase2_slope_method": "none",
@@ -629,15 +648,18 @@ def run_q3(
                     "target_absorption_twh": np.nan,
                     "demand_uplift_twh": np.nan,
                     "inversion_k_demand": np.nan,
+                    "required_demand_uplift_mw": np.nan,
                     "inversion_k_demand_status": "insufficient_scope",
                     "inversion_r_mustrun": np.nan,
+                    "required_mustrun_reduction_ratio": np.nan,
                     "inversion_r_mustrun_status": "proxy_not_computed",
                     "inversion_f_flex": np.nan,
                     "inversion_f_flex_status": "proxy_not_computed",
+                    "already_phase3": False,
                     "additional_absorbed_needed_TWh_year": np.nan,
                     "additional_sink_power_p95_mw": np.nan,
                     "additional_sink_profile_status": "hourly_profile_unavailable",
-                    "warnings_quality": "q1_no_bascule",
+                    "warnings_quality": "no_stage2_detected",
                     "bascule_reference_year": np.nan,
                     "bascule_reference_source": bascule_source,
                 }
@@ -649,10 +671,10 @@ def run_q3(
                         "scenario_id": scenario_id,
                         "year": int(_safe_float(last_any.get("year"), np.nan)) if np.isfinite(_safe_float(last_any.get("year"), np.nan)) else np.nan,
                         "lever": lever,
-                        "required_uplift": 0.0,
-                        "required_uplift_mw": 0.0,
-                        "required_uplift_pct_avg_load": 0.0,
-                        "required_uplift_twh_per_year": 0.0,
+                        "required_uplift": np.nan,
+                        "required_uplift_mw": np.nan,
+                        "required_uplift_pct_avg_load": np.nan,
+                        "required_uplift_twh_per_year": np.nan,
                         "within_bounds": False,
                         "target_sr": target_sr_energy,
                         "target_h_negative": target_h_negative_est,
@@ -664,7 +686,7 @@ def run_q3(
                         "predicted_h_negative_metric": "MARKET_PROXY_BUCKET_MODEL_EST",
                         "applicability_flag": "HORS_SCOPE_PHASE2",
                         "status": "hors_scope_phase2",
-                        "reason": "q1_no_bascule",
+                        "reason": "no_stage2_detected",
                     }
                 )
             continue
@@ -874,6 +896,8 @@ def run_q3(
             req_uplift_mw = _safe_float(solver.get("required_uplift"), np.nan)
             if raw_status == "already_ok":
                 req_uplift_mw = 0.0
+            if np.isfinite(req_uplift_mw):
+                req_uplift_mw = max(0.0, req_uplift_mw)
             pred_sr_after = _safe_float(solver.get("sr_energy_after"), np.nan)
             pred_far_after = _safe_float(solver.get("far_after"), np.nan)
             pred_hneg_after = _safe_float(solver.get("h_negative_est_after", solver.get("h_negative_proxy_after")), np.nan)
@@ -888,8 +912,12 @@ def run_q3(
                 if np.isfinite(req_uplift_mw) and np.isfinite(n_hours_ref)
                 else np.nan
             )
-            out_status = raw_status if in_phase2_current else "hors_scope_phase2"
-            out_required = req_uplift_mw if in_phase2_current else 0.0
+            if in_phase2_current:
+                out_status = raw_status
+                out_required = req_uplift_mw
+            else:
+                out_status = "already_ok"
+                out_required = 0.0
             if out_status not in {"ok", "already_ok", "not_achievable", "missing_data", "hors_scope_phase2"}:
                 out_status = "missing_data"
             requirement_rows.append(
@@ -900,8 +928,8 @@ def run_q3(
                     "lever": lever,
                     "required_uplift": out_required,
                     "required_uplift_mw": out_required,
-                    "required_uplift_pct_avg_load": req_uplift_pct if in_phase2_current else 0.0,
-                    "required_uplift_twh_per_year": req_uplift_twh if in_phase2_current else 0.0,
+                    "required_uplift_pct_avg_load": req_uplift_pct if in_phase2_current else np.nan,
+                    "required_uplift_twh_per_year": req_uplift_twh if in_phase2_current else np.nan,
                     "within_bounds": bool(solver.get("within_bounds", False)) if in_phase2_current else False,
                     "target_sr": target_sr_energy,
                     "target_h_negative": target_h_negative_est,
@@ -915,9 +943,9 @@ def run_q3(
                     "h_below_5_obs_before": _safe_float(baseline_est.get("h_below_5_obs"), np.nan),
                     "h_negative_est_before": _safe_float(baseline_est.get("h_negative_est"), np.nan),
                     "h_below_5_est_before": _safe_float(baseline_est.get("h_below_5_est"), np.nan),
-                    "applicability_flag": "APPLICABLE" if in_phase2_current else "HORS_SCOPE_PHASE2",
+                    "applicability_flag": "APPLICABLE" if in_phase2_current else "ALREADY_PHASE3",
                     "status": out_status,
-                    "reason": str(solver.get("reason", out_status)),
+                    "reason": str(solver.get("reason", "already_phase3" if (not in_phase2_current) else out_status)),
                     "export_coincidence_factor": export_coincidence_factor,
                     "proxy_quality_status": proxy_quality_status,
                     "proxy_quality_reasons": proxy_quality_reasons,
@@ -926,6 +954,11 @@ def run_q3(
             )
 
         demand_status = str(demand_solver.get("status", "missing_data")).lower()
+        demand_required = _safe_float(demand_solver.get("required_uplift"), np.nan)
+        if demand_status == "already_ok":
+            demand_required = 0.0
+        if np.isfinite(demand_required):
+            demand_required = max(0.0, demand_required)
         if in_phase2_current:
             if proxy_quality_status == "FAIL":
                 status = "FAIL"
@@ -948,9 +981,11 @@ def run_q3(
                 reason_code = "no_family_turned_off"
                 status_explanation = "Un uplift est requis pour atteindre les cibles proxy."
         else:
-            status = "HORS_SCOPE_PHASE2"
-            reason_code = "not_in_phase2"
-            status_explanation = "Le pays n'est pas en phase2 sur l'annee de reference."
+            status = "STOP_CONFIRMED"
+            reason_code = "already_phase3"
+            status_explanation = "Conditions de sortie deja satisfaites dans le baseline (deja inverse)."
+            demand_status = "already_ok"
+            demand_required = 0.0
 
         surplus_twh = _safe_float(last.get("surplus_energy_twh", last.get("surplus_twh")), np.nan)
         load_twh = _safe_float(last.get("load_net_twh"), np.nan)
@@ -967,10 +1002,17 @@ def run_q3(
             demand_uplift_twh,
         )
         mustrun_reduction_needed, mustrun_status = _required_mustrun_reduction(last, all_params, max_reduction=1.0)
+        if np.isfinite(mustrun_reduction_needed):
+            mustrun_reduction_needed = float(np.clip(mustrun_reduction_needed, 0.0, 1.0))
+        already_phase3 = bool((not in_phase2_current) or demand_status == "already_ok")
+        if already_phase3:
+            mustrun_reduction_needed = 0.0
+            mustrun_status = "already_ok"
         if proxy_quality_status == "FAIL":
             status = "FAIL"
             reason_code = "market_proxy_invalid"
             status_explanation = "Le proxy marche est invalide (quality FAIL)."
+            already_phase3 = False
 
         rows.append(
             {
@@ -992,12 +1034,15 @@ def run_q3(
                 "surplus_energy_twh_recent": surplus_twh,
                 "target_absorption_twh": target_abs_twh,
                 "demand_uplift_twh": demand_uplift_twh,
-                "inversion_k_demand": 0.0 if demand_status == "already_ok" else _safe_float(demand_solver.get("required_uplift"), np.nan),
+                "inversion_k_demand": demand_required if np.isfinite(demand_required) else np.nan,
+                "required_demand_uplift_mw": demand_required if np.isfinite(demand_required) else np.nan,
                 "inversion_k_demand_status": demand_status,
-                "inversion_r_mustrun": mustrun_reduction_needed,
+                "inversion_r_mustrun": mustrun_reduction_needed if np.isfinite(mustrun_reduction_needed) else np.nan,
+                "required_mustrun_reduction_ratio": mustrun_reduction_needed if np.isfinite(mustrun_reduction_needed) else np.nan,
                 "inversion_r_mustrun_status": mustrun_status,
                 "inversion_f_flex": _safe_float(flex_solver.get("required_uplift"), np.nan),
                 "inversion_f_flex_status": str(flex_solver.get("status", "missing_data")).lower(),
+                "already_phase3": already_phase3,
                 "additional_absorbed_needed_TWh_year": demand_uplift_twh,
                 "additional_sink_power_p95_mw": sink_p95,
                 "additional_sink_profile_status": sink_profile_status,
@@ -1020,16 +1065,16 @@ def run_q3(
                 "predicted_h_negative_after": _safe_float(demand_solver.get("h_negative_est_after", demand_solver.get("h_negative_proxy_after")), np.nan),
                 "predicted_h_below_5_after": _safe_float(demand_solver.get("h_below_5_est_after", demand_solver.get("h_below_5_proxy_after")), np.nan),
                 "predicted_h_negative_metric": "MARKET_PROXY_BUCKET_MODEL_EST",
-                "required_uplift_mw": 0.0 if demand_status == "already_ok" else _safe_float(demand_solver.get("required_uplift"), np.nan),
+                "required_uplift_mw": demand_required if np.isfinite(demand_required) else np.nan,
                 "required_uplift_pct_avg_load": (
-                    (_safe_float(demand_solver.get("required_uplift"), np.nan) / avg_load_ref)
-                    if demand_status != "already_ok" and np.isfinite(_safe_float(demand_solver.get("required_uplift"), np.nan)) and np.isfinite(avg_load_ref) and avg_load_ref > 0.0
-                    else (0.0 if demand_status == "already_ok" else np.nan)
+                    (demand_required / avg_load_ref)
+                    if np.isfinite(demand_required) and np.isfinite(avg_load_ref) and avg_load_ref > 0.0
+                    else np.nan
                 ),
                 "required_uplift_twh_per_year": (
-                    (_safe_float(demand_solver.get("required_uplift"), np.nan) * n_hours_ref / 1e6)
-                    if demand_status != "already_ok" and np.isfinite(_safe_float(demand_solver.get("required_uplift"), np.nan)) and np.isfinite(n_hours_ref)
-                    else (0.0 if demand_status == "already_ok" else np.nan)
+                    (demand_required * n_hours_ref / 1e6)
+                    if np.isfinite(demand_required) and np.isfinite(n_hours_ref)
+                    else np.nan
                 ),
                 "h_negative_obs_before": _safe_float(baseline_est.get("h_negative_obs"), np.nan),
                 "h_below_5_obs_before": _safe_float(baseline_est.get("h_below_5_obs"), np.nan),
@@ -1189,6 +1234,38 @@ def run_q3(
                     "status": "WARN",
                     "code": "TEST_Q3_001",
                     "message": "Colonnes predicted/target non disponibles dans Q3_status; test non applicable.",
+                }
+            )
+        k_required = pd.to_numeric(
+            out.get("required_demand_uplift_mw", out.get("inversion_k_demand")),
+            errors="coerce",
+        )
+        if bool((k_required < -1e-9).fillna(False).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q3_REQUIRED_DEMAND_NEGATIVE",
+                    "message": "required_demand_uplift_mw (alias inversion_k_demand) doit etre >= 0.",
+                }
+            )
+        r_required = pd.to_numeric(
+            out.get("required_mustrun_reduction_ratio", out.get("inversion_r_mustrun")),
+            errors="coerce",
+        )
+        if bool((r_required < -1e-9).fillna(False).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q3_REQUIRED_MUSTRUN_NEGATIVE",
+                    "message": "required_mustrun_reduction_ratio (alias inversion_r_mustrun) doit etre >= 0.",
+                }
+            )
+        if bool((r_required > 1.0 + 1e-9).fillna(False).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "Q3_REQUIRED_MUSTRUN_GT_ONE",
+                    "message": "required_mustrun_reduction_ratio doit rester dans [0,1].",
                 }
             )
 

@@ -261,7 +261,10 @@ def run_q5(
                     "required_gas_abs_eur_mwh_th": np.nan,
                     "delta_co2_vs_scenario": np.nan,
                     "delta_gas_vs_scenario": np.nan,
+                    "co2_required_base_raw": np.nan,
+                    "gas_required_base_raw": np.nan,
                     "co2_required_base_non_negative": np.nan,
+                    "gas_required_base_non_negative": np.nan,
                     "co2_required_gas_override_non_negative": np.nan,
                     "warnings_quality": "missing_commodities",
                     "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
@@ -457,6 +460,23 @@ def run_q5(
     # Legacy compatibility field names.
     required_co2 = required_co2_abs
     required_gas = required_gas_abs
+    co2_required_base_raw = _safe_float(raw_required_co2, np.nan)
+    gas_required_base_raw = _safe_float(raw_required_gas, np.nan)
+    co2_required_base_non_negative = (
+        float(max(0.0, co2_required_base_raw))
+        if np.isfinite(co2_required_base_raw)
+        else np.nan
+    )
+    gas_required_base_non_negative = (
+        float(max(0.0, gas_required_base_raw))
+        if np.isfinite(gas_required_base_raw)
+        else np.nan
+    )
+    co2_required_gas_override_non_negative = (
+        float(max(0.0, co2_required_base_raw))
+        if gas_override_eur_mwh_th is not None and np.isfinite(co2_required_base_raw)
+        else np.nan
+    )
 
     # Explicit TCA/TTL audit fields with optional BASE anchoring.
     ccgt_eff, ccgt_ef, ccgt_vom, ccgt_mult = _tech_params(assumptions_df, "CCGT")
@@ -692,6 +712,12 @@ def run_q5(
             )
     if np.isfinite(ttl_model_eur_mwh) and ttl_model_eur_mwh < 0.0:
         checks.append({"status": "FAIL", "code": "Q5_TTL_MODEL_NEGATIVE", "message": "ttl_model_eur_mwh doit etre >= 0."})
+    if np.isfinite(co2_required_base_non_negative) and co2_required_base_non_negative < -1e-9:
+        checks.append({"status": "FAIL", "code": "Q5_CO2_NON_NEGATIVE_BROKEN", "message": "co2_required_base_non_negative doit etre >= 0."})
+    if np.isfinite(gas_required_base_non_negative) and gas_required_base_non_negative < -1e-9:
+        checks.append({"status": "FAIL", "code": "Q5_GAS_NON_NEGATIVE_BROKEN", "message": "gas_required_base_non_negative doit etre >= 0."})
+    if np.isfinite(co2_required_gas_override_non_negative) and co2_required_gas_override_non_negative < -1e-9:
+        checks.append({"status": "FAIL", "code": "Q5_CO2_OVERRIDE_NON_NEGATIVE_BROKEN", "message": "co2_required_gas_override_non_negative doit etre >= 0."})
     if (
         has_base_reference
         and str(scenario_id_effective).upper() not in {"HIST", "BASE"}
@@ -835,8 +861,11 @@ def run_q5(
                 "required_gas_abs_raw_eur_mwh_th": raw_required_gas,
                 "co2_required_base": required_co2,
                 "co2_required_gas_override": np.nan if gas_override_eur_mwh_th is None else required_co2,
-                "co2_required_base_non_negative": required_co2 if np.isfinite(required_co2) else np.nan,
-                "co2_required_gas_override_non_negative": required_co2 if gas_override_eur_mwh_th is not None and np.isfinite(required_co2) else np.nan,
+                "co2_required_base_raw": co2_required_base_raw,
+                "gas_required_base_raw": gas_required_base_raw,
+                "co2_required_base_non_negative": co2_required_base_non_negative,
+                "gas_required_base_non_negative": gas_required_base_non_negative,
+                "co2_required_gas_override_non_negative": co2_required_gas_override_non_negative,
                 "warnings_quality": "",
                 "output_schema_version": Q5_OUTPUT_SCHEMA_VERSION,
             }

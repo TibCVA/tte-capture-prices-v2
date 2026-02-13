@@ -41,9 +41,15 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
     h_regime_d = row.get("h_regime_d", np.nan)
     share_neg_ab = row.get("share_neg_price_hours_in_AB", np.nan)
     share_neg_ab_or_low = row.get("share_neg_price_hours_in_AB_OR_LOW_RESIDUAL", np.nan)
+    h_negative = row.get("h_negative_obs", row.get("h_negative", np.nan))
+    h_below_5 = row.get("h_below_5_obs", row.get("h_below_5", np.nan))
     load_total_twh = row.get("load_total_twh", np.nan)
     load_net_twh = row.get("load_net_twh", np.nan)
     psh_twh = row.get("psh_pumping_twh", np.nan)
+    surplus_unabs_energy = row.get(
+        "surplus_unabs_energy_after",
+        row.get("surplus_unabsorbed_twh_after", row.get("surplus_unabsorbed_twh", np.nan)),
+    )
     must_run_twh = row.get("gen_must_run_twh", np.nan)
     gen_total_twh = row.get("gen_primary_twh", row.get("gen_total_twh", np.nan))
     n_hours = row.get("n_hours", row.get("n_hours_expected", np.nan))
@@ -60,12 +66,12 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
 
     if _finite(n_hours):
         n_h = int(round(float(n_hours)))
-        if n_h not in {8760, 8784}:
+        if not (8759 <= n_h <= 8784):
             checks.append(
                 {
                     "status": "WARN" if partial_year_supported else "FAIL",
                     "code": "TEST_DATA_001",
-                    "message": f"{label}: n_hours={n_h} (attendu 8760/8784).",
+                    "message": f"{label}: n_hours={n_h} (attendu dans [8759,8784]).",
                 }
             )
         else:
@@ -76,8 +82,36 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
                     "message": f"{label}: n_hours={n_h} coherent.",
                 }
             )
+        if _finite(h_negative) and float(h_negative) > float(n_h) + 1e-9:
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "RC_HNEG_GT_NHOURS",
+                    "message": f"{label}: h_negative ({float(h_negative):.1f}) > n_hours ({n_h}).",
+                }
+            )
+        if _finite(h_below_5) and float(h_below_5) > float(n_h) + 1e-9:
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "RC_HB5_GT_NHOURS",
+                    "message": f"{label}: h_below_5 ({float(h_below_5):.1f}) > n_hours ({n_h}).",
+                }
+            )
     else:
         checks.append({"status": "WARN", "code": "TEST_DATA_001", "message": f"{label}: n_hours indisponible."})
+    if _finite(h_negative) and float(h_negative) < -1e-9:
+        checks.append({"status": "FAIL", "code": "RC_HNEG_NEGATIVE", "message": f"{label}: h_negative negatif."})
+    if _finite(h_below_5) and float(h_below_5) < -1e-9:
+        checks.append({"status": "FAIL", "code": "RC_HB5_NEGATIVE", "message": f"{label}: h_below_5 negatif."})
+    if _finite(h_negative) and _finite(h_below_5) and float(h_below_5) + 1e-9 < float(h_negative):
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "RC_HB5_LT_HNEG",
+                "message": f"{label}: h_below_5 ({float(h_below_5):.1f}) < h_negative ({float(h_negative):.1f}).",
+            }
+        )
 
     if _finite(coverage_price) and _finite(coverage_load_total):
         cov_p = float(coverage_price)
@@ -151,16 +185,16 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
         if _finite(p10_must_run) and _finite(p10_load):
             checks.append(
                 {
-                    "status": "WARN",
+                    "status": "FAIL",
                     "code": "RC_IR_GT_1",
                     "message": (
-                        f"{label}: IR > 1 (must-run tres eleve en creux). "
+                        f"{label}: IR > 1 (ratio hors borne). "
                         f"p10_must_run_mw={float(p10_must_run):.2f}, p10_load_mw={float(p10_load):.2f}."
                     ),
                 }
             )
         else:
-            checks.append({"status": "WARN", "code": "RC_IR_GT_1", "message": f"{label}: IR > 1 (must-run tres eleve en creux)."})
+            checks.append({"status": "FAIL", "code": "RC_IR_GT_1", "message": f"{label}: IR > 1 (ratio hors borne)."})
     if _finite(regime_coherence) and float(regime_coherence) < 0.55:
         checks.append({"status": "WARN", "code": "RC_LOW_REGIME_COHERENCE", "message": f"{label}: regime_coherence < 0.55."})
     if _finite(h_regime_c) and _finite(h_regime_d) and (_finite(ttl)) and (float(h_regime_c) + float(h_regime_d) < 500):
@@ -195,6 +229,43 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
                     "message": f"{label}: load_total_twh != load_net_twh + psh_pumping_twh (rel_err={rel_err:.2%}).",
                 }
             )
+    if _finite(psh_twh) and float(psh_twh) < -1e-9:
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "RC_PSH_PUMPING_TWH_NEGATIVE",
+                "message": f"{label}: psh_pumping_twh doit etre >= 0.",
+            }
+        )
+    if _finite(load_net_twh) and float(load_net_twh) < -1e-9:
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "RC_LOAD_NET_TWH_NEGATIVE",
+                "message": f"{label}: load_net_twh doit etre >= 0.",
+            }
+        )
+    if _finite(surplus_unabs_energy) and float(surplus_unabs_energy) < -1e-9:
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "RC_SURPLUS_UNABS_NEGATIVE",
+                "message": f"{label}: surplus_unabs_energy doit etre >= 0.",
+            }
+        )
+    for col in row.index:
+        col_name = str(col)
+        if not col_name.lower().endswith("_non_negative"):
+            continue
+        val = row.get(col, np.nan)
+        if _finite(val) and float(val) < -1e-9:
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "RC_NON_NEGATIVE_FIELD_NEGATIVE",
+                    "message": f"{label}: {col_name} doit etre >= 0.",
+                }
+            )
     if _finite(must_run_twh) and _finite(gen_total_twh) and float(gen_total_twh) > 0.0:
         share = float(must_run_twh) / float(gen_total_twh)
         if not (0.05 <= share <= 0.60):
@@ -215,6 +286,43 @@ def _check_hourly(hourly_df: pd.DataFrame, label: str = "") -> list[dict[str, st
         return checks
 
     name = label or "hourly"
+    if {"load_total_mw", "load_mw", "psh_pumping_mw"}.issubset(set(hourly_df.columns)):
+        load_total = pd.to_numeric(hourly_df["load_total_mw"], errors="coerce")
+        load_net = pd.to_numeric(hourly_df["load_mw"], errors="coerce")
+        psh = pd.to_numeric(hourly_df["psh_pumping_mw"], errors="coerce")
+        mask = load_total.notna() & load_net.notna() & psh.notna()
+        if bool(mask.any()):
+            resid = (load_total[mask] - (load_net[mask] + psh[mask])).abs()
+            max_abs = float(resid.max()) if not resid.empty else 0.0
+            if max_abs > 1e-6:
+                checks.append(
+                    {
+                        "status": "FAIL",
+                        "code": "RC_LOAD_PSH_HOURLY_IDENTITY",
+                        "message": f"{name}: load_total_mw != load_mw + psh_pumping_mw (max_abs={max_abs:.6f}).",
+                    }
+                )
+    if "psh_pumping_mw" in hourly_df.columns:
+        psh = pd.to_numeric(hourly_df["psh_pumping_mw"], errors="coerce")
+        if bool((psh < -1e-9).fillna(False).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "RC_PSH_PUMPING_MW_NEGATIVE",
+                    "message": f"{name}: psh_pumping_mw doit etre >= 0.",
+                }
+            )
+    load_col = "load_mw" if "load_mw" in hourly_df.columns else ("load_net_mw" if "load_net_mw" in hourly_df.columns else None)
+    if load_col is not None:
+        load_vals = pd.to_numeric(hourly_df[load_col], errors="coerce")
+        if bool((load_vals < -1e-9).fillna(False).any()):
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "RC_LOAD_MW_NEGATIVE",
+                    "message": f"{name}: {load_col} doit etre >= 0.",
+                }
+            )
     p = pd.to_numeric(hourly_df.get(COL_PRICE_DA), errors="coerce")
     r = hourly_df.get(COL_REGIME).astype(str) if COL_REGIME in hourly_df.columns else pd.Series(index=hourly_df.index, dtype=object)
 

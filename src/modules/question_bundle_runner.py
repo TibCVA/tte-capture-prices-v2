@@ -52,7 +52,24 @@ def _status_from_checks(checks: list[dict[str, Any]]) -> str:
         return "FAIL"
     if "WARN" in statuses:
         return "WARN"
+    if "PASS" in statuses:
+        return "PASS"
+    if "NON_TESTABLE" in statuses:
+        return "NON_TESTABLE"
     return "PASS"
+
+
+def _is_hard_test(spec: QuestionTestSpec) -> bool:
+    sev = str(spec.severity_if_fail or "").upper().strip()
+    return sev in {"CRITICAL", "HIGH"}
+
+
+def _status_from_threshold(spec: QuestionTestSpec, *, condition_met: bool, evaluable: bool) -> str:
+    if not evaluable:
+        return "NON_TESTABLE"
+    if bool(condition_met):
+        return "PASS"
+    return "FAIL" if _is_hard_test(spec) else "WARN"
 
 
 def _append_test_row(
@@ -245,6 +262,189 @@ def _merge_module_results(
         scenario_id=scenario_id,
         horizon_year=horizon_year,
     )
+
+
+def _clone_hist_result_as_base_scenario(hist_result: ModuleResult, run_id: str) -> ModuleResult:
+    cloned_tables: dict[str, pd.DataFrame] = {}
+    for name, table in hist_result.tables.items():
+        if isinstance(table, pd.DataFrame):
+            cloned_tables[name] = table.copy(deep=True)
+    return ModuleResult(
+        module_id=hist_result.module_id,
+        run_id=f"{run_id}_BASE_FROM_HIST",
+        selection={**hist_result.selection, "mode": "SCEN", "scenario_id": "BASE"},
+        assumptions_used=list(hist_result.assumptions_used),
+        kpis=dict(hist_result.kpis),
+        tables=cloned_tables,
+        figures=list(hist_result.figures),
+        narrative_md=hist_result.narrative_md,
+        checks=[
+            {
+                "status": "WARN",
+                "code": "BUNDLE_BASE_FALLBACK_HIST",
+                "message": "Scenario BASE absent: fallback explicite sur les sorties historiques.",
+            }
+        ],
+        warnings=["BASE fallback to HIST outputs."],
+        mode="SCEN",
+        scenario_id="BASE",
+        horizon_year=hist_result.horizon_year,
+    )
+
+
+def _check_non_negative_fields(modules: list[tuple[str, ModuleResult]]) -> list[dict[str, Any]]:
+    fails: list[str] = []
+    for scope, module in modules:
+        for table_name, table in module.tables.items():
+            if not isinstance(table, pd.DataFrame) or table.empty:
+                continue
+            for col in [c for c in table.columns if str(c).lower().endswith("_non_negative")]:
+                vals = pd.to_numeric(table[col], errors="coerce")
+                bad_mask = vals < -1e-9
+                if bool(bad_mask.fillna(False).any()):
+                    fails.append(f"{scope}:{table_name}.{col}")
+    if fails:
+        preview = ", ".join(fails[:5])
+        return [
+            {
+                "status": "FAIL",
+                "code": "BUNDLE_NON_NEGATIVE_FIELD_NEGATIVE",
+                "message": f"Champs *_non_negative negatifs detectes ({preview}).",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+    return [
+        {
+            "status": "PASS",
+            "code": "BUNDLE_NON_NEGATIVE_FIELD_NEGATIVE",
+            "message": "Tous les champs *_non_negative restent >= 0.",
+            "scope": "BUNDLE",
+            "scenario_id": "",
+        }
+    ]
+
+
+def _check_q4_reporting_consistency(
+    hist_result: ModuleResult,
+    scen_results: dict[str, ModuleResult],
+    comparison: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    hist = hist_result.tables.get("Q4_sizing_summary", pd.DataFrame())
+    if hist.empty:
+        return []
+    cmp_all = comparison.copy()
+    for c in ["scenario_id", "country", "metric", "hist_value", "scen_value"]:
+        if c not in cmp_all.columns:
+            cmp_all[c] = np.nan if c in {"hist_value", "scen_value"} else ""
+    metrics = ["far_after", "surplus_unabs_energy_after", "pv_capture_price_after"]
+    if not {"country", *metrics}.issubset(set(hist.columns)):
+        return []
+    mismatches: list[str] = []
+    for sid, scen_res in scen_results.items():
+        scen = scen_res.tables.get("Q4_sizing_summary", pd.DataFrame())
+        if scen.empty or (not {"country", *metrics}.issubset(set(scen.columns))):
+            continue
+        merged = hist[["country"] + metrics].merge(
+            scen[["country"] + metrics],
+            on="country",
+            how="inner",
+            suffixes=("_hist", "_scen"),
+        )
+        if merged.empty:
+            continue
+        cmp_sid = cmp_all[cmp_all["scenario_id"].astype(str) == str(sid)].copy()
+        for _, row in merged.iterrows():
+            country = str(row.get("country", ""))
+            for metric in metrics:
+                ref = cmp_sid[
+                    (cmp_sid["country"].astype(str) == country)
+                    & (cmp_sid["metric"].astype(str) == metric)
+                ]
+                if ref.empty:
+                    mismatches.append(f"{sid}:{country}:{metric}:missing")
+                    continue
+                h_cmp = _safe_float(ref.iloc[0].get("hist_value"), np.nan)
+                s_cmp = _safe_float(ref.iloc[0].get("scen_value"), np.nan)
+                h_det = _safe_float(row.get(f"{metric}_hist"), np.nan)
+                s_det = _safe_float(row.get(f"{metric}_scen"), np.nan)
+                if np.isfinite(h_cmp) and np.isfinite(h_det) and abs(h_cmp - h_det) > 1e-9:
+                    mismatches.append(f"{sid}:{country}:{metric}:hist")
+                if np.isfinite(s_cmp) and np.isfinite(s_det) and abs(s_cmp - s_det) > 1e-9:
+                    mismatches.append(f"{sid}:{country}:{metric}:scen")
+    if mismatches:
+        return [
+            {
+                "status": "FAIL",
+                "code": "Q4_REPORTING_CONSISTENCY",
+                "message": f"Incoherence comparaison/detail Q4 ({'; '.join(mismatches[:5])}).",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+    return [
+        {
+            "status": "PASS",
+            "code": "Q4_REPORTING_CONSISTENCY",
+            "message": "Comparaison Q4 coherente avec Q4_sizing_summary (meme colonnes, meme valeurs).",
+            "scope": "BUNDLE",
+            "scenario_id": "",
+        }
+    ]
+
+
+def _check_q5_ttl_obs_consistency(
+    hist_result: ModuleResult,
+    scen_results: dict[str, ModuleResult],
+    comparison: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    hist = hist_result.tables.get("Q5_summary", pd.DataFrame())
+    if hist.empty or "ttl_obs" not in hist.columns:
+        return []
+    cmp_ttl = comparison.copy()
+    for c in ["metric", "scenario_id", "hist_value", "scen_value"]:
+        if c not in cmp_ttl.columns:
+            cmp_ttl[c] = np.nan if c in {"hist_value", "scen_value"} else ""
+    cmp_ttl = cmp_ttl[cmp_ttl["metric"].astype(str) == "ttl_obs"].copy()
+    mismatches: list[str] = []
+    for sid, scen_res in scen_results.items():
+        scen = scen_res.tables.get("Q5_summary", pd.DataFrame())
+        if scen.empty or "ttl_obs" not in scen.columns:
+            continue
+        scen_countries = scen.get("country", pd.Series(dtype=object)).astype(str)
+        scen_vals = pd.to_numeric(scen.get("ttl_obs"), errors="coerce")
+        expected_scen_mean = _safe_float(scen_vals.mean(), np.nan)
+        hist_mask = hist.get("country", pd.Series(dtype=object)).astype(str).isin(set(scen_countries.tolist()))
+        expected_hist_mean = _safe_float(pd.to_numeric(hist.loc[hist_mask, "ttl_obs"], errors="coerce").mean(), np.nan)
+        cmp_sid = cmp_ttl[cmp_ttl.get("scenario_id", pd.Series(dtype=object)).astype(str) == str(sid)]
+        if cmp_sid.empty:
+            mismatches.append(f"{sid}:missing")
+            continue
+        cmp_hist_mean = _safe_float(pd.to_numeric(cmp_sid.get("hist_value"), errors="coerce").mean(), np.nan)
+        cmp_scen_mean = _safe_float(pd.to_numeric(cmp_sid.get("scen_value"), errors="coerce").mean(), np.nan)
+        if np.isfinite(expected_hist_mean) and np.isfinite(cmp_hist_mean) and abs(expected_hist_mean - cmp_hist_mean) > 1e-9:
+            mismatches.append(f"{sid}:hist_mean")
+        if np.isfinite(expected_scen_mean) and np.isfinite(cmp_scen_mean) and abs(expected_scen_mean - cmp_scen_mean) > 1e-9:
+            mismatches.append(f"{sid}:scen_mean")
+    if mismatches:
+        return [
+            {
+                "status": "FAIL",
+                "code": "Q5_REPORTING_TTL_OBS_CONSISTENCY",
+                "message": f"ttl_obs incoherent entre comparaison et detail ({'; '.join(mismatches[:5])}).",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+    return [
+        {
+            "status": "PASS",
+            "code": "Q5_REPORTING_TTL_OBS_CONSISTENCY",
+            "message": "ttl_obs comparaison/detail coherent (moyennes alignees).",
+            "scope": "BUNDLE",
+            "scenario_id": "",
+        }
+    ]
 
 
 def _phase2_commodity_daily(assumptions_phase2: pd.DataFrame, scenario_id: str, country: str, years: list[int]) -> pd.DataFrame:
@@ -1020,20 +1220,25 @@ def _q4_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
         req_cols = {"country", "far_after", "surplus_unabs_energy_after", "pv_capture_price_after"}
         if not req_cols.issubset(set(hist.columns)):
             return pd.DataFrame()
+        metric_cols = ["far_after", "surplus_unabs_energy_after", "pv_capture_price_after"]
+        for optional_metric in ["far_before", "surplus_unabs_energy_before"]:
+            if optional_metric in hist.columns:
+                metric_cols.append(optional_metric)
         for sid, res in scen_results.items():
             scen = res.tables.get("Q4_sizing_summary", pd.DataFrame())
             if scen.empty:
                 continue
             if not req_cols.issubset(set(scen.columns)):
                 continue
-            merged = hist[["country", "far_after", "surplus_unabs_energy_after", "pv_capture_price_after"]].merge(
-                scen[["country", "far_after", "surplus_unabs_energy_after", "pv_capture_price_after"]],
+            scen_metric_cols = [m for m in metric_cols if m in scen.columns]
+            merged = hist[["country"] + scen_metric_cols].merge(
+                scen[["country"] + scen_metric_cols],
                 on="country",
                 how="inner",
                 suffixes=("_hist", "_scen"),
             )
             for _, r in merged.iterrows():
-                for metric in ["far_after", "surplus_unabs_energy_after", "pv_capture_price_after"]:
+                for metric in scen_metric_cols:
                     h = _safe_float(r.get(f"{metric}_hist"), np.nan)
                     s = _safe_float(r.get(f"{metric}_scen"), np.nan)
                     rows.append(
@@ -1173,6 +1378,7 @@ def _evaluate_test_ledger(
     hist_result: ModuleResult,
     scen_results: dict[str, ModuleResult],
     extra_hist: dict[str, ModuleResult],
+    expected_scenario_ids: list[str] | None = None,
 ) -> pd.DataFrame:
     qid = question_id.upper()
     rows: list[dict[str, Any]] = []
@@ -1327,7 +1533,17 @@ def _evaluate_test_ledger(
                 if spec.test_id == "Q4-H-01":
                     expected_modes = {"HIST_PRICE_ARBITRAGE_SIMPLE", "HIST_PV_COLOCATED"}
                     ok = expected_modes.issubset(set(extra_hist.keys()))
-                    _append_test_row(rows, spec, "PASS" if ok else "FAIL", ",".join(sorted(extra_hist.keys())), "3 modes executes", "Les trois modes Q4 sont disponibles.")
+                    n_extra = int(len(extra_hist))
+                    n_total = 1 + n_extra  # +1 pour le mode SURPLUS_FIRST porte par hist_result
+                    value = f"extra_dispatch_modes_executed={n_extra}; total_dispatch_modes_executed={n_total}; extras={','.join(sorted(extra_hist.keys()))}"
+                    _append_test_row(
+                        rows,
+                        spec,
+                        _status_from_threshold(spec, condition_met=ok, evaluable=True),
+                        value,
+                        "extra_dispatch_modes_executed=2 (total_dispatch_modes_executed=3)",
+                        "Convention explicite: les modes supplementaires sont comptes hors SURPLUS_FIRST.",
+                    )
                 else:
                     # Q4-H-02 must stay strict on physical invariants while avoiding
                     # strategy-mode artefacts (PRICE_ARBITRAGE/PV_COLOCATED) that are
@@ -1409,10 +1625,25 @@ def _evaluate_test_ledger(
                             "Sensibilites analytiques globalement coherentes.",
                         )
         else:
-            if not scen_results:
+            scenario_ids_eval = [str(s) for s in (expected_scenario_ids or sorted(scen_results.keys())) if str(s).strip()]
+            if not scenario_ids_eval and scen_results:
+                scenario_ids_eval = sorted([str(s) for s in scen_results.keys()])
+            if not scenario_ids_eval:
                 _append_test_row(rows, spec, "NON_TESTABLE", "", "scenario runs disponibles", "Aucun scenario exploitable.")
                 continue
-            for sid, scen_res in scen_results.items():
+            for sid in scenario_ids_eval:
+                scen_res = scen_results.get(sid)
+                if scen_res is None:
+                    _append_test_row(
+                        rows,
+                        spec,
+                        "NON_TESTABLE",
+                        "",
+                        "scenario run disponible",
+                        "Scenario non produit (missing_output).",
+                        sid,
+                    )
+                    continue
                 if qid == "Q1":
                     summary = scen_res.tables.get("Q1_country_summary", pd.DataFrame())
                     if spec.test_id == "Q1-S-01":
@@ -1491,25 +1722,20 @@ def _evaluate_test_ledger(
                             req_defined_share = float((np.isfinite(k) | np.isfinite(f) | status_known).mean())
 
                         if finite_share == 0.0:
+                            status = "NON_TESTABLE"
                             if req_defined_share > 0.0:
-                                status = "PASS"
-                                interp = "Delta vs BASE nul/non defini, mais solveur required_lever disponible et interpretable."
+                                interp = "Aucun delta bascule comparable vs BASE (finite_share=0), meme si des solveurs sont renseignes."
                             else:
-                                status = "NON_TESTABLE"
                                 interp = "Aucun delta defini vs BASE (finite_share=0)."
-                        elif nonzero_share == 0.0:
-                            if req_defined_share > 0.0:
-                                status = "PASS"
-                                interp = "Delta nul vs BASE, mais required_lever renseigne (interpretabilite preservee)."
-                            else:
-                                status = "WARN"
-                                interp = "Delta vs BASE defini mais nul sur tous les pays."
                         elif nonzero_share >= 0.20:
-                            status = "PASS"
+                            status = _status_from_threshold(spec, condition_met=True, evaluable=True)
                             interp = "Sensibilite scenario observable vs BASE."
                         else:
-                            status = "WARN"
-                            interp = "Sensibilite faible: deltas non nuls sur moins de 20% des pays."
+                            status = _status_from_threshold(spec, condition_met=False, evaluable=True)
+                            if nonzero_share == 0.0:
+                                interp = "Delta vs BASE defini mais nul sur tous les pays."
+                            else:
+                                interp = "Sensibilite faible: deltas non nuls sur moins de 20% des pays."
 
                         _append_test_row(
                             rows,
@@ -1580,48 +1806,15 @@ def _evaluate_test_ledger(
                             status_up = out["status"].astype(str).str.upper()
                             share_hs = float((status_up.isin(["HORS_SCOPE_STAGE2", "HORS_SCOPE_PHASE2"])).mean()) if "status" in out.columns else np.nan
                             if np.isfinite(share_hs) and share_hs >= 0.80:
-                                k_vals = pd.to_numeric(out.get("inversion_k_demand"), errors="coerce")
-                                r_vals = pd.to_numeric(out.get("inversion_r_mustrun"), errors="coerce")
-                                add_vals = pd.to_numeric(out.get("additional_absorbed_needed_TWh_year"), errors="coerce")
-                                k_status_known = "inversion_k_demand_status" in out.columns and out["inversion_k_demand_status"].astype(str).ne("").any()
-                                r_status_known = "inversion_r_mustrun_status" in out.columns and out["inversion_r_mustrun_status"].astype(str).ne("").any()
-                                f_status_known = "inversion_f_flex_status" in out.columns and out["inversion_f_flex_status"].astype(str).ne("").any()
-                                already_de_stressed = bool(
-                                    _max_finite(k_vals, default=0.0) <= 1e-6
-                                    and _max_finite(r_vals, default=0.0) <= 1e-6
-                                    and _max_finite(add_vals, default=0.0) <= 1e-3
+                                _append_test_row(
+                                    rows,
+                                    spec,
+                                    "NON_TESTABLE",
+                                    f"hors_scope={share_hs:.2%}",
+                                    "hors_scope < 80%",
+                                    "Scenario majoritairement hors scope Stage 2: test non interpretable.",
+                                    sid,
                                 )
-                                if already_de_stressed:
-                                    _append_test_row(
-                                        rows,
-                                        spec,
-                                        "PASS",
-                                        f"hors_scope={share_hs:.2%}; inversion=0",
-                                        "hors_scope < 80% ou inversion deja atteinte",
-                                        "Scenario deja de-stresse: conditions minimales d'inversion deja satisfaites.",
-                                        sid,
-                                    )
-                                else:
-                                    if k_status_known or r_status_known or f_status_known:
-                                        _append_test_row(
-                                            rows,
-                                            spec,
-                                            "WARN",
-                                            f"hors_scope={share_hs:.2%}; statuses_known=1",
-                                            "hors_scope < 80%",
-                                            "Majoritairement hors scope Stage 2, mais solveurs explicites (borne/ready) disponibles.",
-                                            sid,
-                                        )
-                                    else:
-                                        _append_test_row(
-                                            rows,
-                                            spec,
-                                            "NON_TESTABLE",
-                                            f"hors_scope={share_hs:.2%}",
-                                            "hors_scope < 80%",
-                                            "Le scenario reste majoritairement hors scope Stage 2 sans preuve claire d'inversion.",
-                                            sid,
-                                        )
                             else:
                                 _append_test_row(rows, spec, "PASS", int(len(out)), "colonnes inversion presentes", "Les ordres de grandeur d'inversion sont quantifies.", sid)
                     else:
@@ -1631,48 +1824,15 @@ def _evaluate_test_ledger(
                             status_up = out["status"].astype(str).str.upper()
                             share_hs = float((status_up.isin(["HORS_SCOPE_STAGE2", "HORS_SCOPE_PHASE2"])).mean())
                             if share_hs >= 0.80:
-                                k_vals = pd.to_numeric(out.get("inversion_k_demand"), errors="coerce")
-                                r_vals = pd.to_numeric(out.get("inversion_r_mustrun"), errors="coerce")
-                                add_vals = pd.to_numeric(out.get("additional_absorbed_needed_TWh_year"), errors="coerce")
-                                k_status_known = "inversion_k_demand_status" in out.columns and out["inversion_k_demand_status"].astype(str).ne("").any()
-                                r_status_known = "inversion_r_mustrun_status" in out.columns and out["inversion_r_mustrun_status"].astype(str).ne("").any()
-                                f_status_known = "inversion_f_flex_status" in out.columns and out["inversion_f_flex_status"].astype(str).ne("").any()
-                                already_de_stressed = bool(
-                                    _max_finite(k_vals, default=0.0) <= 1e-6
-                                    and _max_finite(r_vals, default=0.0) <= 1e-6
-                                    and _max_finite(add_vals, default=0.0) <= 1e-3
+                                _append_test_row(
+                                    rows,
+                                    spec,
+                                    "NON_TESTABLE",
+                                    f"hors_scope={share_hs:.2%}",
+                                    "hors_scope < 80%",
+                                    "Le scenario ne produit pas assez de stress Stage 2 pour conclure sur l'entree Phase 3.",
+                                    sid,
                                 )
-                                if already_de_stressed:
-                                    _append_test_row(
-                                        rows,
-                                        spec,
-                                        "PASS",
-                                        f"hors_scope={share_hs:.2%}; inversion=0",
-                                        "hors_scope < 80% ou inversion deja atteinte",
-                                        "Scenario de-stresse: la transition Phase 3 est interpretable comme deja acquise.",
-                                        sid,
-                                    )
-                                else:
-                                    if k_status_known or r_status_known or f_status_known:
-                                        _append_test_row(
-                                            rows,
-                                            spec,
-                                            "WARN",
-                                            f"hors_scope={share_hs:.2%}; statuses_known=1",
-                                            "hors_scope < 80%",
-                                            "Lecture limitee (hors scope majoritaire) mais solveurs explicites disponibles.",
-                                            sid,
-                                        )
-                                    else:
-                                        _append_test_row(
-                                            rows,
-                                            spec,
-                                            "NON_TESTABLE",
-                                            f"hors_scope={share_hs:.2%}",
-                                            "hors_scope < 80%",
-                                            "Le scenario ne produit pas assez de stress Stage 2 pour conclure sur l'entree Phase 3.",
-                                            sid,
-                                        )
                             elif share_hs >= 0.40:
                                 _append_test_row(
                                     rows,
@@ -1839,8 +1999,22 @@ def run_question_bundle(
             continue
         scen_results[sid] = scen_res
 
+    if qid in {"Q1", "Q2"} and "BASE" in [str(s) for s in scenario_ids]:
+        if "BASE" not in scen_results:
+            warnings.append("BASE: fallback explicite sur historique (scenario non disponible).")
+        else:
+            warnings.append("BASE: normalise sur historique pour garantir comparabilite Q1/Q2.")
+        scen_results["BASE"] = _clone_hist_result_as_base_scenario(hist_result, run_id=run_id)
+
     specs = get_question_tests(qid)
-    ledger = _evaluate_test_ledger(qid, specs, hist_result, scen_results, extra_hist)
+    ledger = _evaluate_test_ledger(
+        qid,
+        specs,
+        hist_result,
+        scen_results,
+        extra_hist,
+        expected_scenario_ids=scenario_ids,
+    )
     comparison = _comparison_for_question(qid, hist_result, scen_results, extra_hist)
     comparison = _annotate_comparison_interpretability(qid, comparison)
 
@@ -1898,7 +2072,17 @@ def run_question_bundle(
             ].copy()
             if not s02.empty:
                 statuses = set(s02["status"].astype(str))
-                if statuses.issubset({"WARN", "NON_TESTABLE"}):
+                if "FAIL" in statuses:
+                    checks.append(
+                        {
+                            "status": "FAIL",
+                            "code": "Q1_S02_NO_SENSITIVITY",
+                            "message": "Q1-S-02: au moins un scenario non-BASE est en echec explicite.",
+                            "scope": "BUNDLE",
+                            "scenario_id": "",
+                        }
+                    )
+                elif statuses.issubset({"WARN", "NON_TESTABLE"}):
                     checks.append(
                         {
                             "status": "WARN",
@@ -2070,6 +2254,35 @@ def run_question_bundle(
                             }
                         )
 
+    module_scopes: list[tuple[str, ModuleResult]] = [("HIST", hist_result)]
+    module_scopes.extend([(f"SCEN:{sid}", res) for sid, res in scen_results.items()])
+    checks.extend(_check_non_negative_fields(module_scopes))
+    if qid == "Q4":
+        checks.extend(_check_q4_reporting_consistency(hist_result, scen_results, comparison))
+    if qid == "Q5":
+        checks.extend(_check_q5_ttl_obs_consistency(hist_result, scen_results, comparison))
+
+    if not ledger.empty:
+        ledger_fail_count = int((ledger["status"].astype(str) == "FAIL").sum())
+        consolidated_fail_count = int(
+            sum(
+                1
+                for c in checks
+                if str(c.get("status", "")).upper() == "FAIL"
+                and str(c.get("code", "")).upper() != "BUNDLE_LEDGER_STATUS"
+            )
+        )
+        if ledger_fail_count == 0 and consolidated_fail_count > 0:
+            checks.append(
+                {
+                    "status": "FAIL",
+                    "code": "BUNDLE_LEDGER_CONSOLIDATED_MISMATCH",
+                    "message": "Le ledger affiche FAIL=0 alors que des checks consolides sont en FAIL.",
+                    "scope": "BUNDLE",
+                    "scenario_id": "",
+                }
+            )
+
     warnings.extend(hist_result.warnings)
     for sid, scen_res in scen_results.items():
         for w in scen_res.warnings:
@@ -2080,10 +2293,16 @@ def run_question_bundle(
     n_warn = int((ledger["status"] == "WARN").sum()) if not ledger.empty else 0
     n_fail = int((ledger["status"] == "FAIL").sum()) if not ledger.empty else 0
     n_nt = int((ledger["status"] == "NON_TESTABLE").sum()) if not ledger.empty else 0
+    checks_df = pd.DataFrame(checks)
+    check_pass = int((checks_df.get("status", pd.Series(dtype=object)).astype(str).str.upper() == "PASS").sum()) if not checks_df.empty else 0
+    check_warn = int((checks_df.get("status", pd.Series(dtype=object)).astype(str).str.upper() == "WARN").sum()) if not checks_df.empty else 0
+    check_fail = int((checks_df.get("status", pd.Series(dtype=object)).astype(str).str.upper() == "FAIL").sum()) if not checks_df.empty else 0
+    check_nt = int((checks_df.get("status", pd.Series(dtype=object)).astype(str).str.upper() == "NON_TESTABLE").sum()) if not checks_df.empty else 0
 
     narrative = (
         f"Analyse complete {qid}: historique + prospectif en un seul run. "
         f"Statut global={overall}. Tests PASS={n_pass}, WARN={n_warn}, FAIL={n_fail}, NON_TESTABLE={n_nt}. "
+        f"Checks PASS={check_pass}, WARN={check_warn}, FAIL={check_fail}, NON_TESTABLE={check_nt}. "
         "Les resultats sont separes entre historique et scenarios, puis compares dans une table unique."
     )
 

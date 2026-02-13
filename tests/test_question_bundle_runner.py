@@ -330,6 +330,74 @@ def test_q1_s02_pass_when_nonzero_share_reaches_threshold() -> None:
     assert row["status"] == "PASS"
 
 
+def test_q3_s01_non_testable_when_hors_scope_majority() -> None:
+    spec = [s for s in get_question_tests("Q3", mode="SCEN") if s.test_id == "Q3-S-01"]
+    hist = _empty_module_result("Q3", "HIST")
+    scen_results = {
+        "BASE": ModuleResult(
+            module_id="Q3",
+            run_id="TEST_Q3_BASE",
+            selection={"mode": "SCEN", "scenario_id": "BASE"},
+            assumptions_used=[],
+            kpis={},
+            tables={
+                "Q3_status": pd.DataFrame(
+                    [
+                        {
+                            "country": "FR",
+                            "status": "HORS_SCOPE_PHASE2",
+                            "inversion_k_demand": 0.0,
+                            "inversion_r_mustrun": 0.0,
+                            "additional_absorbed_needed_TWh_year": 0.0,
+                        }
+                    ]
+                )
+            },
+            figures=[],
+            narrative_md="",
+            checks=[],
+            warnings=[],
+            mode="SCEN",
+            scenario_id="BASE",
+        )
+    }
+    ledger = _evaluate_test_ledger("Q3", spec, hist, scen_results, {}, expected_scenario_ids=["BASE"])
+    row = ledger.iloc[0]
+    assert row["status"] == "NON_TESTABLE"
+
+
+def test_evaluate_test_ledger_marks_missing_requested_scenario_non_testable() -> None:
+    spec = [s for s in get_question_tests("Q1", mode="SCEN") if s.test_id == "Q1-S-01"]
+    hist = _empty_module_result("Q1", "HIST")
+    scen_results = {
+        "BASE": ModuleResult(
+            module_id="Q1",
+            run_id="TEST_Q1_BASE_ONLY",
+            selection={"mode": "SCEN", "scenario_id": "BASE"},
+            assumptions_used=[],
+            kpis={},
+            tables={"Q1_country_summary": pd.DataFrame([{"country": "FR", "bascule_year_market": 2030.0}])},
+            figures=[],
+            narrative_md="",
+            checks=[],
+            warnings=[],
+            mode="SCEN",
+            scenario_id="BASE",
+        )
+    }
+    ledger = _evaluate_test_ledger(
+        "Q1",
+        spec,
+        hist,
+        scen_results,
+        {},
+        expected_scenario_ids=["BASE", "DEMAND_UP"],
+    )
+    missing = ledger[ledger["scenario_id"].astype(str) == "DEMAND_UP"]
+    assert not missing.empty
+    assert set(missing["status"].astype(str).unique()) == {"NON_TESTABLE"}
+
+
 def test_q4_h02_ignores_non_physical_extra_mode_fails() -> None:
     spec = [s for s in get_question_tests("Q4", mode="HIST") if s.test_id == "Q4-H-02"]
     hist = _empty_module_result("Q4", "HIST")

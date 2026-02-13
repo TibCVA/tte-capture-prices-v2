@@ -279,7 +279,7 @@ def _build_rule_definition(params: dict[str, float], crisis_years: set[int]) -> 
                 "rule_logic": (
                     "is_phase2_market := family_count(LOW_PRICE,VALUE,PHYSICAL) >= 2; "
                     "is_phase2_physical := PHYSICAL_STRESS_FLAG. "
-                    "LOW_PRICE_FLAG uses h_negative OR h_below_5 OR low_price_hours_share. "
+                    "LOW_PRICE_FLAG uses h_negative OR h_below_5 (strict gate). "
                     "PHYSICAL_STRESS_FLAG uses sr_energy OR sr_hours OR ir_p10. "
                     "is_stage1 := stage1_score>=3 AND NOT CAPTURE_DEGRADATION_FLAG (hors crise/qualite OK)."
                 ),
@@ -434,11 +434,9 @@ def _apply_phase2_logic(
         crisis.at[i] = y in years_set
     out["crisis_year"] = crisis
 
-    out["LOW_PRICE_FLAG"] = (
-        out["flag_h_negative_stage2"]
-        | out["flag_h_below_5_stage2"]
-        | out["flag_low_price_share_high"]
-    )
+    # Stage2 low-price evidence gate is strict: only h_negative / h_below_5.
+    out["LOW_PRICE_FLAG"] = out["flag_h_negative_stage2"] | out["flag_h_below_5_stage2"]
+    out["low_price_evidence_min"] = out["LOW_PRICE_FLAG"]
     out["CAPTURE_DEGRADATION_FLAG"] = out["flag_capture_pv_low"] | out["flag_capture_wind_low"]
     out["PHYSICAL_STRESS_FLAG"] = out["flag_sr_energy_high"] | out["flag_sr_hours_high"] | out["flag_ir_high"]
 
@@ -509,11 +507,26 @@ def _apply_phase2_logic(
     phase2_market_core_country = out["family_count"] >= 2
     phase2_market_core_pv = out["family_count_pv"] >= 2
     phase2_market_core_wind = out["family_count_wind"] >= 2
-    out["is_phase2_market"] = phase2_market_core_country & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
+    out["is_phase2_market"] = (
+        phase2_market_core_country
+        & out["low_price_evidence_min"].fillna(False)
+        & out["quality_ok"].fillna(False)
+        & (~out["crisis_year"].fillna(False))
+    )
     out["is_phase2_physical"] = out["PHYSICAL_STRESS_FLAG"] & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
     out["stage2_candidate_year"] = out["is_phase2_market"]
-    out["stage2_candidate_year_pv"] = phase2_market_core_pv & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
-    out["stage2_candidate_year_wind"] = phase2_market_core_wind & out["quality_ok"].fillna(False) & (~out["crisis_year"].fillna(False))
+    out["stage2_candidate_year_pv"] = (
+        phase2_market_core_pv
+        & out["low_price_evidence_min"].fillna(False)
+        & out["quality_ok"].fillna(False)
+        & (~out["crisis_year"].fillna(False))
+    )
+    out["stage2_candidate_year_wind"] = (
+        phase2_market_core_wind
+        & out["low_price_evidence_min"].fillna(False)
+        & out["quality_ok"].fillna(False)
+        & (~out["crisis_year"].fillna(False))
+    )
     out["stage2_candidate_year_country"] = out["is_phase2_market"]
     out["phase2_candidate_year"] = out["stage2_candidate_year"]
     out["flag_capture_only_stage2"] = out["CAPTURE_DEGRADATION_FLAG"] & (~out["LOW_PRICE_FLAG"]) & (~out["PHYSICAL_STRESS_FLAG"])
@@ -557,6 +570,27 @@ def _apply_phase2_logic(
 def _first_persistent_year(group: pd.DataFrame, col: str, window_years: int) -> float:
     start, _ = _persistent_run_start_and_status(group, col, window_years)
     return start
+
+
+def _first_true_year_and_status(group: pd.DataFrame, col: str) -> tuple[float, str]:
+    if group.empty or col not in group.columns:
+        return float("nan"), "not_reached_in_window"
+    g = group.sort_values("year").copy()
+    if "crisis_year" in g.columns:
+        g = g[~g["crisis_year"].fillna(False).astype(bool)].copy()
+    if g.empty:
+        return float("nan"), "not_reached_in_window"
+    years = pd.to_numeric(g["year"], errors="coerce")
+    flags = g[col].fillna(False).astype(bool)
+    if years.notna().sum() == 0:
+        return float("nan"), "not_reached_in_window"
+    first_year = int(years.dropna().iloc[0])
+    hit = g.loc[flags & years.notna(), "year"]
+    if hit.empty:
+        return float("nan"), "not_reached_in_window"
+    y = int(pd.to_numeric(hit, errors="coerce").dropna().iloc[0])
+    status = "already_phase2_at_window_start" if y == first_year else "transition_observed"
+    return float(y), status
 
 
 def _persistent_run_start_and_status(group: pd.DataFrame, col: str, window_years: int) -> tuple[float, str]:
@@ -1017,9 +1051,18 @@ def _build_q1_yearly_diagnostics(
     out["score_value"] = out[["flag_capture_pv_low", "flag_capture_wind_low"]].fillna(False).astype(int).sum(axis=1)
     out["score_physical"] = out[["flag_sr_energy_high", "flag_sr_hours_high", "flag_ir_high"]].fillna(False).astype(int).sum(axis=1)
     out["family_count_overall"] = out[["low_price_family", "value_family", "physical_family"]].fillna(False).astype(int).sum(axis=1)
+    bascule_map: dict[str, float] = {}
+    if not summary.empty and {"country", "bascule_year_market"}.issubset(set(summary.columns)):
+        tmp = summary[["country", "bascule_year_market"]].copy()
+        tmp["country"] = tmp["country"].astype(str)
+        tmp["bascule_year_market"] = pd.to_numeric(tmp["bascule_year_market"], errors="coerce")
+        bascule_map = tmp.set_index("country")["bascule_year_market"].to_dict()
+    year_num = pd.to_numeric(out.get("year"), errors="coerce")
+    bascule_num = pd.to_numeric(out["country"].astype(str).map(bascule_map), errors="coerce")
+    stage2_allowed = out["is_phase2_market"].fillna(False).astype(bool) & (~(bascule_num.notna() & (year_num < bascule_num)))
     out["stage_label"] = np.select(
         [
-            out["is_phase2_market"].fillna(False),
+            stage2_allowed,
             out["is_stage1_criteria"].fillna(False),
         ],
         ["Phase2", "Phase1"],
@@ -1236,15 +1279,13 @@ def run_q1(
 
     for country, group in panel.groupby("country"):
         group = group.sort_values("year").copy()
-        bascule_year_pv, bascule_status_market_pv = _persistent_run_start_and_status(
+        bascule_year_pv, bascule_status_market_pv = _first_true_year_and_status(
             group,
             "stage2_candidate_year_pv",
-            persist_window,
         )
-        bascule_year_wind, bascule_status_market_wind = _persistent_run_start_and_status(
+        bascule_year_wind, bascule_status_market_wind = _first_true_year_and_status(
             group,
             "stage2_candidate_year_wind",
-            persist_window,
         )
         if np.isfinite(bascule_year_pv) and np.isfinite(bascule_year_wind):
             bascule_year = float(min(int(bascule_year_pv), int(bascule_year_wind)))
@@ -1469,13 +1510,9 @@ def run_q1(
     if bool(stage2_mask.any()):
         h_neg_thr = _safe_param(params, "h_negative_stage2_min", 200.0)
         h_low_thr = _safe_param(params, "h_below_5_stage2_min", 500.0)
-        spread_thr = _safe_param(params, "days_spread_gt50_stage2_min", 150.0)
         h_neg = pd.to_numeric(panel.get("h_negative_obs"), errors="coerce")
         h_low = pd.to_numeric(panel.get("h_below_5_obs"), errors="coerce")
-        spread = pd.to_numeric(panel.get("days_spread_gt50"), errors="coerce")
-        if spread.notna().sum() == 0:
-            spread = pd.to_numeric(panel.get("days_spread_50_obs"), errors="coerce")
-        low_price_evidence = (h_neg >= h_neg_thr) | (h_low >= h_low_thr) | (spread >= spread_thr)
+        low_price_evidence = (h_neg >= h_neg_thr) | (h_low >= h_low_thr)
         invalid = stage2_mask & (~low_price_evidence.fillna(False))
         if bool(invalid.any()):
             for _, bad_row in panel.loc[invalid, ["country", "year", "h_negative_obs", "h_below_5_obs"]].iterrows():
@@ -1497,11 +1534,11 @@ def run_q1(
                 {
                     "status": "PASS",
                     "code": "TEST_Q1_001",
-                    "message": "Toutes les lignes stage2 ont au moins un signal low-price (h_negative/h_below_5/days_spread_gt50).",
+                    "message": "Toutes les lignes stage2 ont au moins un signal low-price (h_negative/h_below_5).",
                 }
             )
     else:
-        checks.append({"status": "WARN", "code": "TEST_Q1_001", "message": "Aucune ligne stage2 observee; test non applicable."})
+        checks.append({"status": "NON_TESTABLE", "code": "TEST_Q1_001", "message": "Aucune ligne stage2 observee; test non applicable."})
 
     summary = pd.DataFrame(summary_rows)
     for col, default in {
@@ -1608,6 +1645,7 @@ def run_q1(
         "flag_far_low",
         "flag_ir_high",
         "flag_spread_high",
+        "low_price_evidence_min",
         "LOW_PRICE_FLAG",
         "CAPTURE_DEGRADATION_FLAG",
         "PHYSICAL_STRESS_FLAG",

@@ -264,7 +264,7 @@ def test_q1_emits_test_q1_001_reality_check(annual_panel_fixture):
     )
     q1_checks = [c for c in res.checks if str(c.get("code")) == "TEST_Q1_001"]
     assert q1_checks
-    assert all(str(c.get("status")) in {"PASS", "WARN", "FAIL"} for c in q1_checks)
+    assert all(str(c.get("status")) in {"PASS", "WARN", "FAIL", "NON_TESTABLE"} for c in q1_checks)
 
 
 def test_q1_no_bascule_forces_at_bascule_nan_and_populates_end_year_block(annual_panel_fixture):

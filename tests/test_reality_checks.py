@@ -62,3 +62,38 @@ def test_data_003_warns_on_large_price_outlier():
     )
     checks = build_common_checks(annual)
     assert _first_status(checks, "TEST_DATA_003") == "WARN"
+
+
+def test_h_below_5_cannot_be_lower_than_h_negative():
+    annual = pd.DataFrame(
+        [
+            {
+                "country": "FR",
+                "year": 2024,
+                "n_hours": 8760,
+                "h_negative": 120.0,
+                "h_below_5": 80.0,
+                "coverage_price": 1.0,
+                "coverage_load_total": 1.0,
+            }
+        ]
+    )
+    checks = build_common_checks(annual)
+    assert _first_status(checks, "RC_HB5_LT_HNEG") == "FAIL"
+
+
+def test_non_negative_suffix_field_cannot_be_negative():
+    annual = pd.DataFrame(
+        [
+            {
+                "country": "FR",
+                "year": 2024,
+                "n_hours": 8760,
+                "coverage_price": 1.0,
+                "coverage_load_total": 1.0,
+                "co2_required_base_non_negative": -1.0,
+            }
+        ]
+    )
+    checks = build_common_checks(annual)
+    assert _first_status(checks, "RC_NON_NEGATIVE_FIELD_NEGATIVE") == "FAIL"

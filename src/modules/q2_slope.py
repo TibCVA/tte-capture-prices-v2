@@ -374,6 +374,11 @@ def run_q2(
                         phase2_start_year = float(int(phase2_start_override))
                 phase2_start_reason = "hist_phase2_reference"
                 phase2_scope = group[years_num.isin(ref_years)].copy()
+                if phase2_scope.empty and np.isfinite(phase2_start_year):
+                    # Scenario years can be outside historical years_used; keep historical
+                    # stage2 start year and use all available years >= that start.
+                    phase2_scope = group[years_num >= float(phase2_start_year)].copy()
+                    phase2_start_reason = "hist_phase2_start_fallback"
             else:
                 phase2_start_year, phase2_start_reason = _phase2_start_year(c_summary, tech=tech)
                 if np.isfinite(phase2_start_year):
@@ -416,6 +421,7 @@ def run_q2(
                         "slope_method": "none",
                         "method": "none",
                         "insufficient_points": True,
+                        "slope_status": "NON_TESTABLE",
                         "robust_flag": "NON_TESTABLE",
                         "reason_code": "q1_no_phase2_market_year",
                         "outlier_years_count": 0,
@@ -512,7 +518,14 @@ def run_q2(
                     notes.append("LOO_UNSTABLE")
                 slope_quality_flag = "WARN"
                 slope_quality_notes = "|".join(notes) if notes else str(fit.get("reason_code", "WARN"))
-                fit["robust_flag"] = "NON_TESTABLE" if n_points_fit < 3 else "FRAGILE"
+                fit["robust_flag"] = "NON_TESTABLE" if n_points_fit < 2 else "FRAGILE"
+
+            slope_status = "NON_TESTABLE"
+            if np.isfinite(_safe_float(fit.get("slope"), np.nan)):
+                if n_points_fit >= 3:
+                    slope_status = "OK"
+                elif n_points_fit == 2:
+                    slope_status = "FRAGILE"
 
             corr_vre_load_phase2 = np.nan
             if {"gen_vre_twh", "load_net_twh"}.issubset(set(phase2_scope.columns)):
@@ -562,6 +575,7 @@ def run_q2(
                     "slope_method": fit["slope_method"],
                     "method": fit["slope_method"],
                     "insufficient_points": bool(fit["insufficient_points"]),
+                    "slope_status": slope_status,
                     "robust_flag": fit["robust_flag"],
                     "reason_code": str(fit["reason_code"]).lower(),
                     "outlier_years_count": 0,

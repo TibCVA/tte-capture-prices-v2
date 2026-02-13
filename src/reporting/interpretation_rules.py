@@ -211,10 +211,23 @@ def _comparison_summary(block: QuestionTestResultBlock) -> tuple[str, str]:
     for c in ["metric", "scenario_id", "country", "hist_value", "scen_value", "delta"]:
         if c not in cmp_df.columns:
             cmp_df[c] = np.nan if c in {"hist_value", "scen_value", "delta"} else ""
+    cmp_df["hist_value"] = pd.to_numeric(cmp_df["hist_value"], errors="coerce")
+    cmp_df["scen_value"] = pd.to_numeric(cmp_df["scen_value"], errors="coerce")
+    cmp_df["delta"] = pd.to_numeric(cmp_df["delta"], errors="coerce")
 
     agg = (
-        cmp_df.groupby(["metric", "scenario_id"], dropna=False)["delta"]
-        .agg(["count", "mean", "median", "min", "max"])
+        cmp_df.groupby(["metric", "scenario_id"], dropna=False)
+        .agg(
+            count=("delta", "count"),
+            hist_mean=("hist_value", "mean"),
+            hist_median=("hist_value", "median"),
+            scen_mean=("scen_value", "mean"),
+            scen_median=("scen_value", "median"),
+            delta_mean=("delta", "mean"),
+            delta_median=("delta", "median"),
+            delta_min=("delta", "min"),
+            delta_max=("delta", "max"),
+        )
         .reset_index()
         .sort_values(["metric", "scenario_id"])
     )

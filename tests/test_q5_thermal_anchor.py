@@ -255,6 +255,36 @@ def test_q5_emits_quality_summary_table(make_raw_panel, countries_cfg, threshold
     assert set(quality["quality_status"].astype(str).unique()).issubset({"PASS", "WARN", "FAIL"})
 
 
+def test_q5_non_negative_fields_are_clamped(make_raw_panel, countries_cfg, thresholds_cfg):
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    commodity = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=20, freq="D"),
+            "gas_price_eur_mwh_th": 35.0,
+            "co2_price_eur_t": 80.0,
+        }
+    )
+    row = run_q5(
+        hourly,
+        assumptions,
+        {"country": "FR", "year": 2024, "scenario_id": "BASE", "mode": "SCEN"},
+        "test",
+        commodity_daily=commodity,
+        ttl_target_eur_mwh=20.0,
+    ).tables["Q5_summary"].iloc[0]
+    for col in [
+        "co2_required_base_non_negative",
+        "gas_required_base_non_negative",
+        "co2_required_gas_override_non_negative",
+    ]:
+        if pd.notna(row.get(col)):
+            assert float(row[col]) >= 0.0
+    if pd.notna(row.get("co2_required_base_raw")):
+        assert float(row["co2_required_base_non_negative"]) == max(0.0, float(row["co2_required_base_raw"]))
+
+
 def test_q5_missing_commodities_emits_quality_summary(make_raw_panel, countries_cfg, thresholds_cfg):
     raw = make_raw_panel(n=240)
     hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
