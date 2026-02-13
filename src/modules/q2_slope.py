@@ -8,6 +8,18 @@ import numpy as np
 import pandas as pd
 from scipy.stats import t as t_dist
 
+from src.constants import (
+    COL_GEN_MUST_RUN,
+    COL_GEN_SOLAR,
+    COL_GEN_VRE,
+    COL_GEN_WIND_OFF,
+    COL_GEN_WIND_ON,
+    COL_LOAD_NET,
+    COL_LOAD_TOTAL,
+    COL_NRL,
+    COL_PRICE_DA,
+    COL_PSH_PUMP,
+)
 from src.modules.common import assumptions_subset, robust_linreg
 from src.modules.q1_transition import run_q1
 from src.modules.reality_checks import build_common_checks
@@ -201,6 +213,154 @@ def _as_numeric_series(df: pd.DataFrame, col: str, default: float = np.nan) -> p
     if col in df.columns:
         return pd.to_numeric(df[col], errors="coerce")
     return pd.Series(default, index=df.index, dtype=float)
+
+
+def _hourly_numeric(df: pd.DataFrame, col: str, default: float = np.nan) -> pd.Series:
+    if col in df.columns:
+        return pd.to_numeric(df[col], errors="coerce")
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+def _hourly_load_mw(df: pd.DataFrame) -> pd.Series:
+    load = _hourly_numeric(df, COL_LOAD_NET, np.nan)
+    if load.notna().sum() > 0:
+        return load
+    load_total = _hourly_numeric(df, COL_LOAD_TOTAL, np.nan)
+    psh = _hourly_numeric(df, COL_PSH_PUMP, np.nan).fillna(0.0)
+    if load_total.notna().sum() > 0:
+        return load_total - psh
+    return pd.Series(np.nan, index=df.index, dtype=float)
+
+
+def _hourly_vre_mw(df: pd.DataFrame, tech: str) -> pd.Series:
+    t = str(tech).upper()
+    pv = _hourly_numeric(df, COL_GEN_SOLAR, 0.0).fillna(0.0).clip(lower=0.0)
+    wind = (
+        _hourly_numeric(df, COL_GEN_WIND_ON, 0.0).fillna(0.0).clip(lower=0.0)
+        + _hourly_numeric(df, COL_GEN_WIND_OFF, 0.0).fillna(0.0).clip(lower=0.0)
+    )
+    if t == "PV":
+        return pv
+    if t == "WIND":
+        return wind
+    vre = _hourly_numeric(df, COL_GEN_VRE, np.nan)
+    if vre.notna().sum() > 0:
+        return vre.fillna(0.0).clip(lower=0.0)
+    return (pv + wind).clip(lower=0.0)
+
+
+def _concat_hourly_phase2_sample(
+    hourly_by_country_year: dict[tuple[str, int], pd.DataFrame] | None,
+    *,
+    country: str,
+    years: list[int],
+) -> pd.DataFrame:
+    if not hourly_by_country_year:
+        return pd.DataFrame()
+    chunks: list[pd.DataFrame] = []
+    for year in sorted(set([int(y) for y in years])):
+        h = hourly_by_country_year.get((str(country), int(year)))
+        if h is None or h.empty:
+            continue
+        hh = h.copy()
+        hh["year"] = int(year)
+        chunks.append(hh)
+    if not chunks:
+        return pd.DataFrame()
+    return pd.concat(chunks, axis=0, ignore_index=False)
+
+
+def _compute_hourly_phase2_drivers(
+    hourly_phase2: pd.DataFrame,
+    *,
+    tech: str,
+    min_hours_required: int = 168,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "sample_hours": 0,
+        "vre_load_corr_phase2": None,
+        "vre_load_corr_phase2_status": "NOT_APPLICABLE_NO_HOURLY_SAMPLE",
+        "surplus_load_trough_share_phase2": None,
+        "surplus_load_trough_share_phase2_status": "NOT_APPLICABLE_NO_HOURLY_SAMPLE",
+        "negative_price_load_trough_share_phase2": None,
+        "negative_price_load_trough_share_phase2_status": "NOT_APPLICABLE_NO_HOURLY_SAMPLE",
+        "driver_quality_flag": "NOT_APPLICABLE_NO_HOURLY_SAMPLE",
+        "annual_penetration_load_corr_phase2": None,
+    }
+    if hourly_phase2 is None or hourly_phase2.empty:
+        return out
+
+    load = _hourly_load_mw(hourly_phase2)
+    vre = _hourly_vre_mw(hourly_phase2, tech=tech)
+    price = _hourly_numeric(hourly_phase2, COL_PRICE_DA, np.nan)
+    nrl = _hourly_numeric(hourly_phase2, COL_NRL, np.nan)
+    if nrl.notna().sum() == 0:
+        must_run = _hourly_numeric(hourly_phase2, COL_GEN_MUST_RUN, 0.0).fillna(0.0)
+        nrl = load - vre - must_run
+
+    sample = pd.DataFrame(
+        {
+            "load_mw": pd.to_numeric(load, errors="coerce"),
+            "vre_mw": pd.to_numeric(vre, errors="coerce"),
+            "price_da_eur_mwh": pd.to_numeric(price, errors="coerce"),
+            "nrl_mw": pd.to_numeric(nrl, errors="coerce"),
+        }
+    ).dropna(subset=["load_mw", "vre_mw"])
+    sample = sample[np.isfinite(sample["load_mw"]) & np.isfinite(sample["vre_mw"])]
+    if sample.empty:
+        return out
+    out["sample_hours"] = int(len(sample))
+    if len(sample) < int(max(1, min_hours_required)):
+        out["vre_load_corr_phase2_status"] = "INSUFFICIENT_HOURLY_SAMPLE"
+        out["surplus_load_trough_share_phase2_status"] = "INSUFFICIENT_HOURLY_SAMPLE"
+        out["negative_price_load_trough_share_phase2_status"] = "INSUFFICIENT_HOURLY_SAMPLE"
+        out["driver_quality_flag"] = "INSUFFICIENT_HOURLY_SAMPLE"
+        return out
+
+    load_std = float(sample["load_mw"].std(ddof=0))
+    vre_std = float(sample["vre_mw"].std(ddof=0))
+    if load_std <= 0.0 or vre_std <= 0.0:
+        out["vre_load_corr_phase2_status"] = "NOT_APPLICABLE_CONSTANT_SERIES"
+    else:
+        corr = _safe_float(sample["vre_mw"].corr(sample["load_mw"]), np.nan)
+        if np.isfinite(corr):
+            out["vre_load_corr_phase2"] = float(corr)
+            out["vre_load_corr_phase2_status"] = "OK"
+    out["annual_penetration_load_corr_phase2"] = out["vre_load_corr_phase2"]
+
+    p10_load = _safe_float(sample["load_mw"].quantile(0.10), np.nan)
+    trough_mask = sample["load_mw"] <= p10_load if np.isfinite(p10_load) else pd.Series(False, index=sample.index)
+
+    surplus_mw = (-pd.to_numeric(sample["nrl_mw"], errors="coerce")).clip(lower=0.0).fillna(0.0)
+    total_surplus = float(surplus_mw.sum())
+    if total_surplus <= 0.0:
+        out["surplus_load_trough_share_phase2_status"] = "NOT_APPLICABLE_ZERO_SURPLUS"
+    else:
+        share = float(surplus_mw[trough_mask].sum() / total_surplus)
+        out["surplus_load_trough_share_phase2"] = float(np.clip(share, 0.0, 1.0))
+        out["surplus_load_trough_share_phase2_status"] = "OK"
+
+    neg_mask = pd.to_numeric(sample["price_da_eur_mwh"], errors="coerce") < 0.0
+    neg_count = int(neg_mask.fillna(False).sum())
+    if neg_count <= 0:
+        out["negative_price_load_trough_share_phase2_status"] = "NOT_APPLICABLE_NO_NEG_HOURS"
+    else:
+        share_neg = float((neg_mask & trough_mask).sum() / max(1, neg_count))
+        out["negative_price_load_trough_share_phase2"] = float(np.clip(share_neg, 0.0, 1.0))
+        out["negative_price_load_trough_share_phase2_status"] = "OK"
+
+    if all(
+        str(out.get(k, "")).upper() == "OK"
+        for k in [
+            "vre_load_corr_phase2_status",
+            "surplus_load_trough_share_phase2_status",
+            "negative_price_load_trough_share_phase2_status",
+        ]
+    ):
+        out["driver_quality_flag"] = "OK"
+    else:
+        out["driver_quality_flag"] = "WARN"
+    return out
 
 
 def _panel_fixed_effect_slope(df_xy_country: pd.DataFrame) -> dict[str, Any]:
@@ -431,8 +591,16 @@ def run_q2(
                         "mean_far_energy_phase2": np.nan,
                         "mean_ir_p10_phase2": np.nan,
                         "mean_ttl_phase2": np.nan,
-                        "vre_load_corr_phase2": np.nan,
-                        "surplus_load_trough_share_phase2": np.nan,
+                        "vre_load_corr_phase2": None,
+                        "vre_load_corr_phase2_status": "NOT_APPLICABLE_NO_PHASE2_SCOPE",
+                        "surplus_load_trough_share_phase2": None,
+                        "surplus_load_trough_share_phase2_status": "NOT_APPLICABLE_NO_PHASE2_SCOPE",
+                        "negative_price_load_trough_share_phase2": None,
+                        "negative_price_load_trough_share_phase2_status": "NOT_APPLICABLE_NO_PHASE2_SCOPE",
+                        "phase2_sample_hours_hourly": 0,
+                        "driver_quality_flag": "NOT_APPLICABLE_NO_PHASE2_SCOPE",
+                        "annual_penetration_load_corr_phase2": None,
+                        "corr_vre_load_phase2": None,
                         "cross_country_benchmark_slope": np.nan,
                         "cross_country_benchmark_r2": np.nan,
                         "cross_country_benchmark_p_value": np.nan,
@@ -527,11 +695,24 @@ def run_q2(
                 elif n_points_fit == 2:
                     slope_status = "FRAGILE"
 
-            corr_vre_load_phase2 = np.nan
+            phase2_years_for_hourly = sorted(
+                set(pd.to_numeric(phase2_scope.get("year"), errors="coerce").dropna().astype(int).tolist())
+            )
+            hourly_phase2 = _concat_hourly_phase2_sample(
+                hourly_by_country_year,
+                country=str(country),
+                years=phase2_years_for_hourly,
+            )
+            drivers_hourly = _compute_hourly_phase2_drivers(
+                hourly_phase2,
+                tech=tech,
+                min_hours_required=168,
+            )
+            annual_penetration_load_corr = np.nan
             if {"gen_vre_twh", "load_net_twh"}.issubset(set(phase2_scope.columns)):
-                corr_vre_load_phase2 = _safe_float(
-                    pd.to_numeric(phase2_scope["gen_vre_twh"], errors="coerce").corr(
-                        pd.to_numeric(phase2_scope["load_net_twh"], errors="coerce")
+                annual_penetration_load_corr = _safe_float(
+                    pd.to_numeric(phase2_scope.get("gen_vre_twh"), errors="coerce").corr(
+                        pd.to_numeric(phase2_scope.get("load_net_twh"), errors="coerce")
                     ),
                     np.nan,
                 )
@@ -585,8 +766,18 @@ def run_q2(
                     "mean_far_energy_phase2": _safe_float(pd.to_numeric(phase2_scope.get("far_observed"), errors="coerce").mean(), np.nan),
                     "mean_ir_p10_phase2": _safe_float(pd.to_numeric(phase2_scope.get("ir_p10"), errors="coerce").mean(), np.nan),
                     "mean_ttl_phase2": _safe_float(pd.to_numeric(phase2_scope.get("ttl_eur_mwh"), errors="coerce").mean(), np.nan),
-                    "vre_load_corr_phase2": np.nan,
-                    "surplus_load_trough_share_phase2": np.nan,
+                    "vre_load_corr_phase2": drivers_hourly.get("vre_load_corr_phase2"),
+                    "vre_load_corr_phase2_status": str(drivers_hourly.get("vre_load_corr_phase2_status", "")),
+                    "surplus_load_trough_share_phase2": drivers_hourly.get("surplus_load_trough_share_phase2"),
+                    "surplus_load_trough_share_phase2_status": str(drivers_hourly.get("surplus_load_trough_share_phase2_status", "")),
+                    "negative_price_load_trough_share_phase2": drivers_hourly.get("negative_price_load_trough_share_phase2"),
+                    "negative_price_load_trough_share_phase2_status": str(
+                        drivers_hourly.get("negative_price_load_trough_share_phase2_status", "")
+                    ),
+                    "phase2_sample_hours_hourly": int(_safe_float(drivers_hourly.get("sample_hours"), 0.0)),
+                    "driver_quality_flag": str(drivers_hourly.get("driver_quality_flag", "")),
+                    "annual_penetration_load_corr_phase2": annual_penetration_load_corr,
+                    "corr_vre_load_phase2": drivers_hourly.get("vre_load_corr_phase2"),
                     "cross_country_benchmark_slope": np.nan,
                     "cross_country_benchmark_r2": np.nan,
                     "cross_country_benchmark_p_value": np.nan,
@@ -595,7 +786,6 @@ def run_q2(
                     "penetration_share_load_mean_phase2": _safe_float(pd.to_numeric(phase2_scope.get(f"{str(tech).lower()}_penetration_share_load"), errors="coerce").mean(), np.nan),
                     "slope_quality_flag": slope_quality_flag,
                     "slope_quality_notes": slope_quality_notes,
-                    "corr_vre_load_phase2": corr_vre_load_phase2,
                 }
             )
 
@@ -736,7 +926,10 @@ def run_q2(
             years_used = _years_from_csv(row.get("years_used", ""))
             notes = str(row.get("slope_quality_notes", "")).strip()
             slope = _safe_float(row.get("slope"), np.nan)
-            corr_vre_load = _safe_float(row.get("corr_vre_load_phase2"), np.nan)
+            corr_vre_load = _safe_float(row.get("vre_load_corr_phase2"), np.nan)
+            sample_hours = int(_safe_float(row.get("phase2_sample_hours_hourly"), 0.0))
+            surplus_status = str(row.get("surplus_load_trough_share_phase2_status", "")).strip().upper()
+            surplus_share = _safe_float(row.get("surplus_load_trough_share_phase2"), np.nan)
 
             if exclude_2022 and 2022 in years_used:
                 q2_2022_fail = True
@@ -769,6 +962,26 @@ def run_q2(
                                 "message": f"{country}-{tech}: OLS impossible sans justification dans slope_quality_notes.",
                             }
                         )
+
+            if sample_hours >= 1000:
+                if not (np.isfinite(corr_vre_load) and -1.0 <= corr_vre_load <= 1.0 and abs(corr_vre_load) < 0.999999):
+                    q2_001_fail = True
+                    checks.append(
+                        {
+                            "status": "FAIL",
+                            "code": "Q2_HOURLY_CORR_INVALID",
+                            "message": f"{country}-{tech}: vre_load_corr_phase2 invalide pour sample_hours={sample_hours}.",
+                        }
+                    )
+                if surplus_status != "NOT_APPLICABLE_ZERO_SURPLUS" and not np.isfinite(surplus_share):
+                    q2_001_fail = True
+                    checks.append(
+                        {
+                            "status": "FAIL",
+                            "code": "Q2_HOURLY_SURPLUS_SHARE_MISSING",
+                            "message": f"{country}-{tech}: surplus_load_trough_share_phase2 manquant alors que surplus existe.",
+                        }
+                    )
 
             if np.isfinite(slope) and slope > 0.0 and np.isfinite(corr_vre_load) and corr_vre_load <= -0.5:
                 q2_002_warn += 1
@@ -843,7 +1056,7 @@ def run_q2(
     narrative = (
         "Q2 estime la pente de cannibalisation sur les annees explicitement phase2_market (Q1 corrige), "
         "en excluant annees de crise/qualite insuffisante; OLS si n>=4, endpoint-delta si n=2/3 (FRAGILE), "
-        "avec benchmark panel fixe-pays pour contextualiser les historiques courts."
+        "et calcule les drivers de phase2 sur donnees horaires (corr VRE-load, partage surplus en heures creuses, share neg-price en heures creuses)."
     )
 
     return ModuleResult(

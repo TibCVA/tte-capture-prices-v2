@@ -127,6 +127,43 @@ def _q1_end_year_quality_status(row: pd.Series) -> str:
     return "PASS"
 
 
+def stage2_active_from_metrics(
+    metrics_row: pd.Series | dict[str, Any] | None,
+    params: dict[str, float],
+    *,
+    suffix: str = "_at_end_year",
+) -> bool:
+    if metrics_row is None:
+        return False
+
+    def _pick(base: str) -> float:
+        if isinstance(metrics_row, pd.Series):
+            if f"{base}{suffix}" in metrics_row.index:
+                return _safe_float(metrics_row.get(f"{base}{suffix}"), np.nan)
+            return _safe_float(metrics_row.get(base), np.nan)
+        return _safe_float(metrics_row.get(f"{base}{suffix}", metrics_row.get(base, np.nan)), np.nan)
+
+    h_negative = _pick("h_negative")
+    h_below_5 = _pick("h_below_5")
+    capture_ratio_pv = _pick("capture_ratio_pv")
+    capture_ratio_wind = _pick("capture_ratio_wind")
+    sr_energy = _pick("sr_energy")
+
+    hneg_thr = _safe_param(params, "h_negative_stage2_min", 200.0)
+    hb5_thr = _safe_param(params, "h_below_5_stage2_min", 500.0)
+    cap_pv_thr = _safe_param(params, "capture_ratio_pv_stage2_max", 0.80)
+    cap_wind_thr = _safe_param(params, "capture_ratio_wind_stage2_max", 0.90)
+    sr_thr = _safe_param(params, "sr_energy_stage2_min", _safe_param(params, "sr_energy_material_min", 0.01))
+
+    return bool(
+        (np.isfinite(h_negative) and h_negative >= hneg_thr)
+        or (np.isfinite(h_below_5) and h_below_5 >= hb5_thr)
+        or (np.isfinite(capture_ratio_pv) and capture_ratio_pv <= cap_pv_thr)
+        or (np.isfinite(capture_ratio_wind) and capture_ratio_wind <= cap_wind_thr)
+        or (np.isfinite(sr_energy) and sr_energy >= sr_thr)
+    )
+
+
 def _quantile(series: pd.Series, q: float) -> float:
     s = pd.to_numeric(series, errors="coerce")
     if isinstance(s, pd.Series):
@@ -1605,6 +1642,10 @@ def run_q1(
             end_fields["neg_price_explained_by_surplus_ratio_at_end_year"] = np.nan
             end_fields["neg_price_unexplained_share_at_end_year"] = np.nan
         summary = summary.merge(end_fields, on="country", how="left")
+        summary["stage2_active_at_end_year"] = summary.apply(
+            lambda row: stage2_active_from_metrics(row, params, suffix="_at_end_year"),
+            axis=1,
+        )
         no_bascule_mask = pd.to_numeric(summary.get("bascule_year_market"), errors="coerce").isna()
         bascule_value_cols = [c for c in summary.columns if c.endswith("_at_bascule")]
         if bascule_value_cols:

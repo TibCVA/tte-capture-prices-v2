@@ -370,20 +370,30 @@ def _soc_boundary_targets(energy_mwh: float, mode: str, soc_init_frac: float) ->
 def _objective_satisfied(frontier: pd.DataFrame, objective: str, targets: dict[str, float]) -> pd.DataFrame:
     if frontier.empty:
         return pd.DataFrame()
+    far_col = "far_after_monotone" if "far_after_monotone" in frontier.columns else "far_after"
+    unabs_col = (
+        "surplus_unabs_energy_after_monotone"
+        if "surplus_unabs_energy_after_monotone" in frontier.columns
+        else "surplus_unabs_energy_after"
+    )
     if objective == "FAR_TARGET":
-        return frontier[frontier["far_after"] >= targets["target_far"]].sort_values(
+        return frontier[pd.to_numeric(frontier[far_col], errors="coerce") >= targets["target_far"]].sort_values(
             ["required_bess_power_mw", "required_bess_energy_mwh"]
         )
     if objective == "SURPLUS_UNABS_TARGET":
-        return frontier[frontier["surplus_unabs_energy_after"] <= targets["target_unabs"]].sort_values(
+        return frontier[pd.to_numeric(frontier[unabs_col], errors="coerce") <= targets["target_unabs"]].sort_values(
             ["required_bess_power_mw", "required_bess_energy_mwh"]
         )
     if objective == "LOW_PRICE_TARGET":
-        hneg_col = "h_negative_est_after" if "h_negative_est_after" in frontier.columns else (
-            "h_negative_proxy_after" if "h_negative_proxy_after" in frontier.columns else "h_negative_after"
+        hneg_col = (
+            "h_negative_after_monotone"
+            if "h_negative_after_monotone" in frontier.columns
+            else ("h_negative_est_after" if "h_negative_est_after" in frontier.columns else ("h_negative_proxy_after" if "h_negative_proxy_after" in frontier.columns else "h_negative_after"))
         )
-        hlow_col = "h_below_5_est_after" if "h_below_5_est_after" in frontier.columns else (
-            "h_below_5_proxy_after" if "h_below_5_proxy_after" in frontier.columns else "h_below_5_after"
+        hlow_col = (
+            "h_below_5_after_monotone"
+            if "h_below_5_after_monotone" in frontier.columns
+            else ("h_below_5_est_after" if "h_below_5_est_after" in frontier.columns else ("h_below_5_proxy_after" if "h_below_5_proxy_after" in frontier.columns else "h_below_5_after"))
         )
         mask = (
             (pd.to_numeric(frontier[hneg_col], errors="coerce") <= targets["h_negative_target"])
@@ -400,6 +410,97 @@ def _objective_satisfied(frontier: pd.DataFrame, objective: str, targets: dict[s
         mask = pd.to_numeric(frontier["turned_off_family_any"], errors="coerce").fillna(0.0) > 0
         return frontier[mask].sort_values(["required_bess_power_mw", "required_bess_energy_mwh"])
     return pd.DataFrame()
+
+
+def _apply_monotone_envelope(frontier: pd.DataFrame) -> pd.DataFrame:
+    if frontier.empty:
+        return frontier
+    out = frontier.copy()
+    p = pd.to_numeric(out.get("required_bess_power_mw"), errors="coerce")
+    e = pd.to_numeric(out.get("required_bess_energy_mwh"), errors="coerce")
+    unabs = pd.to_numeric(out.get("surplus_unabs_energy_after"), errors="coerce")
+    far = pd.to_numeric(out.get("far_after"), errors="coerce")
+    hneg_base_col = "h_negative_est_after" if "h_negative_est_after" in out.columns else "h_negative_after"
+    hneg = pd.to_numeric(out.get(hneg_base_col), errors="coerce")
+    hlow_base_col = "h_below_5_est_after" if "h_below_5_est_after" in out.columns else "h_below_5_after"
+    hlow = pd.to_numeric(out.get(hlow_base_col), errors="coerce")
+
+    n = len(out)
+    unabs_m = np.full(n, np.nan, dtype=float)
+    far_m = np.full(n, np.nan, dtype=float)
+    hneg_m = np.full(n, np.nan, dtype=float)
+    hlow_m = np.full(n, np.nan, dtype=float)
+
+    for i in range(n):
+        if not (np.isfinite(p.iloc[i]) and np.isfinite(e.iloc[i])):
+            continue
+        dominated = (p <= p.iloc[i] + 1e-9) & (e <= e.iloc[i] + 1e-9)
+        dominated = dominated & np.isfinite(p) & np.isfinite(e)
+
+        unabs_vals = unabs[dominated & np.isfinite(unabs)]
+        far_vals = far[dominated & np.isfinite(far)]
+        hneg_vals = hneg[dominated & np.isfinite(hneg)]
+        hlow_vals = hlow[dominated & np.isfinite(hlow)]
+
+        if not unabs_vals.empty:
+            unabs_m[i] = float(unabs_vals.min())
+        if not far_vals.empty:
+            far_m[i] = float(far_vals.max())
+        if not hneg_vals.empty:
+            hneg_m[i] = float(hneg_vals.min())
+        if not hlow_vals.empty:
+            hlow_m[i] = float(hlow_vals.min())
+
+    out["surplus_unabs_energy_after_raw"] = unabs
+    out["far_after_raw"] = far
+    out[f"{hneg_base_col}_raw"] = hneg
+    out[f"{hlow_base_col}_raw"] = hlow
+
+    out["surplus_unabs_energy_after_monotone"] = pd.Series(unabs_m, index=out.index, dtype=float)
+    out["far_after_monotone"] = pd.Series(far_m, index=out.index, dtype=float)
+    out["h_negative_after_monotone"] = pd.Series(hneg_m, index=out.index, dtype=float)
+    out["h_below_5_after_monotone"] = pd.Series(hlow_m, index=out.index, dtype=float)
+    out["h_below_5_after_monotone"] = np.maximum(
+        pd.to_numeric(out["h_below_5_after_monotone"], errors="coerce"),
+        pd.to_numeric(out["h_negative_after_monotone"], errors="coerce"),
+    )
+
+    out["surplus_unabs_energy_after"] = pd.to_numeric(out["surplus_unabs_energy_after_monotone"], errors="coerce").combine_first(unabs)
+    out["far_after"] = pd.to_numeric(out["far_after_monotone"], errors="coerce").combine_first(far)
+    if hneg_base_col in out.columns:
+        out[hneg_base_col] = pd.to_numeric(out["h_negative_after_monotone"], errors="coerce").combine_first(hneg)
+    if "h_negative_after" in out.columns:
+        out["h_negative_after"] = pd.to_numeric(out["h_negative_after_monotone"], errors="coerce").combine_first(
+            pd.to_numeric(out["h_negative_after"], errors="coerce")
+        )
+    if hlow_base_col in out.columns:
+        out[hlow_base_col] = pd.to_numeric(out["h_below_5_after_monotone"], errors="coerce").combine_first(hlow)
+    if "h_below_5_after" in out.columns:
+        out["h_below_5_after"] = pd.to_numeric(out["h_below_5_after_monotone"], errors="coerce").combine_first(
+            pd.to_numeric(out["h_below_5_after"], errors="coerce")
+        )
+
+    if "h_negative_est_before" in out.columns and "h_negative_est_after" in out.columns:
+        out["delta_h_negative_est"] = pd.to_numeric(out["h_negative_est_after"], errors="coerce") - pd.to_numeric(
+            out["h_negative_est_before"],
+            errors="coerce",
+        )
+    if "h_negative_before" in out.columns and "h_negative_after" in out.columns:
+        out["delta_h_negative"] = pd.to_numeric(out["h_negative_after"], errors="coerce") - pd.to_numeric(
+            out["h_negative_before"],
+            errors="coerce",
+        )
+    if "h_below_5_est_before" in out.columns and "h_below_5_est_after" in out.columns:
+        out["delta_h_below_5_est"] = pd.to_numeric(out["h_below_5_est_after"], errors="coerce") - pd.to_numeric(
+            out["h_below_5_est_before"],
+            errors="coerce",
+        )
+    if "h_below_5_before" in out.columns and "h_below_5_after" in out.columns:
+        out["delta_h_below_5"] = pd.to_numeric(out["h_below_5_after"], errors="coerce") - pd.to_numeric(
+            out["h_below_5_before"],
+            errors="coerce",
+        )
+    return out
 
 
 def _expand_grid_once(
@@ -725,8 +826,8 @@ def run_q4(
                 kpis={
                     "objective": objective,
                     "objective_met": False,
-                    "objective_reason": "market_proxy_invalid",
-                    "objective_not_reached": True,
+                    "objective_reason": "not_applicable",
+                    "objective_not_reached": False,
                     "compute_time_sec": float(perf_counter() - t_start),
                     "cache_hit": cache_hit,
                     "engine_version": Q4_ENGINE_VERSION,
@@ -740,7 +841,10 @@ def run_q4(
                                 "country": country,
                                 "year": year,
                                 "status": "FAIL",
-                                "reason": "market_proxy_invalid",
+                                "reason": "not_applicable",
+                                "objective_met": False,
+                                "objective_reason": "not_applicable",
+                                "objective_not_reached": False,
                                 "proxy_quality_status": proxy_quality_status,
                                 "proxy_quality_reasons": proxy_quality_reasons,
                                     "output_schema_version": Q4_OUTPUT_SCHEMA_VERSION,
@@ -1126,7 +1230,7 @@ def run_q4(
                         "output_schema_version": Q4_OUTPUT_SCHEMA_VERSION,
                     }
                 )
-            return pd.DataFrame(rows)
+            return _apply_monotone_envelope(pd.DataFrame(rows))
 
         current_power_grid = list(power_grid)
         current_duration_grid = list(duration_grid)
@@ -1310,6 +1414,7 @@ def run_q4(
     for col, default_val in default_cols.items():
         if col not in frontier.columns:
             frontier[col] = default_val
+    frontier = _apply_monotone_envelope(frontier)
 
     tol = 1e-6
     if dropped_duplicates > 0:
@@ -1671,12 +1776,14 @@ def run_q4(
     zero_mask = (p_mw.abs() <= tol) & (e_mwh.abs() <= tol)
     baseline_rows = frontier[zero_mask].sort_values(["required_bess_power_mw", "required_bess_energy_mwh"])
     baseline_row = baseline_rows.iloc[0] if not baseline_rows.empty else None
-    base_far_val = _safe_float(frontier.get("far_before", pd.Series(dtype=float)).iloc[0], np.nan) if ("far_before" in frontier.columns and not frontier.empty) else np.nan
+    p_max_grid = float(p_mw.max()) if len(p_mw) else 0.0
+    d_max_grid = float(pd.to_numeric(frontier["required_bess_duration_h"], errors="coerce").max()) if len(frontier) else 0.0
 
     objective_met = False
-    objective_reason = ""
+    objective_reason = "not_applicable"
     objective_recommendation = ""
-    not_sensitive = False
+    objective_not_reached = False
+    objective_applicable = True
     objective_direction = "higher_is_better"
     if objective == "FAR_TARGET":
         objective_target_value = targets["target_far"]
@@ -1694,150 +1801,108 @@ def run_q4(
         objective_target_value = 1.0
         objective_direction = "higher_is_better"
 
-    if baseline_row is not None:
-        nonzero_rows = frontier[~zero_mask].copy()
-        has_effect = False
-        for mcol in [
-            "far_after",
-            "surplus_unabs_energy_after",
-            "h_negative_after",
-            "h_below_5_after",
-            "capture_ratio_pv_after",
-            "capture_ratio_wind_after",
-        ]:
-            if mcol not in frontier.columns:
-                continue
-            base_val = _safe_float(baseline_row.get(mcol), np.nan)
-            vals = pd.to_numeric(nonzero_rows.get(mcol), errors="coerce")
-            if vals.empty:
-                continue
-            if np.isfinite(base_val):
-                if bool((vals - base_val).abs().fillna(0.0).gt(1e-9).any()):
+    def _baseline_meets_objective(row: pd.Series | None) -> bool:
+        if row is None:
+            return False
+        if objective == "FAR_TARGET":
+            return bool(_safe_float(row.get("far_after"), -np.inf) >= targets["target_far"])
+        if objective == "SURPLUS_UNABS_TARGET":
+            return bool(_safe_float(row.get("surplus_unabs_energy_after"), np.inf) <= targets["target_unabs"])
+        if objective == "LOW_PRICE_TARGET":
+            return bool(
+                (_safe_float(row.get("h_negative_est_after", row.get("h_negative_after")), np.inf) <= targets["h_negative_target"])
+                and (_safe_float(row.get("h_below_5_est_after", row.get("h_below_5_after")), np.inf) <= targets["h_below_5_target"])
+            )
+        if objective == "VALUE_TARGET":
+            return bool(
+                (_safe_float(row.get("capture_ratio_pv_after"), -np.inf) >= targets["capture_ratio_pv_target"])
+                or (_safe_float(row.get("capture_ratio_wind_after"), -np.inf) >= targets["capture_ratio_wind_target"])
+            )
+        return bool(_safe_float(row.get("turned_off_family_any"), 0.0) > 0.0)
+
+    best = baseline_row if baseline_row is not None else (frontier.iloc[0] if not frontier.empty else None)
+    baseline_met = _baseline_meets_objective(baseline_row)
+    if baseline_met:
+        objective_met = True
+        objective_reason = "met_in_base_grid"
+        objective_not_reached = False
+        best = baseline_row
+    else:
+        if baseline_row is not None:
+            nonzero_rows = frontier[~zero_mask].copy()
+            has_effect = False
+            for mcol in [
+                "far_after",
+                "surplus_unabs_energy_after",
+                "h_negative_after",
+                "h_below_5_after",
+                "capture_ratio_pv_after",
+                "capture_ratio_wind_after",
+            ]:
+                if mcol not in frontier.columns:
+                    continue
+                base_val = _safe_float(baseline_row.get(mcol), np.nan)
+                vals = pd.to_numeric(nonzero_rows.get(mcol), errors="coerce")
+                if vals.empty:
+                    continue
+                if np.isfinite(base_val):
+                    if bool((vals - base_val).abs().fillna(0.0).gt(1e-9).any()):
+                        has_effect = True
+                        break
+                elif vals.notna().any():
                     has_effect = True
                     break
-            elif vals.notna().any():
-                has_effect = True
-                break
-        not_sensitive = bool(nonzero_rows.empty or (not has_effect))
-
-        if objective == "FAR_TARGET":
-            baseline_met = bool(_safe_float(baseline_row.get("far_after"), -np.inf) >= targets["target_far"])
-        elif objective == "SURPLUS_UNABS_TARGET":
-            baseline_met = bool(_safe_float(baseline_row.get("surplus_unabs_energy_after"), np.inf) <= targets["target_unabs"])
-        elif objective == "LOW_PRICE_TARGET":
-            baseline_met = bool(
-                (_safe_float(baseline_row.get("h_negative_est_after", baseline_row.get("h_negative_after")), np.inf) <= targets["h_negative_target"])
-                and (_safe_float(baseline_row.get("h_below_5_est_after", baseline_row.get("h_below_5_after")), np.inf) <= targets["h_below_5_target"])
-            )
-        elif objective == "VALUE_TARGET":
-            baseline_met = bool(
-                (_safe_float(baseline_row.get("capture_ratio_pv_after"), -np.inf) >= targets["capture_ratio_pv_target"])
-                or (_safe_float(baseline_row.get("capture_ratio_wind_after"), -np.inf) >= targets["capture_ratio_wind_target"])
-            )
-        else:
-            baseline_met = bool(_safe_float(baseline_row.get("turned_off_family_any"), 0.0) > 0.0)
-        if baseline_met:
-            objective_met = True
-            objective_reason = "already_met"
-            best = baseline_row
-        elif not_sensitive:
-            objective_met = False
-            objective_reason = "not_sensitive"
-            objective_recommendation = "not_sensitive_to_bess"
-            best = baseline_row
-            checks.append(
-                {
-                    "status": "WARN",
-                    "code": "Q4_NOT_SENSITIVE",
-                    "message": "Les configurations BESS testees ne modifient pas les metriques cibles; required=0.",
-                }
-            )
-        else:
-            best = None
-    else:
-        best = None
-
-    if (not objective_met) and (not not_sensitive):
-        if not feasible.empty:
-            objective_met = True
-            objective_reason = "met_after_grid_expansion" if grid_expansions_used > 0 else "met_in_grid"
-            best = feasible.iloc[0]
-        else:
-            if objective == "FAR_TARGET":
-                best = frontier.sort_values(["far_after", "required_bess_power_mw", "required_bess_energy_mwh"], ascending=[False, True, True]).iloc[0]
-                baseline_metric = base_far_val
-                best_metric = _safe_float(best.get("far_after"), np.nan)
-                improvement = best_metric - baseline_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
-            elif objective == "SURPLUS_UNABS_TARGET":
-                best = frontier.sort_values(["surplus_unabs_energy_after", "required_bess_power_mw", "required_bess_energy_mwh"]).iloc[0]
-                baseline_metric = _safe_float(baseline_row.get("surplus_unabs_energy_after"), np.nan) if baseline_row is not None else np.nan
-                best_metric = _safe_float(best.get("surplus_unabs_energy_after"), np.nan)
-                improvement = baseline_metric - best_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
-            elif objective == "LOW_PRICE_TARGET":
-                hneg_sort_col = "h_negative_est_after" if "h_negative_est_after" in frontier.columns else "h_negative_after"
-                hlow_sort_col = "h_below_5_est_after" if "h_below_5_est_after" in frontier.columns else "h_below_5_after"
-                best = frontier.sort_values(
-                    [hneg_sort_col, hlow_sort_col, "required_bess_power_mw", "required_bess_energy_mwh"]
-                ).iloc[0]
-                baseline_metric = _safe_float(
-                    baseline_row.get("h_negative_est_after", baseline_row.get("h_negative_after")),
-                    np.nan,
-                ) if baseline_row is not None else np.nan
-                best_metric = _safe_float(best.get("h_negative_est_after", best.get("h_negative_after")), np.nan)
-                improvement = baseline_metric - best_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
-            elif objective == "VALUE_TARGET":
-                best = frontier.sort_values(
-                    ["capture_ratio_pv_after", "capture_ratio_wind_after", "required_bess_power_mw", "required_bess_energy_mwh"],
-                    ascending=[False, False, True, True],
-                ).iloc[0]
-                baseline_metric = _safe_float(baseline_row.get("capture_ratio_pv_after"), np.nan) if baseline_row is not None else np.nan
-                best_metric = _safe_float(best.get("capture_ratio_pv_after"), np.nan)
-                improvement = best_metric - baseline_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
+            not_sensitive = bool(nonzero_rows.empty or (not has_effect))
+            if not_sensitive:
+                objective_recommendation = "not_sensitive_to_bess"
+                checks.append(
+                    {
+                        "status": "WARN",
+                        "code": "Q4_NOT_SENSITIVE",
+                        "message": "Les configurations BESS testees ne modifient pas materiallement les metriques cibles.",
+                    }
+                )
+        if objective_applicable:
+            if not feasible.empty:
+                objective_met = True
+                objective_not_reached = False
+                objective_reason = "met_after_grid_expansion" if grid_expansions_used > 0 else "met_in_base_grid"
+                best = feasible.iloc[0]
             else:
-                best = frontier.sort_values(
-                    ["turned_off_family_any", "required_bess_power_mw", "required_bess_energy_mwh"],
-                    ascending=[False, True, True],
-                ).iloc[0]
-                baseline_metric = _safe_float(baseline_row.get("turned_off_family_any"), np.nan) if baseline_row is not None else np.nan
-                best_metric = _safe_float(best.get("turned_off_family_any"), np.nan)
-                improvement = best_metric - baseline_metric if np.isfinite(best_metric) and np.isfinite(baseline_metric) else np.nan
-
-            p_max_grid = float(p_mw.max()) if len(p_mw) else 0.0
-            d_max_grid = float(pd.to_numeric(frontier["required_bess_duration_h"], errors="coerce").max()) if len(frontier) else 0.0
-            on_boundary = bool(
-                abs(_safe_float(best.get("required_bess_power_mw"), 0.0) - p_max_grid) <= 1e-9
-                or abs(_safe_float(best.get("required_bess_duration_h"), 0.0) - d_max_grid) <= 1e-9
-            )
-            if np.isfinite(improvement) and improvement <= 1e-6:
-                objective_reason = "unreachable_under_policy"
-            elif on_boundary:
-                objective_reason = "grid_too_small"
-            else:
-                objective_reason = "unreachable_under_policy"
-
-            if objective_reason == "grid_too_small":
+                objective_met = False
+                objective_not_reached = True
+                objective_reason = "not_met_grid_too_small"
+                if objective == "FAR_TARGET":
+                    best = frontier.sort_values(["far_after", "required_bess_power_mw", "required_bess_energy_mwh"], ascending=[False, True, True]).iloc[0]
+                elif objective == "SURPLUS_UNABS_TARGET":
+                    best = frontier.sort_values(["surplus_unabs_energy_after", "required_bess_power_mw", "required_bess_energy_mwh"]).iloc[0]
+                elif objective == "LOW_PRICE_TARGET":
+                    hneg_sort_col = "h_negative_est_after" if "h_negative_est_after" in frontier.columns else "h_negative_after"
+                    hlow_sort_col = "h_below_5_est_after" if "h_below_5_est_after" in frontier.columns else "h_below_5_after"
+                    best = frontier.sort_values(
+                        [hneg_sort_col, hlow_sort_col, "required_bess_power_mw", "required_bess_energy_mwh"]
+                    ).iloc[0]
+                elif objective == "VALUE_TARGET":
+                    best = frontier.sort_values(
+                        ["capture_ratio_pv_after", "capture_ratio_wind_after", "required_bess_power_mw", "required_bess_energy_mwh"],
+                        ascending=[False, False, True, True],
+                    ).iloc[0]
+                else:
+                    best = frontier.sort_values(
+                        ["turned_off_family_any", "required_bess_power_mw", "required_bess_energy_mwh"],
+                        ascending=[False, True, True],
+                    ).iloc[0]
                 rec_p = max(p_max_grid + 1.0, p_max_grid * 1.5)
                 rec_d = max(d_max_grid + 0.5, d_max_grid * 1.5)
                 objective_recommendation = f"expand_grid_to_power_mw>={rec_p:.1f};duration_h>={rec_d:.1f}"
                 warnings.append(
-                    f"Objectif non atteint: grille trop petite (raison=grid_too_small). "
-                    f"Recommendation: power >= {rec_p:.1f} MW, duration >= {rec_d:.1f} h."
+                    f"Objectif non atteint: grille insuffisante. Recommendation: power >= {rec_p:.1f} MW, duration >= {rec_d:.1f} h."
                 )
                 checks.append(
                     {
                         "status": "WARN",
                         "code": "Q4_OBJECTIVE_NOT_REACHED_GRID",
                         "message": "Objectif non atteint sur la grille courante; augmenter les bornes de recherche.",
-                    }
-                )
-            else:
-                objective_recommendation = "review_policy_constraints_or_targets"
-                warnings.append("Objectif non atteint: contraintes de policy/dispatch limitantes (raison=unreachable_under_policy).")
-                checks.append(
-                    {
-                        "status": "WARN",
-                        "code": "Q4_OBJECTIVE_UNREACHABLE",
-                        "message": "Objectif non atteint sous les contraintes de policy actuelles.",
                     }
                 )
 
@@ -1854,15 +1919,70 @@ def run_q4(
         else:
             objective_value_after = _safe_float(best.get("turned_off_family_any"), np.nan)
 
-    if np.isfinite(objective_value_after) and np.isfinite(_safe_float(objective_target_value, np.nan)):
+    if objective_applicable and np.isfinite(objective_value_after) and np.isfinite(_safe_float(objective_target_value, np.nan)):
         if objective_direction == "lower_is_better":
             objective_met = bool(objective_value_after <= float(objective_target_value) + 1e-9)
         elif objective_direction == "higher_is_better":
             objective_met = bool(objective_value_after >= float(objective_target_value) - 1e-9)
-    if (not objective_met) and objective_reason in {"already_met", "met_in_grid", "met_after_grid_expansion"}:
-        objective_reason = "not_achievable"
 
-    objective_not_reached = not objective_met
+    if objective_met:
+        objective_reason = "met_after_grid_expansion" if grid_expansions_used > 0 else "met_in_base_grid"
+        objective_not_reached = False
+    elif not objective_applicable:
+        objective_reason = "not_applicable"
+        objective_not_reached = False
+    else:
+        objective_reason = "not_met_grid_too_small"
+        objective_not_reached = True
+
+    boundary_solution = False
+    if best is not None and objective_met:
+        boundary_solution = bool(
+            abs(_safe_float(best.get("required_bess_power_mw"), 0.0) - p_max_grid) <= 1e-9
+            or abs(_safe_float(best.get("required_bess_duration_h"), 0.0) - d_max_grid) <= 1e-9
+        )
+        if boundary_solution:
+            rec_p = max(p_max_grid + 1.0, p_max_grid * 1.25)
+            rec_d = max(d_max_grid + 0.5, d_max_grid * 1.25)
+            warnings.append(
+                f"Solution sur borne de grille: envisager un raffinement (power >= {rec_p:.1f} MW, duration >= {rec_d:.1f} h)."
+            )
+            checks.append(
+                {
+                    "status": "WARN",
+                    "code": "GRID_BOUNDARY_SOLUTION",
+                    "message": "Objectif atteint mais solution situee en bord de grille; affiner/etendre la grille.",
+                }
+            )
+
+    allowed_objective_reasons = {
+        "met_in_base_grid",
+        "met_after_grid_expansion",
+        "not_met_grid_too_small",
+        "not_applicable",
+    }
+    if objective_reason not in allowed_objective_reasons:
+        objective_reason = "not_applicable" if not objective_applicable else ("met_in_base_grid" if objective_met else "not_met_grid_too_small")
+        objective_not_reached = bool((not objective_met) and objective_reason == "not_met_grid_too_small")
+
+    if objective_met and objective_not_reached:
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q4_OBJECTIVE_FLAG_CONTRADICTION",
+                "message": "Incoherence: objective_met=True mais objective_not_reached=True.",
+            }
+        )
+        objective_not_reached = False
+
+    if (not objective_met) and objective_reason == "not_met_grid_too_small":
+        pass
+    elif objective_met:
+        # Guardrail: no grid-not-reached warning when objective is achieved.
+        checks = [c for c in checks if str(c.get("code", "")).upper() != "Q4_OBJECTIVE_NOT_REACHED_GRID"]
+
+    if best is None:
+        best = pd.Series(dtype=object)
 
     summary = pd.DataFrame(
         [
@@ -1874,16 +1994,13 @@ def run_q4(
                 "objective_met": objective_met,
                 "objective_reason": objective_reason,
                 "objective_not_reached": objective_not_reached,
-                "status": (
-                    "already_ok"
-                    if objective_reason == "already_met"
-                    else ("not_sensitive" if objective_reason == "not_sensitive" else ("ok" if objective_met else "not_achievable"))
-                ),
+                "status": ("ok" if objective_met else ("not_applicable" if objective_reason == "not_applicable" else "not_achievable")),
                 "reason": objective_reason,
                 "objective_target_value": objective_target_value,
                 "objective_direction": objective_direction,
                 "objective_value_after": objective_value_after,
                 "objective_recommendation": objective_recommendation,
+                "grid_boundary_solution": boundary_solution,
                 "pv_capacity_proxy_mw": float(pv_capacity_proxy),
                 "power_grid_max_mw": float(pd.to_numeric(frontier["required_bess_power_mw"], errors="coerce").max()) if not frontier.empty else np.nan,
                 "duration_grid_max_h": float(pd.to_numeric(frontier["required_bess_duration_h"], errors="coerce").max()) if not frontier.empty else np.nan,
@@ -1898,6 +2015,41 @@ def run_q4(
     summary["bess_power_mw"] = pd.to_numeric(summary["required_bess_power_mw"], errors="coerce")
     summary["duration_h"] = pd.to_numeric(summary["required_bess_duration_h"], errors="coerce")
     summary["bess_energy_mwh"] = pd.to_numeric(summary["required_bess_energy_mwh"], errors="coerce")
+    summary_objective_met = bool(summary["objective_met"].iloc[0])
+    summary_objective_not_reached = bool(summary["objective_not_reached"].iloc[0])
+    summary_objective_reason = str(summary["objective_reason"].iloc[0])
+    if summary_objective_reason not in allowed_objective_reasons:
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q4_OBJECTIVE_REASON_INVALID",
+                "message": f"objective_reason invalide: {summary_objective_reason}",
+            }
+        )
+    if summary_objective_met and summary_objective_not_reached:
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q4_OBJECTIVE_FLAG_CONTRADICTION",
+                "message": "objective_met=True incompatible avec objective_not_reached=True.",
+            }
+        )
+    if (not summary_objective_met) and summary_objective_reason in {"met_in_base_grid", "met_after_grid_expansion"}:
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q4_OBJECTIVE_REASON_CONTRADICTION",
+                "message": "objective_reason de type 'met_*' alors que objective_met=False.",
+            }
+        )
+    if summary_objective_not_reached and summary_objective_reason != "not_met_grid_too_small":
+        checks.append(
+            {
+                "status": "FAIL",
+                "code": "Q4_OBJECTIVE_NOT_REACHED_REASON_CONTRADICTION",
+                "message": "objective_not_reached=True exige objective_reason='not_met_grid_too_small'.",
+            }
+        )
 
     if dispatch_mode == "PRICE_ARBITRAGE_SIMPLE" and float(summary["revenue_bess_price_taker"].iloc[0]) < 0:
         warnings.append("Revenu d'arbitrage annuel negatif: spread insuffisant ou regle de dispatch trop simple.")

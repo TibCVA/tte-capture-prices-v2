@@ -232,7 +232,7 @@ def test_q4_no_default_250mw_when_frontier_only_zero(make_raw_panel, countries_c
     only_zero_frontier = (frontier_power.abs() <= 1e-9).all()
     assert not (pd.notna(required_power) and abs(float(required_power) - 250.0) <= 1e-9)
     if only_zero_frontier:
-        assert (pd.isna(required_power)) or (abs(float(required_power)) <= 1e-9) or (str(summary.get("status", "")).lower() == "not_sensitive")
+        assert (pd.isna(required_power)) or (abs(float(required_power)) <= 1e-9) or (str(summary.get("status", "")).lower() in {"not_sensitive", "not_applicable"})
 
 
 def test_q5_missing_base_explicit_status_and_nan_deltas(make_raw_panel, countries_cfg, thresholds_cfg):

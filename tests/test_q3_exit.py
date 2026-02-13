@@ -2,6 +2,7 @@
 
 import pandas as pd
 
+from src.modules.q1_transition import run_q1
 from src.modules.q3_exit import _additional_sink_power_p95, run_q3
 
 
@@ -140,6 +141,50 @@ def test_q3_rows_contain_scenario_audit_fields(annual_panel_fixture, make_raw_pa
     assert (out["scenario_id"].astype(str) == "DEMAND_UP").all()
     fail_codes = {str(c.get("code")) for c in res.checks if str(c.get("status", "")).upper() == "FAIL"}
     assert "Q3_SCENARIO_ID_MISSING" not in fail_codes
+
+
+def test_q3_applicable_when_q1_stage2_active_at_end_year(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):
+    from src.processing import build_hourly_table
+
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    panel = annual_panel_fixture[annual_panel_fixture["country"] == "FR"].copy()
+
+    panel.loc[panel["year"] < 2024, "h_negative_obs"] = 0.0
+    panel.loc[panel["year"] < 2024, "h_below_5_obs"] = 10.0
+    panel.loc[panel["year"] < 2024, "capture_ratio_pv"] = 1.05
+    panel.loc[panel["year"] < 2024, "capture_ratio_wind"] = 1.05
+    panel.loc[panel["year"] < 2024, "sr_energy"] = 0.0
+    panel.loc[panel["year"] < 2024, "sr_hours"] = 0.0
+    panel.loc[panel["year"] < 2024, "far_energy"] = 0.99
+    panel.loc[panel["year"] < 2024, "ir_p10"] = 0.5
+
+    panel.loc[panel["year"] == 2024, "h_negative_obs"] = 420.0
+    panel.loc[panel["year"] == 2024, "h_below_5_obs"] = 800.0
+    panel.loc[panel["year"] == 2024, "capture_ratio_pv"] = 0.70
+    panel.loc[panel["year"] == 2024, "capture_ratio_wind"] = 0.82
+    panel.loc[panel["year"] == 2024, "sr_energy"] = 0.03
+    panel.loc[panel["year"] == 2024, "sr_hours"] = 0.15
+    panel.loc[panel["year"] == 2024, "far_energy"] = 0.92
+    panel.loc[panel["year"] == 2024, "ir_p10"] = 1.9
+
+    q1 = run_q1(panel, assumptions, {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]}, "test_q1_ref")
+    q1_row = q1.tables["Q1_country_summary"].iloc[0]
+    assert bool(q1_row.get("stage2_active_at_end_year", False)) is True
+
+    q3 = run_q3(
+        panel,
+        {("FR", 2024): hourly},
+        assumptions,
+        {"countries": ["FR"], "years": [2021, 2022, 2023, 2024]},
+        "test_q3_ref",
+    )
+    out = q3.tables["Q3_status"]
+    assert not out.empty
+    assert str(out.iloc[0].get("applicability_flag", "")).upper() == "APPLICABLE"
+    fail_codes = {str(c.get("code")) for c in q3.checks if str(c.get("status", "")).upper() == "FAIL"}
+    assert "Q3_Q1_PHASE2_ENDYEAR_COHERENCE" not in fail_codes
 
 
 def test_q3_emits_test_q3_001_reality_check(annual_panel_fixture, make_raw_panel, countries_cfg, thresholds_cfg):

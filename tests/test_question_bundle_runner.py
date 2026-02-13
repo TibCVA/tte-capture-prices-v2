@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 import src.modules.question_bundle_runner as qbundle_runner
 from src.config_loader import load_phase2_assumptions
-from src.modules.question_bundle_runner import _annotate_comparison_interpretability, _evaluate_test_ledger, run_question_bundle
+from src.modules.question_bundle_runner import _annotate_comparison_interpretability, _evaluate_test_ledger, _q1_comparison, run_question_bundle
 from src.modules.result import ModuleResult
 from src.modules.test_registry import get_question_tests
 from src.processing import build_hourly_table
@@ -223,6 +224,63 @@ def test_q3_comparison_annotation_flags_non_testable_and_fragile() -> None:
     assert out.loc[out["country"] == "FR", "interpretability_status"].iloc[0] == "NON_TESTABLE"
     assert out.loc[out["country"] == "DE", "interpretability_status"].iloc[0] == "FRAGILE"
     assert out.loc[out["country"] == "ES", "interpretability_status"].iloc[0] == "INFORMATIVE"
+
+
+def test_q1_comparison_encodes_not_reached_without_nan() -> None:
+    hist = ModuleResult(
+        module_id="Q1",
+        run_id="TEST_Q1_HIST",
+        selection={"mode": "HIST"},
+        assumptions_used=[],
+        kpis={},
+        tables={
+            "Q1_country_summary": pd.DataFrame(
+                [
+                    {"country": "FR", "bascule_year_market": 2028.0, "bascule_status_market": "reached"},
+                    {"country": "DE", "bascule_year_market": 2032.0, "bascule_status_market": "reached"},
+                ]
+            )
+        },
+        figures=[],
+        narrative_md="",
+        checks=[],
+        warnings=[],
+        mode="HIST",
+        scenario_id="HIST",
+    )
+    scen = ModuleResult(
+        module_id="Q1",
+        run_id="TEST_Q1_SCEN",
+        selection={"mode": "SCEN", "scenario_id": "LOW_RIGIDITY"},
+        assumptions_used=[],
+        kpis={},
+        tables={
+            "Q1_country_summary": pd.DataFrame(
+                [
+                    {"country": "FR", "bascule_year_market": 2030.0, "bascule_status_market": "reached"},
+                    {"country": "DE", "bascule_year_market": np.nan, "bascule_status_market": "not_reached_in_window"},
+                ]
+            )
+        },
+        figures=[],
+        narrative_md="",
+        checks=[],
+        warnings=[],
+        mode="SCEN",
+        scenario_id="LOW_RIGIDITY",
+    )
+
+    cmp = _q1_comparison(hist, {"LOW_RIGIDITY": scen})
+    assert not cmp.empty
+    assert cmp["reason"].astype(str).str.contains("delta_non_interpretable_nan").sum() == 0
+    for v in cmp["scen_value"].tolist():
+        assert isinstance(v, int) or (v is None)
+    de = cmp[cmp["country"].astype(str) == "DE"].iloc[0]
+    assert str(de["status"]) == "OK_NOT_REACHED"
+    assert str(de["reason"]) == "bascule_not_reached_by_horizon"
+
+    annotated = _annotate_comparison_interpretability("Q1", cmp)
+    assert annotated["interpretability_reason"].astype(str).str.contains("delta_non_interpretable_nan").sum() == 0
 
 
 def _empty_module_result(module_id: str, mode: str, scenario_id: str | None = None) -> ModuleResult:

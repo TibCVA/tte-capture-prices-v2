@@ -1,8 +1,48 @@
 ﻿from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from src.modules.q2_slope import run_q2
+
+
+def _hourly_phase2_sample_map(
+    country: str,
+    years: list[int],
+    *,
+    hours_per_year: int = 400,
+    seed: int = 42,
+) -> dict[tuple[str, int], pd.DataFrame]:
+    rng = np.random.default_rng(seed)
+    out: dict[tuple[str, int], pd.DataFrame] = {}
+    for y in years:
+        idx = pd.date_range(f"{int(y)}-01-01", periods=int(hours_per_year), freq="h", tz="UTC")
+        t = np.linspace(0.0, 2.0 * np.pi, int(hours_per_year))
+        load = 950.0 + 80.0 * np.sin(t) + rng.normal(0.0, 15.0, int(hours_per_year))
+        pv = 330.0 + 90.0 * np.cos(t + 0.6) + rng.normal(0.0, 12.0, int(hours_per_year))
+        wind = 240.0 + 40.0 * np.sin(2.0 * t + 0.2) + rng.normal(0.0, 10.0, int(hours_per_year))
+        must_run = 520.0 + rng.normal(0.0, 6.0, int(hours_per_year))
+        vre = np.clip(pv, 0.0, None) + np.clip(wind, 0.0, None)
+        load = np.clip(load, 200.0, None)
+        must_run = np.clip(must_run, 0.0, None)
+        nrl = load - vre - must_run
+        price = np.where(nrl < 0.0, -15.0, 55.0) + rng.normal(0.0, 2.0, int(hours_per_year))
+        out[(str(country), int(y))] = pd.DataFrame(
+            {
+                "load_mw": load,
+                "load_total_mw": load,
+                "psh_pump_mw": 0.0,
+                "gen_solar_mw": np.clip(pv, 0.0, None),
+                "gen_wind_on_mw": np.clip(wind, 0.0, None),
+                "gen_wind_off_mw": 0.0,
+                "gen_vre_mw": np.clip(vre, 0.0, None),
+                "gen_must_run_mw": must_run,
+                "nrl_mw": nrl,
+                "price_da_eur_mwh": price,
+            },
+            index=idx,
+        )
+    return out
 
 
 def test_q2_slope_basic(annual_panel_fixture):
@@ -162,10 +202,57 @@ def test_q2_warns_on_positive_slope_with_strong_negative_vre_load_corr():
             }
         )
     annual = pd.DataFrame(rows)
-    res = run_q2(annual, assumptions, {"countries": ["FR"]}, "test")
+    hourly_map = _hourly_phase2_sample_map("FR", years, hours_per_year=400, seed=123)
+    res = run_q2(
+        annual,
+        assumptions,
+        {
+            "countries": ["FR"],
+            "phase2_years_by_country_tech": {
+                "FR|PV": years,
+                "FR|WIND": years,
+            },
+        },
+        "test",
+        hourly_by_country_year=hourly_map,
+    )
     warn_checks = [c for c in res.checks if str(c.get("code")) == "TEST_Q2_002"]
     assert warn_checks
     assert any(str(c.get("status")) == "WARN" for c in warn_checks)
+
+
+def test_q2_hourly_phase2_drivers_populated_for_large_sample(annual_panel_fixture):
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    years = [2021, 2022, 2023, 2024]
+    hourly_map = _hourly_phase2_sample_map("FR", years, hours_per_year=400, seed=777)
+    res = run_q2(
+        annual_panel_fixture,
+        assumptions,
+        {
+            "countries": ["FR"],
+            "phase2_years_by_country_tech": {
+                "FR|PV": years,
+                "FR|WIND": years,
+            },
+            "include_2022": True,
+        },
+        "test",
+        hourly_by_country_year=hourly_map,
+    )
+    out = res.tables["Q2_country_slopes"].copy()
+    large_sample = out[pd.to_numeric(out.get("phase2_sample_hours_hourly"), errors="coerce") >= 1000].copy()
+    if large_sample.empty:
+        return
+    corr = pd.to_numeric(large_sample["vre_load_corr_phase2"], errors="coerce")
+    assert corr.notna().all()
+    assert ((corr >= -1.0) & (corr <= 1.0)).all()
+    assert (corr.abs() < 0.999999).all()
+
+    surplus_status = large_sample["surplus_load_trough_share_phase2_status"].astype(str).str.upper()
+    surplus_share = pd.to_numeric(large_sample["surplus_load_trough_share_phase2"], errors="coerce")
+    needs_value = surplus_status != "NOT_APPLICABLE_ZERO_SURPLUS"
+    if bool(needs_value.any()):
+        assert surplus_share[needs_value].notna().all()
 
 
 def test_q2_emits_quality_summary_table(annual_panel_fixture):

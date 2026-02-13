@@ -7,7 +7,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.config_loader import load_countries
 from src.constants import DEFAULT_COUNTRIES
+from src.hash_utils import hash_object
+from src.metrics import compute_annual_metrics
 from src.modules.bundle_result import QuestionBundleResult
 from src.modules.q1_transition import run_q1
 from src.modules.q2_slope import run_q2
@@ -16,7 +19,7 @@ from src.modules.q4_bess import run_q4
 from src.modules.q5_thermal_anchor import run_q5
 from src.modules.result import ModuleResult
 from src.modules.test_registry import QuestionTestSpec, get_default_scenarios, get_question_tests
-from src.scenario.phase2_engine import run_phase2_scenario
+from src.scenario.phase2_engine import apply_q1_scenario_to_hourly_inputs, run_phase2_scenario
 from src.storage import (
     load_hourly,
     load_scenario_annual_metrics,
@@ -161,6 +164,129 @@ def _load_scenario_hourly_map(scenario_id: str, countries: list[str], years: lis
             except Exception:
                 continue
     return out
+
+
+def _derive_q1_hourly_scenario_params(
+    assumptions_phase2: pd.DataFrame,
+    *,
+    scenario_id: str,
+    country: str,
+    scenario_years: list[int],
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"scenario_id": str(scenario_id)}
+    if assumptions_phase2 is None or assumptions_phase2.empty:
+        return params
+
+    p2 = assumptions_phase2.copy()
+    p2["scenario_id"] = p2["scenario_id"].astype(str)
+    p2["country"] = p2["country"].astype(str)
+    p2["year"] = pd.to_numeric(p2["year"], errors="coerce")
+    years_set = {int(y) for y in scenario_years}
+
+    scen = p2[
+        (p2["scenario_id"] == str(scenario_id))
+        & (p2["country"] == str(country))
+        & (p2["year"].isin(years_set))
+    ].copy()
+    base = p2[
+        (p2["scenario_id"] == "BASE")
+        & (p2["country"] == str(country))
+        & (p2["year"].isin(years_set))
+    ].copy()
+    if scen.empty or base.empty:
+        return params
+
+    merged = scen.merge(
+        base[["year", "demand_total_twh", "must_run_min_output_factor"]],
+        on="year",
+        how="inner",
+        suffixes=("_scen", "_base"),
+    )
+    if merged.empty:
+        return params
+
+    demand_ratio = (
+        pd.to_numeric(merged.get("demand_total_twh_scen"), errors="coerce")
+        / pd.to_numeric(merged.get("demand_total_twh_base"), errors="coerce").replace(0.0, np.nan)
+    )
+    must_run_ratio = (
+        pd.to_numeric(merged.get("must_run_min_output_factor_scen"), errors="coerce")
+        / pd.to_numeric(merged.get("must_run_min_output_factor_base"), errors="coerce").replace(0.0, np.nan)
+    )
+    demand_factor = _safe_float(demand_ratio.median(), np.nan)
+    must_run_scale = _safe_float(must_run_ratio.median(), np.nan)
+    if np.isfinite(demand_factor):
+        params["demand_factor"] = float(max(0.0, demand_factor))
+        params["demand_uplift"] = float(max(-1.0, demand_factor - 1.0))
+    if np.isfinite(must_run_scale):
+        params["must_run_scale"] = float(np.clip(must_run_scale, 0.0, 2.0))
+        params["rigidity_reduction"] = float(max(0.0, 1.0 - must_run_scale))
+    return params
+
+
+def _build_q1_historical_scenario_inputs(
+    *,
+    scenario_id: str,
+    countries: list[str],
+    historical_years: list[int],
+    scenario_years_for_params: list[int],
+    annual_hist: pd.DataFrame,
+    hourly_hist_map: dict[tuple[str, int], pd.DataFrame],
+    assumptions_phase2: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[tuple[str, int], pd.DataFrame]]:
+    annual_rows: list[dict[str, Any]] = []
+    hourly_map: dict[tuple[str, int], pd.DataFrame] = {}
+    countries_cfg = load_countries().get("countries", {})
+
+    for country in countries:
+        country_cfg = countries_cfg.get(str(country))
+        if not isinstance(country_cfg, dict):
+            continue
+        scen_params = _derive_q1_hourly_scenario_params(
+            assumptions_phase2,
+            scenario_id=scenario_id,
+            country=str(country),
+            scenario_years=scenario_years_for_params if scenario_years_for_params else historical_years,
+        )
+        for year in historical_years:
+            key = (str(country), int(year))
+            hourly = hourly_hist_map.get(key)
+            if hourly is None or hourly.empty:
+                try:
+                    hourly = load_hourly(str(country), int(year))
+                except Exception:
+                    continue
+            hourly_s = apply_q1_scenario_to_hourly_inputs(hourly, scen_params)
+            if hourly_s.empty:
+                continue
+            hourly_s = hourly_s.copy()
+            hourly_s["scenario_id"] = str(scenario_id)
+            try:
+                annual_row = compute_annual_metrics(
+                    hourly_s,
+                    country_cfg,
+                    data_version_hash=hash_object(
+                        {
+                            "source": "q1_hist_scenario_transform",
+                            "scenario_id": str(scenario_id),
+                            "country": str(country),
+                            "year": int(year),
+                            "params": scen_params,
+                        }
+                    ),
+                )
+            except Exception:
+                continue
+            annual_row["scenario_id"] = str(scenario_id)
+            annual_row["mode"] = "SCEN"
+            annual_row["horizon_year"] = int(year)
+            annual_rows.append(annual_row)
+            hourly_map[key] = hourly_s
+
+    if not annual_rows:
+        return pd.DataFrame(), hourly_map
+    annual_df = pd.DataFrame(annual_rows).sort_values(["country", "year"]).reset_index(drop=True)
+    return annual_df, hourly_map
 
 
 def _concat_hourly(country: str, years: list[int], hourly_map: dict[tuple[str, int], pd.DataFrame]) -> pd.DataFrame:
@@ -869,8 +995,11 @@ def _run_scen_module(
     assumptions_phase2: pd.DataFrame,
     selection: dict[str, Any],
     scenario_years: list[int],
+    hourly_hist_map: dict[tuple[str, int], pd.DataFrame] | None = None,
 ) -> ModuleResult | None:
     qid = question_id.upper()
+    if hourly_hist_map is None:
+        hourly_hist_map = {}
     countries = _selection_countries(selection, annual_hist)
     run_id = f"{selection.get('run_id')}_{scenario_id}"
 
@@ -892,8 +1021,31 @@ def _run_scen_module(
             "years": scenario_years,
         }
         if qid == "Q1":
-            hourly_map = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
-            return run_q1(annual_scen, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map)
+            hourly_map_future = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
+            hist_years = _selection_years(selection, annual_hist)
+            annual_hist_scen, hourly_map_hist_scen = _build_q1_historical_scenario_inputs(
+                scenario_id=scenario_id,
+                countries=countries,
+                historical_years=hist_years,
+                scenario_years_for_params=scenario_years,
+                annual_hist=annual_hist,
+                hourly_hist_map=hourly_hist_map,
+                assumptions_phase2=assumptions_phase2,
+            )
+            annual_all = pd.concat([annual_hist_scen, annual_scen], ignore_index=True) if not annual_hist_scen.empty else annual_scen.copy()
+            if not annual_all.empty:
+                annual_all = (
+                    annual_all.sort_values(["country", "year"])
+                    .drop_duplicates(subset=["country", "year"], keep="last")
+                    .reset_index(drop=True)
+                )
+            years_full = sorted(set(pd.to_numeric(annual_all.get("year"), errors="coerce").dropna().astype(int).tolist()))
+            if years_full:
+                scen_sel["years"] = years_full
+                scen_sel["horizon_year"] = int(max(years_full))
+            hourly_map_all = dict(hourly_map_hist_scen)
+            hourly_map_all.update(hourly_map_future)
+            return run_q1(annual_all, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map_all)
         if qid == "Q2":
             hourly_map = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
             hist_ref = run_q2(
@@ -1112,8 +1264,8 @@ def _q1_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
         scen = res.tables.get("Q1_country_summary", pd.DataFrame())
         if scen.empty:
             continue
-        merged = hist[["country", "bascule_year_market"]].merge(
-            scen[["country", "bascule_year_market"]],
+        merged = hist[["country", "bascule_year_market", "bascule_status_market"]].merge(
+            scen[["country", "bascule_year_market", "bascule_status_market"]],
             on="country",
             how="inner",
             suffixes=("_hist", "_scen"),
@@ -1121,17 +1273,46 @@ def _q1_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
         for _, r in merged.iterrows():
             h = _safe_float(r.get("bascule_year_market_hist"), np.nan)
             s = _safe_float(r.get("bascule_year_market_scen"), np.nan)
+            hist_value: int | None = int(h) if np.isfinite(h) else None
+            scen_value: int | None = int(s) if np.isfinite(s) else None
+            delta_years: int | None = (int(scen_value - hist_value) if (hist_value is not None and scen_value is not None) else None)
+            scen_status = str(r.get("bascule_status_market_scen", "")).strip().lower()
+            hist_status = str(r.get("bascule_status_market_hist", "")).strip().lower()
+            if scen_value is None:
+                if scen_status in {"not_reached_in_window", "not_reached_by_horizon"}:
+                    cmp_status = "OK_NOT_REACHED"
+                    cmp_reason = "bascule_not_reached_by_horizon"
+                else:
+                    cmp_status = "NOT_APPLICABLE"
+                    cmp_reason = f"bascule_missing_scenario:{scen_status or 'unknown'}"
+            elif hist_value is None:
+                cmp_status = "NOT_IN_SCOPE"
+                cmp_reason = f"historical_bascule_missing:{hist_status or 'unknown'}"
+            else:
+                cmp_status = "OK"
+                cmp_reason = "delta_interpretable"
             rows.append(
                 {
                     "country": r["country"],
                     "scenario_id": sid,
                     "metric": "bascule_year_market",
-                    "hist_value": h,
-                    "scen_value": s,
-                    "delta": s - h if np.isfinite(h) and np.isfinite(s) else np.nan,
+                    "hist_value": hist_value,
+                    "scen_value": scen_value,
+                    "delta_years": delta_years,
+                    "delta": delta_years,
+                    "status": cmp_status,
+                    "reason": cmp_reason,
+                    "hist_bascule_status": hist_status,
+                    "scen_bascule_status": scen_status,
                 }
             )
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    for col in ["hist_value", "scen_value", "delta_years", "delta"]:
+        coerced = [int(v) if np.isfinite(_safe_float(v, np.nan)) else None for v in out[col].tolist()]
+        out[col] = pd.Series(coerced, index=out.index, dtype=object)
+    return out
 
 
 def _q2_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResult]) -> pd.DataFrame:
@@ -1347,6 +1528,20 @@ def _annotate_comparison_interpretability(question_id: str, comparison: pd.DataF
     statuses: list[str] = []
     reasons: list[str] = []
     for _, row in out.iterrows():
+        if qid == "Q1":
+            cmp_status = str(row.get("status", "")).upper().strip()
+            cmp_reason = str(row.get("reason", "")).strip()
+            if cmp_status in {"OK", "OK_NOT_REACHED"}:
+                statuses.append("INFORMATIVE")
+                reasons.append(cmp_reason or "delta_interpretable")
+            elif cmp_status == "NOT_IN_SCOPE":
+                statuses.append("NON_TESTABLE")
+                reasons.append(cmp_reason or "historical_bascule_missing")
+            else:
+                statuses.append("NON_TESTABLE")
+                reasons.append(cmp_reason or "scenario_bascule_missing")
+            continue
+
         h = _safe_float(row.get("hist_value"), np.nan)
         s = _safe_float(row.get("scen_value"), np.nan)
         d = _safe_float(row.get("delta"), np.nan)
@@ -1989,6 +2184,7 @@ def run_question_bundle(
             question_id=qid,
             scenario_id=sid,
             annual_hist=annual_hist,
+            hourly_hist_map=hourly_hist_map,
             assumptions_phase1=assumptions_phase1,
             assumptions_phase2=assumptions_phase2,
             selection=scen_selection,

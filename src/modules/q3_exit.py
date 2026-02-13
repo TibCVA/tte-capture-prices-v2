@@ -11,7 +11,7 @@ import pandas as pd
 from src.core.canonical_metrics import build_canonical_hourly_panel
 from src.core.market_proxy import MarketProxyBucketModel
 from src.modules.common import assumptions_subset
-from src.modules.q1_transition import run_q1
+from src.modules.q1_transition import run_q1, stage2_active_from_metrics
 from src.modules.q2_slope import run_q2
 from src.modules.reality_checks import build_common_checks
 from src.modules.result import ModuleResult
@@ -520,6 +520,15 @@ def run_q3(
             ].copy()
         else:
             c_hist_sum = pd.DataFrame()
+        c_sum_row = c_sum.iloc[0] if not c_sum.empty else None
+        stage2_active_end_year = stage2_active_from_metrics(
+            c_sum_row,
+            all_params,
+            suffix="_at_end_year",
+        )
+        end_year_q1 = _safe_float(c_sum_row.get("end_year"), np.nan) if c_sum_row is not None else np.nan
+        if (not np.isfinite(end_year_q1)) and (not c_panel.empty):
+            end_year_q1 = _safe_float(c_panel["year"].max(), np.nan)
 
         bascule_hist = _safe_float(c_hist_sum.get("bascule_year_market_country", c_hist_sum.get("bascule_year_market", pd.Series([np.nan]))).iloc[0], np.nan) if not c_hist_sum.empty else np.nan
         bascule_curr = _safe_float(c_sum.get("bascule_year_market_country", c_sum.get("bascule_year_market", pd.Series([np.nan]))).iloc[0], np.nan) if not c_sum.empty else np.nan
@@ -533,9 +542,14 @@ def run_q3(
             bascule_source = "current_mode"
             c_sum_ref = c_sum.iloc[0] if not c_sum.empty else None
         else:
-            bascule_ref = np.nan
-            bascule_source = "missing"
-            c_sum_ref = None
+            if stage2_active_end_year and np.isfinite(end_year_q1):
+                bascule_ref = float(int(end_year_q1))
+                bascule_source = "end_year_stage2_active"
+                c_sum_ref = c_sum.iloc[0] if not c_sum.empty else None
+            else:
+                bascule_ref = np.nan
+                bascule_source = "missing"
+                c_sum_ref = None
         stage2_hneg_min = float(all_params.get("h_negative_stage2_min", 200.0))
         stage2_hb5_min = float(all_params.get("h_below_5_stage2_min", 500.0))
         low_price_evidence_at_bascule = False
@@ -552,8 +566,12 @@ def run_q3(
                 or (np.isfinite(hb5_b) and hb5_b >= stage2_hb5_min)
             )
             if not low_price_evidence_at_bascule:
-                bascule_ref = np.nan
-                bascule_source = f"{bascule_source}_insufficient_low_price_evidence"
+                if stage2_active_end_year and np.isfinite(end_year_q1):
+                    bascule_ref = float(int(end_year_q1))
+                    bascule_source = "end_year_stage2_active"
+                else:
+                    bascule_ref = np.nan
+                    bascule_source = f"{bascule_source}_insufficient_low_price_evidence"
 
         audit_common = {
             "scenario_id": scenario_id,
@@ -567,6 +585,7 @@ def run_q3(
                 {
                     "country": country,
                     **audit_common,
+                    "applicability_flag": "HORS_SCOPE_PHASE2",
                     "reference_year": np.nan,
                     "in_phase2": False,
                     "status": "HORS_SCOPE_PHASE2",
@@ -595,6 +614,7 @@ def run_q3(
                     "additional_sink_power_p95_mw": np.nan,
                     "additional_sink_profile_status": "hourly_profile_unavailable",
                     "warnings_quality": "missing_panel",
+                    "trend_quality_flag": "NOT_APPLICABLE",
                     "bascule_reference_year": bascule_ref,
                     "bascule_reference_source": bascule_source,
                 }
@@ -626,12 +646,81 @@ def run_q3(
                 )
             continue
 
+        if not bool(stage2_active_end_year):
+            last_any = c_panel.iloc[-1]
+            ref_year_val = int(_safe_float(last_any.get("year"), np.nan)) if np.isfinite(_safe_float(last_any.get("year"), np.nan)) else np.nan
+            rows.append(
+                {
+                    "country": country,
+                    **audit_common,
+                    "applicability_flag": "HORS_SCOPE_PHASE2",
+                    "reference_year": ref_year_val,
+                    "in_phase2": False,
+                    "status": "HORS_SCOPE_PHASE2",
+                    "reason_code": "no_stage2_detected",
+                    "status_explanation": "Stage2 non active a l'end_year selon les criteres Q1 partages.",
+                    "stage3_ready_year": False,
+                    "phase2_slope_capture_ratio_pv": np.nan,
+                    "phase2_slope_method": "none",
+                    "trend_capture_ratio_pv": np.nan,
+                    "trend_h_negative": np.nan,
+                    "stop_possible_if": np.nan,
+                    "stop_condition_detail": "non_applicable",
+                    "surplus_energy_twh_recent": np.nan,
+                    "target_absorption_twh": np.nan,
+                    "demand_uplift_twh": np.nan,
+                    "inversion_k_demand": np.nan,
+                    "required_demand_uplift_mw": np.nan,
+                    "inversion_k_demand_status": "insufficient_scope",
+                    "inversion_r_mustrun": np.nan,
+                    "required_mustrun_reduction_ratio": np.nan,
+                    "inversion_r_mustrun_status": "proxy_not_computed",
+                    "inversion_f_flex": np.nan,
+                    "inversion_f_flex_status": "proxy_not_computed",
+                    "already_phase3": False,
+                    "additional_absorbed_needed_TWh_year": np.nan,
+                    "additional_sink_power_p95_mw": np.nan,
+                    "additional_sink_profile_status": "hourly_profile_unavailable",
+                    "warnings_quality": "no_stage2_detected",
+                    "trend_quality_flag": "NOT_APPLICABLE",
+                    "bascule_reference_year": np.nan,
+                    "bascule_reference_source": bascule_source,
+                }
+            )
+            for lever in ["demand_uplift", "export_uplift", "flex_uplift"]:
+                requirement_rows.append(
+                    {
+                        "country": country,
+                        "scenario_id": scenario_id,
+                        "year": ref_year_val,
+                        "lever": lever,
+                        "required_uplift": np.nan,
+                        "required_uplift_mw": np.nan,
+                        "required_uplift_pct_avg_load": np.nan,
+                        "required_uplift_twh_per_year": np.nan,
+                        "within_bounds": False,
+                        "target_sr": target_sr_energy,
+                        "target_h_negative": target_h_negative_est,
+                        "target_h_below_5": target_h_below_5,
+                        "predicted_sr_after": np.nan,
+                        "predicted_far_after": np.nan,
+                        "predicted_h_negative_after": np.nan,
+                        "predicted_h_below_5_after": np.nan,
+                        "predicted_h_negative_metric": "MARKET_PROXY_BUCKET_MODEL_EST",
+                        "applicability_flag": "HORS_SCOPE_PHASE2",
+                        "status": "hors_scope_phase2",
+                        "reason": "no_stage2_detected",
+                    }
+                )
+            continue
+
         if not np.isfinite(bascule_ref):
             last_any = c_panel.iloc[-1]
             rows.append(
                 {
                     "country": country,
                     **audit_common,
+                    "applicability_flag": "HORS_SCOPE_PHASE2",
                     "reference_year": int(_safe_float(last_any.get("year"), np.nan)) if np.isfinite(_safe_float(last_any.get("year"), np.nan)) else np.nan,
                     "in_phase2": False,
                     "status": "HORS_SCOPE_PHASE2",
@@ -660,6 +749,7 @@ def run_q3(
                     "additional_sink_power_p95_mw": np.nan,
                     "additional_sink_profile_status": "hourly_profile_unavailable",
                     "warnings_quality": "no_stage2_detected",
+                    "trend_quality_flag": "NOT_APPLICABLE",
                     "bascule_reference_year": np.nan,
                     "bascule_reference_source": bascule_source,
                 }
@@ -703,6 +793,7 @@ def run_q3(
         recent = c_phase_non_crisis.tail(trend_window).copy()
         last = recent.iloc[-1]
         ref_year = _safe_float(last.get("year"), np.nan)
+        insufficient_history_for_trend = int(len(recent)) < 2
 
         if np.isfinite(bascule_ref):
             b_rows = c_panel[c_panel["year"] == int(bascule_ref)]
@@ -750,15 +841,21 @@ def run_q3(
             q2_slope = _safe_float(q2_row.iloc[0].get("slope"), np.nan)
             q2_method = str(q2_row.iloc[0].get("slope_method", "none"))
 
-        trend_capture = _trend_slope(recent.get("year"), recent.get("capture_ratio_pv"))
-        trend_hneg = _trend_slope(recent.get("year"), recent.get("h_negative_obs"))
-        trend_h_zero_or_negative = (
-            _trend_slope(recent.get("year"), recent.get("h_zero_or_negative"))
-            if "h_zero_or_negative" in recent.columns
-            else np.nan
-        )
+        if insufficient_history_for_trend:
+            trend_capture = np.nan
+            trend_hneg = np.nan
+            trend_h_zero_or_negative = np.nan
+        else:
+            trend_capture = _trend_slope(recent.get("year"), recent.get("capture_ratio_pv"))
+            trend_hneg = _trend_slope(recent.get("year"), recent.get("h_negative_obs"))
+            trend_h_zero_or_negative = (
+                _trend_slope(recent.get("year"), recent.get("h_zero_or_negative"))
+                if "h_zero_or_negative" in recent.columns
+                else np.nan
+            )
 
-        in_phase2_current = bool(last.get("is_phase2_market", False))
+        in_phase2_current = bool(last.get("is_phase2_market", False)) or bool(stage2_active_end_year)
+        applicability_flag = "APPLICABLE" if bool(stage2_active_end_year) else "HORS_SCOPE_PHASE2"
         available_ref_years = sorted([int(y) for (c, y) in hourly_by_country_year.keys() if str(c) == str(country)])
         ref_year_int = int(ref_year) if np.isfinite(ref_year) else None
         if ref_year_int is not None and ref_year_int in available_ref_years:
@@ -943,7 +1040,7 @@ def run_q3(
                     "h_below_5_obs_before": _safe_float(baseline_est.get("h_below_5_obs"), np.nan),
                     "h_negative_est_before": _safe_float(baseline_est.get("h_negative_est"), np.nan),
                     "h_below_5_est_before": _safe_float(baseline_est.get("h_below_5_est"), np.nan),
-                    "applicability_flag": "APPLICABLE" if in_phase2_current else "ALREADY_PHASE3",
+                    "applicability_flag": applicability_flag,
                     "status": out_status,
                     "reason": str(solver.get("reason", "already_phase3" if (not in_phase2_current) else out_status)),
                     "export_coincidence_factor": export_coincidence_factor,
@@ -1014,10 +1111,17 @@ def run_q3(
             status_explanation = "Le proxy marche est invalide (quality FAIL)."
             already_phase3 = False
 
+        warning_quality_codes: list[str] = []
+        if sink_profile_status not in {"profile_weighted_surplus", "no_additional_energy_required"}:
+            warning_quality_codes.append(str(sink_profile_status))
+        if insufficient_history_for_trend:
+            warning_quality_codes.append("INSUFFICIENT_HISTORY_FOR_TREND")
+
         rows.append(
             {
                 "country": country,
                 **audit_common,
+                "applicability_flag": applicability_flag,
                 "reference_year": hourly_ref_year if hourly_ref_year is not None else (int(ref_year) if np.isfinite(ref_year) else np.nan),
                 "in_phase2": in_phase2_current,
                 "status": status,
@@ -1046,7 +1150,8 @@ def run_q3(
                 "additional_absorbed_needed_TWh_year": demand_uplift_twh,
                 "additional_sink_power_p95_mw": sink_p95,
                 "additional_sink_profile_status": sink_profile_status,
-                "warnings_quality": "" if sink_profile_status in {"profile_weighted_surplus", "no_additional_energy_required"} else sink_profile_status,
+                "warnings_quality": ";".join([w for w in warning_quality_codes if str(w).strip()]),
+                "trend_quality_flag": "INSUFFICIENT_HISTORY_FOR_TREND" if insufficient_history_for_trend else "OK",
                 "bascule_reference_year": float(int(bascule_ref)) if np.isfinite(bascule_ref) else np.nan,
                 "bascule_reference_source": bascule_source,
                 "families_active_at_bascule": ",".join(sorted(active_bascule)),
@@ -1154,6 +1259,26 @@ def run_q3(
     if out.empty:
         checks.append({"status": "FAIL", "code": "Q3_EMPTY", "message": "Aucune sortie Q3."})
     else:
+        if "country" in q1_summary.columns:
+            q1_stage2_map: dict[str, bool] = {}
+            for _, q1_row in q1_summary.iterrows():
+                q1_stage2_map[str(q1_row.get("country", ""))] = stage2_active_from_metrics(
+                    q1_row,
+                    all_params,
+                    suffix="_at_end_year",
+                ) or (_safe_float(q1_row.get("stage2_market_score_at_end_year"), np.nan) >= 1.0)
+            for _, q3_row in out.iterrows():
+                c = str(q3_row.get("country", ""))
+                must_apply = bool(q1_stage2_map.get(c, False))
+                applicability = str(q3_row.get("applicability_flag", "")).upper().strip()
+                if must_apply and applicability != "APPLICABLE":
+                    checks.append(
+                        {
+                            "status": "FAIL",
+                            "code": "Q3_Q1_PHASE2_ENDYEAR_COHERENCE",
+                            "message": f"{c}: Q1 indique stage2 active a l'end_year mais Q3 n'est pas APPLICABLE.",
+                        }
+                    )
         proxy_fail = out["proxy_quality_status"].astype(str).str.upper().eq("FAIL")
         if bool(proxy_fail.any()):
             non_failed = ~out.loc[proxy_fail, "status"].astype(str).str.upper().eq("FAIL")

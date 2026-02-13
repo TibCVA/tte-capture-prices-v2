@@ -29,8 +29,10 @@ from src.constants import (
     COL_GEN_OIL,
     COL_GEN_OTHER,
     COL_GEN_SOLAR,
+    COL_GEN_MUST_RUN,
     COL_GEN_WIND_OFF,
     COL_GEN_WIND_ON,
+    COL_LOAD_NET,
     COL_LOAD_TOTAL,
     COL_NET_POSITION,
     COL_NRL,
@@ -133,6 +135,111 @@ def _regime_from_nrl(nrl: np.ndarray, min_pos_hours: int = 200, q: float = 0.9) 
         threshold = float(np.nanquantile(pos, q))
         regime[(surplus == 0) & (nrl >= threshold)] = "D"
     return regime, threshold
+
+
+def apply_q1_scenario_to_hourly_inputs(hourly_df: pd.DataFrame, scenario_params: dict[str, Any]) -> pd.DataFrame:
+    out = hourly_df.copy(deep=True)
+    if out.empty:
+        return out
+
+    def _num(col: str, default: float = 0.0) -> pd.Series:
+        if col in out.columns:
+            return pd.to_numeric(out[col], errors="coerce")
+        return pd.Series(default, index=out.index, dtype=float)
+
+    load = _num(COL_LOAD_NET, np.nan)
+    load_total = _num(COL_LOAD_TOTAL, np.nan)
+    psh = _num(COL_PSH_PUMP, np.nan)
+    if load.notna().sum() == 0:
+        if load_total.notna().sum() > 0:
+            load = load_total - psh.fillna(0.0)
+        else:
+            load = pd.Series(0.0, index=out.index, dtype=float)
+    load = load.fillna(0.0).clip(lower=0.0)
+    load_total = load_total.fillna(load + psh.fillna(0.0))
+    psh = psh.fillna((load_total - load).clip(lower=0.0)).clip(lower=0.0)
+
+    scenario_id = str(scenario_params.get("scenario_id", "")).strip().upper()
+    demand_factor = _safe_float(scenario_params.get("demand_factor"), default=np.nan)
+    demand_uplift = _safe_float(scenario_params.get("demand_uplift"), default=np.nan)
+    demand_uplift_mw = _safe_float(scenario_params.get("demand_uplift_mw"), default=np.nan)
+
+    if np.isfinite(demand_uplift_mw):
+        load = (load + max(0.0, demand_uplift_mw)).clip(lower=0.0)
+    else:
+        if not np.isfinite(demand_factor):
+            demand_factor = 1.0 + (demand_uplift if np.isfinite(demand_uplift) else 0.0)
+        if scenario_id == "DEMAND_UP" or np.isfinite(demand_factor):
+            load = (load * max(0.0, demand_factor)).clip(lower=0.0)
+
+    must_run_scale = _safe_float(scenario_params.get("must_run_scale"), default=np.nan)
+    rigidity_reduction = _safe_float(scenario_params.get("rigidity_reduction"), default=np.nan)
+    if not np.isfinite(must_run_scale):
+        if np.isfinite(rigidity_reduction):
+            must_run_scale = 1.0 - rigidity_reduction
+        elif scenario_id == "LOW_RIGIDITY":
+            must_run_scale = _safe_float(scenario_params.get("low_rigidity_scale"), default=1.0)
+    if np.isfinite(must_run_scale):
+        factor = float(np.clip(must_run_scale, 0.0, 2.0))
+        for col in [
+            COL_GEN_MUST_RUN,
+            COL_GEN_NUCLEAR,
+            COL_GEN_BIOMASS,
+            COL_GEN_HYDRO_ROR,
+            COL_GEN_COAL,
+            COL_GEN_LIGNITE,
+            COL_GEN_GAS,
+        ]:
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0).clip(lower=0.0) * factor
+        out["must_run_scale_scenario"] = factor
+
+    out[COL_LOAD_NET] = load
+    out[COL_LOAD_TOTAL] = (load + psh).clip(lower=0.0)
+    out[COL_PSH_PUMP] = psh
+    if "psh_pumping_mw" in out.columns:
+        out["psh_pumping_mw"] = psh
+
+    vre = (
+        _num(COL_GEN_SOLAR, 0.0).fillna(0.0).clip(lower=0.0)
+        + _num(COL_GEN_WIND_ON, 0.0).fillna(0.0).clip(lower=0.0)
+        + _num(COL_GEN_WIND_OFF, 0.0).fillna(0.0).clip(lower=0.0)
+    )
+    must_run = _num(COL_GEN_MUST_RUN, 0.0).fillna(0.0).clip(lower=0.0)
+    nrl = load - vre - must_run
+    surplus = (-nrl).clip(lower=0.0)
+
+    flex_exports = _num(COL_FLEX_EXPORTS, np.nan)
+    if flex_exports.notna().sum() == 0:
+        flex_exports = _num(COL_EXPORTS, 0.0)
+    flex_psh = _num(COL_FLEX_PSH, np.nan)
+    if flex_psh.notna().sum() == 0:
+        flex_psh = psh
+    flex_other = _num(COL_FLEX_OTHER, 0.0)
+    flex_obs = _num(COL_FLEX_OBS, np.nan)
+    if flex_obs.notna().sum() == 0:
+        flex_obs = flex_exports.fillna(0.0) + flex_psh.fillna(0.0) + flex_other.fillna(0.0)
+    absorbed = np.minimum(surplus.to_numpy(dtype=float), np.maximum(0.0, flex_obs.fillna(0.0).to_numpy(dtype=float)))
+    unabsorbed = np.maximum(0.0, surplus.to_numpy(dtype=float) - absorbed)
+
+    out[COL_NRL] = nrl
+    out[COL_SURPLUS] = surplus
+    out[COL_FLEX_EXPORTS] = flex_exports.fillna(0.0).clip(lower=0.0)
+    out[COL_FLEX_PSH] = flex_psh.fillna(0.0).clip(lower=0.0)
+    out[COL_FLEX_OTHER] = flex_other.fillna(0.0).clip(lower=0.0)
+    out[COL_FLEX_OBS] = flex_obs.fillna(0.0).clip(lower=0.0)
+    out[COL_SURPLUS_ABSORBED] = pd.Series(absorbed, index=out.index, dtype=float)
+    out[COL_SURPLUS_UNABS] = pd.Series(unabsorbed, index=out.index, dtype=float)
+
+    regime_arr, threshold = _regime_from_nrl(pd.to_numeric(out[COL_NRL], errors="coerce").fillna(0.0).to_numpy(dtype=float))
+    regime = pd.Series(regime_arr, index=out.index, dtype=object)
+    surplus_s = pd.to_numeric(out[COL_SURPLUS], errors="coerce").fillna(0.0)
+    unabs_s = pd.to_numeric(out[COL_SURPLUS_UNABS], errors="coerce").fillna(0.0)
+    regime[unabs_s > 0.0] = "A"
+    regime[(surplus_s > 0.0) & (unabs_s <= 0.0)] = "B"
+    out[COL_REGIME] = regime
+    out[COL_NRL_THRESHOLD] = threshold
+    return out
 
 
 def _apply_bess(hourly: pd.DataFrame, power_mw: float, energy_mwh: float, eta_rt: float) -> pd.DataFrame:
