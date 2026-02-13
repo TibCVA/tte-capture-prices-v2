@@ -29,6 +29,12 @@ from src.storage import (
 APP_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _to_abs_project_path(path_like: str | Path) -> Path:
+    """Resolve a project-relative path relative to APP_ROOT."""
+    base_path = Path(path_like)
+    return base_path if base_path.is_absolute() else APP_ROOT / base_path
+
+
 def _mtime_ns(path: Path) -> int:
     return int(path.stat().st_mtime_ns)
 
@@ -622,7 +628,7 @@ def load_question_bundle_from_combined_run(
     if not str(run_id).strip():
         raise ValueError("run_id vide.")
 
-    q_dir = Path(base_dir) / str(run_id) / qid
+    q_dir = _to_abs_project_path(base_dir) / str(run_id) / qid
     if not q_dir.exists():
         raise FileNotFoundError(f"Bundle introuvable: {q_dir}")
 
