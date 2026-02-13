@@ -6,34 +6,57 @@ import pandas as pd
 import streamlit as st
 
 _PAGE_UTILS_IMPORT_ERROR: Exception | None = None
-try:
-    from app.page_utils import (
-        load_annual_metrics,
-        load_question_bundle_from_combined_run,
-        build_bundle_hash,
-        load_phase2_assumptions_table,
-        refresh_all_analyses_no_cache_ui,
+_PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = False
+
+
+def _page_utils_missing(*, feature: str, root_error: Exception | None = None) -> None:
+    raise RuntimeError(
+        f"app.page_utils indisponible ({feature}). "
+        f"Cause: {root_error}" if root_error else f"app.page_utils indisponible ({feature})."
     )
+
+
+try:
+    import app.page_utils as _page_utils
+
+    load_annual_metrics = _page_utils.load_annual_metrics
+    load_phase2_assumptions_table = _page_utils.load_phase2_assumptions_table
+    refresh_all_analyses_no_cache_ui = _page_utils.refresh_all_analyses_no_cache_ui
+    build_bundle_hash = _page_utils.build_bundle_hash
+
+    load_question_bundle_from_combined_run = getattr(_page_utils, "load_question_bundle_from_combined_run", None)
+    if callable(load_question_bundle_from_combined_run):
+        _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE = True
+    else:
+        load_question_bundle_from_combined_run = None
 except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud stale caches
     _PAGE_UTILS_IMPORT_ERROR = exc
 
     def refresh_all_analyses_no_cache_ui(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError(
-            "app.page_utils indisponible sur cette instance (cache/deploiement partiel). "
-            "Rebooter l'app puis vider le cache Streamlit Cloud."
-        )
+        _page_utils_missing(feature="refresh_all_analyses_no_cache_ui", root_error=exc)
 
     def load_annual_metrics(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("load_annual_metrics indisponible.")
+        _page_utils_missing(feature="load_annual_metrics", root_error=exc)
 
     def build_bundle_hash(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("build_bundle_hash indisponible.")
+        _page_utils_missing(feature="build_bundle_hash", root_error=exc)
 
     def load_question_bundle_from_combined_run(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("load_question_bundle_from_combined_run indisponible.")
+        _page_utils_missing(feature="load_question_bundle_from_combined_run", root_error=exc)
 
     def load_phase2_assumptions_table(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("load_phase2_assumptions_table indisponible.")
+        _page_utils_missing(feature="load_phase2_assumptions_table", root_error=exc)
+
+
+if not _PAGE_UTILS_COMBINED_BUNDLE_AVAILABLE and _PAGE_UTILS_IMPORT_ERROR is None:
+    _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR = RuntimeError(
+        "Signature incompatible: load_question_bundle_from_combined_run absent dans app.page_utils."
+    )
+
+    def load_question_bundle_from_combined_run(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("app.page_utils ne contient pas load_question_bundle_from_combined_run.")
+else:
+    _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR = None
 
 _LLM_BATCH_IMPORT_ERROR: Exception | None = None
 try:
@@ -249,6 +272,11 @@ def render() -> None:
                     run_id = str(refresh_summary.get("run_id", "UNKNOWN"))
                     st.session_state["last_full_refresh_run_id"] = run_id
                     st.success(f"Refresh termine. Nouveau run combine: {run_id}")
+                    if _PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR is not None:
+                        st.warning(
+                            "Prechargement auto indisponible: "
+                            + str(_PAGE_UTILS_COMBINED_BUNDLE_IMPORT_ERROR)
+                        )
                     with st.spinner("Chargement automatique des resultats Q1..Q5 dans les pages..."):
                         loaded_q, failed_q = _hydrate_question_pages_from_run(run_id)
                     if loaded_q:
