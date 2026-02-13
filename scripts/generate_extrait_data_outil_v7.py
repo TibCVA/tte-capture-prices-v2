@@ -30,6 +30,11 @@ def _parse_args() -> argparse.Namespace:
         help="Markdown output path (same content, audit-friendly).",
     )
     parser.add_argument(
+        "--output-xlsx",
+        default="",
+        help="Optional XLSX output path (structured ES/DE delivery workbook).",
+    )
+    parser.add_argument(
         "--skip-docx",
         action="store_true",
         help="Generate markdown only (no DOCX).",
@@ -585,15 +590,43 @@ def _add_csv_block_to_doc(doc: Any, title: str, df: pd.DataFrame) -> None:
     doc.add_paragraph("```")
 
 
+def _write_outputs_xlsx(outputs: dict[str, pd.DataFrame], output_xlsx: Path) -> None:
+    sheet_map = {
+        "annual_metrics_phase1": "A1_annual_metrics",
+        "q1_transition_summary": "Q1_transition",
+        "q2_slope_summary": "Q2_slope",
+        "q3_inversion_requirements": "Q3_inversion",
+        "q4_bess_sizing_curve": "Q4_bess",
+        "q5_anchor_sensitivity": "Q5_anchor",
+        "test_ledger": "test_ledger",
+    }
+    output_xlsx.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(output_xlsx) as writer:
+        for key in [
+            "annual_metrics_phase1",
+            "q1_transition_summary",
+            "q2_slope_summary",
+            "q3_inversion_requirements",
+            "q4_bess_sizing_curve",
+            "q5_anchor_sensitivity",
+            "test_ledger",
+        ]:
+            df = outputs.get(key, pd.DataFrame())
+            _clean_df(df).to_excel(writer, sheet_name=sheet_map[key], index=False)
+
+
 def generate_extrait(
     run_id: str,
     countries: list[str],
     output_docx: Path,
     output_md: Path,
     *,
+    output_xlsx: Path | None = None,
     generate_docx: bool = True,
+    combined_base_dir: Path | None = None,
 ) -> dict[str, Any]:
-    run_dir = ROOT / "outputs" / "combined" / run_id
+    run_base_dir = Path(combined_base_dir) if combined_base_dir is not None else (ROOT / "outputs" / "combined")
+    run_dir = run_base_dir / run_id
     if not run_dir.exists():
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
 
@@ -727,11 +760,17 @@ def generate_extrait(
         output_docx.parent.mkdir(parents=True, exist_ok=True)
         doc.save(str(output_docx))
 
+    output_xlsx_str = ""
+    if output_xlsx is not None:
+        _write_outputs_xlsx(outputs, output_xlsx)
+        output_xlsx_str = str(output_xlsx)
+
     return {
         "run_id": run_id,
         "countries": countries,
         "output_docx": str(output_docx) if generate_docx else "",
         "output_md": str(output_md),
+        "output_xlsx": output_xlsx_str,
         "docx_generated": bool(generate_docx),
         "rows": {k: int(len(v)) for k, v in outputs.items()},
     }
@@ -745,6 +784,7 @@ def main() -> int:
         countries=countries,
         output_docx=Path(args.output_docx),
         output_md=Path(args.output_md),
+        output_xlsx=Path(args.output_xlsx) if str(args.output_xlsx).strip() else None,
         generate_docx=not bool(args.skip_docx),
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -21,6 +21,10 @@ def test_home_page_contains_session_cache_controls() -> None:
     assert "_build_auto_audit_bundle_after_refresh(" in content
     assert "Generation du dossier d'audit automatique" in content
     assert "Dossier audit genere automatiquement" in content
+    assert "## Artefacts d'audit du run" in content
+    assert "Telecharger le dernier pack d'audit" in content
+    assert 'st.session_state["last_delivery_zip_path"]' in content
+    assert 'st.session_state["last_onedrive_upload_status"]' in content
 
 
 def test_checks_wording_is_explicit_and_not_global() -> None:

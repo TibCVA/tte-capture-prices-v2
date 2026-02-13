@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import os
 
 import pandas as pd
 import streamlit as st
@@ -102,6 +103,42 @@ def _to_abs_project_path(path_like: str | Path) -> Path:
     path = Path(path_like)
     app_root = Path(__file__).resolve().parents[2]
     return path if path.is_absolute() else app_root / path
+
+
+def _prime_onedrive_env_from_streamlit_secrets() -> None:
+    try:
+        onedrive_secrets = st.secrets.get("onedrive", {})
+    except Exception:
+        onedrive_secrets = {}
+
+    mapping = {
+        "ONEDRIVE_TENANT_ID": ["tenant_id", "ONEDRIVE_TENANT_ID"],
+        "ONEDRIVE_CLIENT_ID": ["client_id", "ONEDRIVE_CLIENT_ID"],
+        "ONEDRIVE_CLIENT_SECRET": ["client_secret", "ONEDRIVE_CLIENT_SECRET"],
+        "ONEDRIVE_DRIVE_ID": ["drive_id", "ONEDRIVE_DRIVE_ID"],
+        "ONEDRIVE_TARGET_DIR": ["target_dir", "ONEDRIVE_TARGET_DIR"],
+    }
+    for env_name, candidates in mapping.items():
+        if str(os.environ.get(env_name, "")).strip():
+            continue
+        value = ""
+        if isinstance(onedrive_secrets, dict):
+            for key in candidates:
+                raw = onedrive_secrets.get(key)
+                if str(raw or "").strip():
+                    value = str(raw).strip()
+                    break
+        if not value:
+            for key in candidates:
+                try:
+                    raw_global = st.secrets.get(key)
+                except Exception:
+                    raw_global = None
+                if str(raw_global or "").strip():
+                    value = str(raw_global).strip()
+                    break
+        if value:
+            os.environ[env_name] = value
 
 
 def _safe_read_json(path: Path) -> dict:
@@ -338,7 +375,14 @@ _ACCUEIL_QUESTION_ORDER = tuple(QUESTION_ORDER)
 
 def _snapshot_question_bundle_session_state() -> dict[str, object]:
     state_snapshot: dict[str, object] = {}
-    for key in _RESULT_STATE_KEYS + ("last_full_refresh_run_id", "last_llm_batch_result", "llm_batch_running"):
+    for key in _RESULT_STATE_KEYS + (
+        "last_full_refresh_run_id",
+        "last_llm_batch_result",
+        "llm_batch_running",
+        "last_delivery_zip_path",
+        "last_delivery_manifest",
+        "last_onedrive_upload_status",
+    ):
         if key in st.session_state:
             state_snapshot[key] = st.session_state.get(key)
     return state_snapshot
@@ -350,6 +394,9 @@ def _restore_question_bundle_session_state(snapshot: dict[str, object]) -> None:
     st.session_state.pop("last_full_refresh_run_id", None)
     st.session_state.pop("last_llm_batch_result", None)
     st.session_state.pop("llm_batch_running", None)
+    st.session_state.pop("last_delivery_zip_path", None)
+    st.session_state.pop("last_delivery_manifest", None)
+    st.session_state.pop("last_onedrive_upload_status", None)
     for key, value in snapshot.items():
         st.session_state[key] = value
 
@@ -486,6 +533,9 @@ def _clear_question_bundle_session_state() -> None:
     st.session_state.pop("last_full_refresh_run_id", None)
     st.session_state.pop("last_llm_batch_result", None)
     st.session_state.pop("llm_batch_running", None)
+    st.session_state.pop("last_delivery_zip_path", None)
+    st.session_state.pop("last_delivery_manifest", None)
+    st.session_state.pop("last_onedrive_upload_status", None)
 
 
 def _collect_bundle_hash_by_question() -> dict[str, str]:
@@ -520,9 +570,41 @@ def _build_auto_audit_bundle_after_refresh(run_id: str) -> tuple[bool, dict[str,
             bundle_hash_by_question=_collect_bundle_hash_by_question(),
             keep_last=5,
         )
-        return True, result
     except Exception as exc:
         return False, {"error": str(exc)}
+
+    delivery_report: dict[str, object] = {}
+    try:
+        from src.reporting.audit_delivery import build_delivery_package
+
+        delivery_report = build_delivery_package(
+            run_id=run_id_clean,
+            audit_dir=Path(str(result.get("audit_dir", "")).strip()),
+            countries=["ES", "DE"],
+            include_llm_reports=True,
+        )
+    except Exception as exc:
+        delivery_report = {"status": "FAILED_BUILD", "error": str(exc)}
+
+    result["delivery"] = delivery_report
+    st.session_state["last_delivery_zip_path"] = str(delivery_report.get("zip_path", "")).strip()
+    st.session_state["last_delivery_manifest"] = str(delivery_report.get("delivery_manifest_path", "")).strip()
+
+    zip_path = str(delivery_report.get("zip_path", "")).strip()
+    upload_report: dict[str, object]
+    if not zip_path:
+        upload_report = {"status": "SKIPPED_NO_ZIP", "message": "ZIP de livraison indisponible."}
+    else:
+        try:
+            _prime_onedrive_env_from_streamlit_secrets()
+            from src.reporting.onedrive_uploader import upload_delivery_package
+
+            upload_report = upload_delivery_package(Path(zip_path))
+        except Exception as exc:
+            upload_report = {"status": "FAILED", "error": str(exc)}
+    result["onedrive_upload"] = upload_report
+    st.session_state["last_onedrive_upload_status"] = upload_report
+    return True, result
 
 
 def _hydrate_question_pages_from_run(run_id: str, *, allow_fail_checks: bool = True) -> tuple[bool, dict[str, object]]:
@@ -1001,6 +1083,46 @@ def render() -> None:
                                 warnings = audit_report.get("warnings", [])
                                 if isinstance(warnings, list) and warnings:
                                     st.warning("Audit auto warnings: " + " | ".join([str(w) for w in warnings]))
+
+                                delivery_report = audit_report.get("delivery", {})
+                                if isinstance(delivery_report, dict):
+                                    delivery_status = str(delivery_report.get("status", "")).upper().strip()
+                                    if delivery_status and delivery_status != "READY":
+                                        st.warning(
+                                            "Livraison pack audit: "
+                                            + str(delivery_report.get("error", delivery_status))
+                                        )
+                                    zip_path = str(delivery_report.get("zip_path", "")).strip()
+                                    manifest_path = str(delivery_report.get("delivery_manifest_path", "")).strip()
+                                    if zip_path:
+                                        st.caption(f"Pack livraison: {zip_path}")
+                                        try:
+                                            from src.reporting.audit_delivery import read_delivery_zip_bytes
+
+                                            zip_bytes = read_delivery_zip_bytes(zip_path)
+                                        except Exception as exc:
+                                            st.warning(f"Impossible de charger le ZIP de livraison: {exc}")
+                                        else:
+                                            st.download_button(
+                                                label=f"Telecharger {Path(zip_path).name}",
+                                                data=zip_bytes,
+                                                file_name=Path(zip_path).name,
+                                                mime="application/zip",
+                                                use_container_width=True,
+                                                key=f"dl_delivery_refresh_{resolved_run_id}",
+                                            )
+                                    if manifest_path:
+                                        st.caption(f"Manifest livraison: {manifest_path}")
+
+                                upload_report = audit_report.get("onedrive_upload", {})
+                                if isinstance(upload_report, dict):
+                                    status = str(upload_report.get("status", "")).upper()
+                                    if status == "UPLOADED":
+                                        st.success("OneDrive upload: UPLOADED")
+                                    elif status.startswith("SKIPPED"):
+                                        st.info("OneDrive upload: " + str(upload_report.get("message", status)))
+                                    elif status:
+                                        st.warning("OneDrive upload: " + str(upload_report.get("error", status)))
                             else:
                                 st.warning(
                                     "Generation auto du dossier d'audit non bloquante: "
@@ -1010,6 +1132,40 @@ def render() -> None:
                                 st.json(refresh_summary)
                                 if isinstance(preload_report, dict):
                                     st.code(preload_report)
+
+    st.markdown("## Artefacts d'audit du run")
+    last_zip_path = str(st.session_state.get("last_delivery_zip_path", "")).strip()
+    last_manifest_path = str(st.session_state.get("last_delivery_manifest", "")).strip()
+    if last_zip_path and Path(last_zip_path).exists():
+        st.caption(f"Dernier pack: {last_zip_path}")
+        try:
+            from src.reporting.audit_delivery import read_delivery_zip_bytes
+
+            _latest_zip_bytes = read_delivery_zip_bytes(last_zip_path)
+        except Exception as exc:
+            st.warning(f"ZIP indisponible pour telechargement: {exc}")
+        else:
+            st.download_button(
+                label="Telecharger le dernier pack d'audit",
+                data=_latest_zip_bytes,
+                file_name=Path(last_zip_path).name,
+                mime="application/zip",
+                use_container_width=True,
+                key="dl_delivery_latest",
+            )
+    else:
+        st.caption("Aucun pack d'audit livre dans cette session.")
+    if last_manifest_path:
+        st.caption(f"Dernier manifest: {last_manifest_path}")
+    last_upload_status = st.session_state.get("last_onedrive_upload_status")
+    if isinstance(last_upload_status, dict) and last_upload_status:
+        status = str(last_upload_status.get("status", "")).upper()
+        if status == "UPLOADED":
+            st.success("Statut upload OneDrive: UPLOADED")
+        elif status.startswith("SKIPPED"):
+            st.info("Statut upload OneDrive: " + str(last_upload_status.get("message", status)))
+        else:
+            st.warning("Statut upload OneDrive: " + str(last_upload_status.get("error", status)))
 
     st.markdown("## Generation IA globale")
     st.caption(

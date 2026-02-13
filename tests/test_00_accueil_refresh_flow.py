@@ -157,13 +157,26 @@ def test_clear_question_bundle_session_state_removes_question_keys_and_last_run(
         "q4_bundle_result": {"old": 4},
         "q5_bundle_result": {"old": 5},
         "last_full_refresh_run_id": "RUN_OLD",
+        "last_delivery_zip_path": "outputs/audit_runs/RUN_OLD/delivery/FULL_RUN_OLD_DE_ES.zip",
+        "last_delivery_manifest": "outputs/audit_runs/RUN_OLD/delivery/FULL_RUN_OLD_DE_ES/delivery_manifest.json",
+        "last_onedrive_upload_status": {"status": "UPLOADED"},
         "other_key": "kept",
     }
     module.st.session_state = session_state
 
     module._clear_question_bundle_session_state()
 
-    for key in ["q1_bundle_result", "q2_bundle_result", "q3_bundle_result", "q4_bundle_result", "q5_bundle_result", "last_full_refresh_run_id"]:
+    for key in [
+        "q1_bundle_result",
+        "q2_bundle_result",
+        "q3_bundle_result",
+        "q4_bundle_result",
+        "q5_bundle_result",
+        "last_full_refresh_run_id",
+        "last_delivery_zip_path",
+        "last_delivery_manifest",
+        "last_onedrive_upload_status",
+    ]:
         assert key not in session_state
     assert session_state["other_key"] == "kept"
 
@@ -291,8 +304,12 @@ def test_hydrate_aggregates_duplicate_fail_codes(monkeypatch, tmp_path: Path) ->
 def test_build_auto_audit_bundle_after_refresh_uses_bundle_hashes(monkeypatch) -> None:
     module = _load_accueil_module()
     captured: dict[str, object] = {}
+    captured_delivery: dict[str, object] = {}
+    captured_upload: dict[str, object] = {}
 
     fake_audit_module = ModuleType("src.reporting.auto_audit_bundle")
+    fake_delivery_module = ModuleType("src.reporting.audit_delivery")
+    fake_onedrive_module = ModuleType("src.reporting.onedrive_uploader")
 
     def fake_build_auto_audit_bundle(**kwargs):  # type: ignore[no-untyped-def]
         captured.update(kwargs)
@@ -302,15 +319,31 @@ def test_build_auto_audit_bundle_after_refresh_uses_bundle_hashes(monkeypatch) -
             "warnings": [],
         }
 
-    fake_audit_module.build_auto_audit_bundle = fake_build_auto_audit_bundle  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "src.reporting.auto_audit_bundle", fake_audit_module)
-
-    module.st = SimpleNamespace(
-        session_state={
-            "q1_bundle_result": {"bundle_hash": "Q1_HASH"},
-            "q2_bundle_result": {"bundle_hash": "Q2_HASH"},
+    def fake_build_delivery_package(**kwargs):  # type: ignore[no-untyped-def]
+        captured_delivery.update(kwargs)
+        return {
+            "status": "READY",
+            "zip_path": "outputs/audit_runs/RUN_AUDIT/delivery/FULL_RUN_AUDIT_DE_ES.zip",
+            "delivery_manifest_path": "outputs/audit_runs/RUN_AUDIT/delivery/FULL_RUN_AUDIT_DE_ES/delivery_manifest.json",
+            "results_xlsx_path": "outputs/audit_runs/RUN_AUDIT/delivery/FULL_RUN_AUDIT_DE_ES/results_es_de_RUN_AUDIT.xlsx",
         }
-    )
+
+    def fake_upload_delivery_package(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured_upload.update({"args": args, "kwargs": kwargs})
+        return {"status": "UPLOADED", "target_path": "TTE-Capture-Prices/Audit-Runs/FULL_RUN_AUDIT_DE_ES.zip"}
+
+    fake_audit_module.build_auto_audit_bundle = fake_build_auto_audit_bundle  # type: ignore[attr-defined]
+    fake_delivery_module.build_delivery_package = fake_build_delivery_package  # type: ignore[attr-defined]
+    fake_onedrive_module.upload_delivery_package = fake_upload_delivery_package  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "src.reporting.auto_audit_bundle", fake_audit_module)
+    monkeypatch.setitem(sys.modules, "src.reporting.audit_delivery", fake_delivery_module)
+    monkeypatch.setitem(sys.modules, "src.reporting.onedrive_uploader", fake_onedrive_module)
+
+    session_state = {
+        "q1_bundle_result": {"bundle_hash": "Q1_HASH"},
+        "q2_bundle_result": {"bundle_hash": "Q2_HASH"},
+    }
+    module.st = SimpleNamespace(session_state=session_state)
 
     ok, report = module._build_auto_audit_bundle_after_refresh("RUN_AUDIT")
     assert ok is True
@@ -320,6 +353,14 @@ def test_build_auto_audit_bundle_after_refresh_uses_bundle_hashes(monkeypatch) -
     assert captured["include_llm_reports"] is True
     assert captured["keep_last"] == 5
     assert captured["bundle_hash_by_question"] == {"Q1": "Q1_HASH", "Q2": "Q2_HASH"}
+    assert captured_delivery["run_id"] == "RUN_AUDIT"
+    assert captured_delivery["countries"] == ["ES", "DE"]
+    assert report["delivery"]["status"] == "READY"
+    assert report["onedrive_upload"]["status"] == "UPLOADED"
+    assert session_state["last_delivery_zip_path"] == "outputs/audit_runs/RUN_AUDIT/delivery/FULL_RUN_AUDIT_DE_ES.zip"
+    assert session_state["last_delivery_manifest"] == "outputs/audit_runs/RUN_AUDIT/delivery/FULL_RUN_AUDIT_DE_ES/delivery_manifest.json"
+    assert session_state["last_onedrive_upload_status"]["status"] == "UPLOADED"
+    assert len(captured_upload.get("args", [])) == 1
 
 
 def test_build_auto_audit_bundle_after_refresh_non_blocking_on_error(monkeypatch) -> None:
