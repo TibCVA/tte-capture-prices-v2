@@ -626,6 +626,76 @@ def _load_module_result_from_export(
         horizon_year=horizon_year,
     )
 
+ 
+def _load_question_bundle_from_combined_run_local(
+    run_id: str,
+    question_id: str,
+    base_dir: str = "outputs/combined",
+) -> tuple[QuestionBundleResult, Path]:
+    qid = str(question_id).upper()
+    if not str(run_id).strip():
+        raise ValueError("run_id vide.")
+
+    q_dir = _to_abs_project_path(base_dir) / str(run_id) / qid
+    if not q_dir.exists():
+        raise FileNotFoundError(f"Bundle introuvable: {q_dir}")
+
+    bundle_summary = _safe_read_json(q_dir / "summary.json")
+    if not bundle_summary:
+        raise FileNotFoundError(f"summary.json manquant/invalide: {q_dir / 'summary.json'}")
+
+    default_selection = bundle_summary.get("selection", {})
+    if not isinstance(default_selection, dict):
+        default_selection = {}
+
+    hist_dir = q_dir / "hist"
+    if not hist_dir.exists():
+        raise FileNotFoundError(f"Resultat historique introuvable: {hist_dir}")
+
+    hist_result = _load_module_result_from_export(
+        hist_dir,
+        default_mode="HIST",
+        default_run_id=str(bundle_summary.get("run_id", run_id)),
+        default_selection=default_selection,
+        default_module_id=qid,
+        scenario_id=None,
+    )
+
+    scen_results: dict[str, ModuleResult] = {}
+    scen_root = q_dir / "scen"
+    if scen_root.exists():
+        for scen_dir in sorted([p for p in scen_root.iterdir() if p.is_dir()]):
+            scen_id = str(scen_dir.name)
+            scen_results[scen_id] = _load_module_result_from_export(
+                scen_dir,
+                default_mode="SCEN",
+                default_run_id=str(bundle_summary.get("run_id", run_id)),
+                default_selection=default_selection,
+                default_module_id=qid,
+                scenario_id=scen_id,
+            )
+
+    checks = bundle_summary.get("checks", [])
+    if not isinstance(checks, list):
+        checks = []
+    warnings = bundle_summary.get("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+
+    bundle = QuestionBundleResult(
+        question_id=qid,
+        run_id=str(bundle_summary.get("run_id", run_id)),
+        selection=default_selection,
+        hist_result=hist_result,
+        scen_results=scen_results,
+        test_ledger=_safe_read_csv(q_dir / "test_ledger.csv"),
+        comparison_table=_safe_read_csv(q_dir / "comparison_hist_vs_scen.csv"),
+        checks=checks,
+        warnings=[str(w) for w in warnings],
+        narrative_md=_safe_read_text(q_dir / "narrative.md"),
+    )
+    return bundle, q_dir
+
 
 def load_question_bundle_from_combined_run(
     run_id: str,
