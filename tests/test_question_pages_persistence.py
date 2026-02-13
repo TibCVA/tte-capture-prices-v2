@@ -26,5 +26,5 @@ def test_q_pages_restore_payload_from_session_cache_contract() -> None:
 def test_q_pages_show_quality_fail_banner_contract() -> None:
     for page in Q_PAGES:
         text = _read(page)
-        assert "Analyses chargees malgre checks FAIL" in text
+        assert "FAIL sur checks techniques (different du test_ledger ci-dessous)." in text
         assert "quality_status" in text

@@ -90,11 +90,11 @@ def _fallback_render_spec_table_collapsible(spec_df: pd.DataFrame) -> None:
 def _fallback_render_status_banner(checks: list[dict[str, Any]]) -> None:
     statuses = {str(c.get("status", "")).upper() for c in checks or []}
     if "FAIL" in statuses:
-        st.error("Des checks critiques sont en echec.")
+        st.error("Statut checks techniques: FAIL. Des checks critiques sont en echec.")
     elif "WARN" in statuses:
-        st.warning("Des checks ont remonte des warnings.")
+        st.warning("Statut checks techniques: WARN. Des checks ont remonte des warnings.")
     else:
-        st.success("Checks passes ou non renseignes.")
+        st.success("Statut checks techniques: PASS. Checks passes ou non renseignes.")
 
 
 def _fallback_render_status_interpretation(checks: list[dict[str, Any]]) -> None:

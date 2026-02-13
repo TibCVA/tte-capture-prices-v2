@@ -116,6 +116,11 @@ def _build_fake_run(root: Path, run_id: str, include_question_count: int = 5) ->
 
 
 def _fake_bundle(question_id: str, run_id: str, status: str) -> QuestionBundleResult:
+    checks = [{"status": status, "code": f"{question_id}_{status}", "message": "", "scope": "HIST", "scenario_id": ""}]
+    return _fake_bundle_with_checks(question_id, run_id, checks)
+
+
+def _fake_bundle_with_checks(question_id: str, run_id: str, checks: list[dict[str, str]]) -> QuestionBundleResult:
     return QuestionBundleResult(
         question_id=question_id,
         run_id=run_id,
@@ -129,14 +134,14 @@ def _fake_bundle(question_id: str, run_id: str, status: str) -> QuestionBundleRe
             tables={},
             figures=[],
             narrative_md="",
-            checks=[{"status": status, "code": f"{question_id}_{status}", "message": "", "scope": "HIST", "scenario_id": ""}],
+            checks=checks,
             warnings=[],
             mode="HIST",
         ),
         scen_results={},
         test_ledger=pd.DataFrame(),
         comparison_table=pd.DataFrame(),
-        checks=[{"status": status, "code": f"{question_id}_{status}", "message": "", "scope": "HIST", "scenario_id": ""}],
+        checks=checks,
         warnings=[],
         narrative_md="",
     )
@@ -193,6 +198,8 @@ def test_hydrate_loads_when_check_fail_and_marks_quality(monkeypatch, tmp_path: 
     assert session_state["last_full_refresh_run_id"] == "RUN_FAIL"
     assert session_state["q3_bundle_result"]["quality_status"] == "FAIL"
     assert int(session_state["q3_bundle_result"]["check_counts"]["FAIL"]) == 1
+    assert int(session_state["q3_bundle_result"]["check_counts"]["INFO"]) == 0
+    assert session_state["q3_bundle_result"]["fail_codes_top5"] == ["Q3_FAIL"]
 
 
 def test_load_preferred_run_id_fallbacks_to_latest_valid_run(tmp_path: Path) -> None:
@@ -244,3 +251,37 @@ def test_hydrate_reports_cache_persistence_status(monkeypatch, tmp_path: Path) -
     assert ok is True
     assert report["cache_path"] == "outputs/session_cache/session_state.json"
     assert report["cache_error"] is None
+
+
+def test_hydrate_aggregates_duplicate_fail_codes(monkeypatch, tmp_path: Path) -> None:
+    module = _load_accueil_module()
+
+    base = tmp_path / "outputs" / "combined"
+    _build_fake_run(base, run_id="RUN_CODES")
+    monkeypatch.setattr(module, "_to_abs_project_path", lambda path_like: base)
+
+    session_state = {}
+    fake_st = SimpleNamespace(
+        session_state=session_state,
+        cache_data=SimpleNamespace(clear=lambda: None),
+        cache_resource=SimpleNamespace(clear=lambda: None),
+    )
+    module.st = fake_st
+
+    def fake_loader(run_id: str, question_id: str, base_dir: str = "outputs/combined", **kwargs):  # noqa: ARG001
+        if question_id != "Q1":
+            return _fake_bundle(question_id, run_id, "PASS"), base / run_id / question_id
+        checks = (
+            [{"status": "FAIL", "code": "RC_IR_GT_1", "message": "", "scope": "HIST", "scenario_id": ""}] * 5
+            + [{"status": "FAIL", "code": "RC_FAR_RANGE", "message": "", "scope": "HIST", "scenario_id": ""}] * 2
+        )
+        return _fake_bundle_with_checks(question_id, run_id, checks), base / run_id / question_id
+
+    module.load_question_bundle_from_combined_run_safe = fake_loader
+    module.load_assumptions_table = lambda: pd.DataFrame()
+    module.load_phase2_assumptions_table = lambda: pd.DataFrame()
+    module._persist_session_cache_snapshot = lambda: (None, None)
+
+    ok, _ = module._hydrate_question_pages_from_run("RUN_CODES")
+    assert ok is True
+    assert session_state["q1_bundle_result"]["fail_codes_top5"] == ["RC_IR_GT_1 (x5)", "RC_FAR_RANGE (x2)"]

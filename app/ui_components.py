@@ -299,11 +299,11 @@ def show_limitations(lines: list[str]) -> None:
 def render_status_banner(checks: list[dict[str, Any]]) -> None:
     statuses = [str(c.get("status", "")).upper() for c in checks]
     if "FAIL" in statuses:
-        st.error("Statut global: FAIL. Des points critiques restent a corriger.")
+        st.error("Statut checks techniques: FAIL. Des points critiques restent a corriger.")
     elif "WARN" in statuses:
-        st.warning("Statut global: WARN. Resultats exploitables avec prudence.")
+        st.warning("Statut checks techniques: WARN. Resultats exploitables avec prudence.")
     else:
-        st.success("Statut global: PASS. Aucun echec critique detecte.")
+        st.success("Statut checks techniques: PASS. Aucun echec critique detecte.")
 
 
 def render_test_ledger(test_ledger: pd.DataFrame) -> None:

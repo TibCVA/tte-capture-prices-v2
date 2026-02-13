@@ -18,3 +18,11 @@ def test_home_page_contains_session_cache_controls() -> None:
     assert "Reinitialiser cache analyses" in content
     assert "_restore_session_from_disk_if_needed()" in content
     assert "Analyses chargees malgre checks FAIL" in content
+
+
+def test_checks_wording_is_explicit_and_not_global() -> None:
+    content = Path("app/ui_components.py").read_text(encoding="utf-8")
+    assert "Statut checks techniques: FAIL" in content
+    assert "Statut checks techniques: WARN" in content
+    assert "Statut checks techniques: PASS" in content
+    assert "Statut global: FAIL" not in content

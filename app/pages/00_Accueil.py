@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 import json
@@ -354,7 +355,7 @@ def _restore_question_bundle_session_state(snapshot: dict[str, object]) -> None:
 
 
 def _extract_check_counts(checks: list[dict] | object) -> dict[str, int]:
-    counts: dict[str, int] = {"PASS": 0, "WARN": 0, "FAIL": 0, "NON_TESTABLE": 0, "UNKNOWN": 0}
+    counts: dict[str, int] = {"PASS": 0, "WARN": 0, "FAIL": 0, "NON_TESTABLE": 0, "INFO": 0, "UNKNOWN": 0}
     if not isinstance(checks, list):
         return counts
     for raw in checks:
@@ -372,7 +373,7 @@ def _extract_check_counts(checks: list[dict] | object) -> dict[str, int]:
 def _extract_fail_codes(checks: list[dict] | object, limit: int = 5) -> list[str]:
     if not isinstance(checks, list):
         return []
-    fail_codes: list[str] = []
+    code_counts: Counter[str] = Counter()
     for raw in checks:
         if not isinstance(raw, dict):
             continue
@@ -382,9 +383,10 @@ def _extract_fail_codes(checks: list[dict] | object, limit: int = 5) -> list[str
         code = str(raw.get("code", "")).strip()
         if not code:
             continue
-        fail_codes.append(code)
-        if len(fail_codes) >= int(limit):
-            break
+        code_counts[code] += 1
+    fail_codes: list[str] = []
+    for code, count in sorted(code_counts.items(), key=lambda item: (-item[1], item[0]))[: int(limit)]:
+        fail_codes.append(f"{code} (x{count})" if int(count) > 1 else code)
     return fail_codes
 
 

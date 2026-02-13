@@ -185,13 +185,31 @@ def render() -> None:
         return
 
     bundle = payload["bundle"]
+    test_status_counts: dict[str, int] = {}
+    if isinstance(bundle.test_ledger, pd.DataFrame) and not bundle.test_ledger.empty and "status" in bundle.test_ledger.columns:
+        test_status_counts = (
+            bundle.test_ledger["status"].astype(str).str.upper().value_counts(dropna=False).to_dict()
+        )
+    test_total = int(len(bundle.test_ledger)) if isinstance(bundle.test_ledger, pd.DataFrame) else 0
+    st.caption(
+        "Tests empiriques: "
+        + f"PASS={int(test_status_counts.get('PASS', 0))}, "
+        + f"WARN={int(test_status_counts.get('WARN', 0))}, "
+        + f"FAIL={int(test_status_counts.get('FAIL', 0))}, "
+        + f"NON_TESTABLE={int(test_status_counts.get('NON_TESTABLE', 0))}, "
+        + f"Total={test_total}"
+    )
     if str(payload.get("quality_status", "")).upper() == "FAIL":
         counts = payload.get("check_counts", {})
         fail_codes = payload.get("fail_codes_top5", [])
         fail_count = int(counts.get("FAIL", 0)) if isinstance(counts, dict) else 0
-        st.error(f"Analyses chargees malgre checks FAIL. Nombre de FAIL: {fail_count}.")
+        st.error(
+            "FAIL sur checks techniques (different du test_ledger ci-dessous). "
+            + f"Nombre de FAIL checks: {fail_count}."
+        )
         if isinstance(fail_codes, list) and fail_codes:
             st.caption("Top FAIL codes: " + ", ".join(str(code) for code in fail_codes))
+        st.caption("Voir l'onglet Details techniques > Checks & exports pour le detail des checks.")
     render_status_banner(bundle.checks)
     render_status_interpretation(bundle.checks)
 
