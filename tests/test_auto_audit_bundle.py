@@ -97,6 +97,9 @@ def test_build_auto_audit_bundle_generates_expected_artifacts(tmp_path: Path, mo
     assert (audit_dir / "reports" / f"question_fail_matrix_{run_id}.csv").exists()
     assert (audit_dir / "reports" / f"detailed_es_de_{run_id}.md").exists()
     assert (audit_dir / "llm_reports" / "Q1_HASHQ1.json").exists()
+    manifest = json.loads((audit_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "critical_fail_codes_global" in manifest
+    assert "critical_fail_codes_scope_de_es" in manifest
 
     fail_matrix = pd.read_csv(audit_dir / "reports" / f"question_fail_matrix_{run_id}.csv")
     assert "RC_IR_GT_1" in fail_matrix.get("code", pd.Series(dtype=str)).astype(str).tolist()

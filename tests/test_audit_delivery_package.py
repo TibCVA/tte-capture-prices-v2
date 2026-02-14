@@ -28,6 +28,17 @@ def _build_minimal_audit_dir(audit_dir: Path, run_id: str) -> None:
         f"detailed_es_de_{run_id}.md",
     ]:
         (reports_dir / name).write_text("col\nvalue\n", encoding="utf-8")
+    (audit_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "critical_fail_codes_global": ["Q1_SCENARIO_EFFECT_PRESENT"],
+                "critical_fail_codes_scope_de_es": ["Q1_SCENARIO_EFFECT_PRESENT"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     (audit_dir / "llm_reports").mkdir(parents=True, exist_ok=True)
     (audit_dir / "llm_reports" / "Q1_HASH.json").write_text('{"status":"OK"}', encoding="utf-8")
 
@@ -73,6 +84,9 @@ def test_build_delivery_package_creates_zip_and_manifest(tmp_path: Path, monkeyp
     assert manifest_path.exists()
     assert xlsx_path.exists()
     assert len(read_delivery_zip_bytes(zip_path)) > 0
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert "critical_fail_codes_global" in manifest
+    assert "critical_fail_codes_scope_de_es" in manifest
 
     with zipfile.ZipFile(zip_path) as zf:
         names = zf.namelist()

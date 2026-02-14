@@ -12,7 +12,7 @@ from src.constants import DEFAULT_COUNTRIES
 from src.hash_utils import hash_object
 from src.metrics import compute_annual_metrics
 from src.modules.bundle_result import QuestionBundleResult
-from src.modules.q1_transition import run_q1
+from src.modules.q1_transition import run_q1, stage2_active_from_metrics
 from src.modules.q2_slope import run_q2
 from src.modules.q3_exit import run_q3
 from src.modules.q4_bess import run_q4
@@ -39,6 +39,40 @@ def _safe_float(v: Any, default: float = np.nan) -> float:
         return float(default)
     except Exception:
         return float(default)
+
+
+def _stage2_active_hist_reference(row: pd.Series, params: dict[str, float]) -> bool:
+    try:
+        if stage2_active_from_metrics(row, params):
+            return True
+    except Exception:
+        pass
+
+    h_negative_stage2_min = _safe_float(params.get("h_negative_stage2_min"), 200.0)
+    h_below_5_stage2_min = _safe_float(params.get("h_below_5_stage2_min"), 500.0)
+    sr_hours_stage2_min = _safe_float(params.get("sr_hours_stage2_min"), 0.10)
+    far_stage2_min = _safe_float(params.get("far_stage2_min"), 0.95)
+    ir_p10_stage2_min = _safe_float(params.get("ir_p10_stage2_min"), 1.5)
+    capture_ratio_pv_stage2_max = _safe_float(params.get("capture_ratio_pv_stage2_max"), 0.80)
+    capture_ratio_wind_stage2_max = _safe_float(params.get("capture_ratio_wind_stage2_max"), 0.90)
+
+    h_negative = _safe_float(row.get("h_negative_obs_at_end_year", row.get("h_negative_obs")), np.nan)
+    h_below_5 = _safe_float(row.get("h_below_5_obs_at_end_year", row.get("h_below_5_obs")), np.nan)
+    sr_hours = _safe_float(row.get("sr_hours_at_end_year", row.get("sr_hours")), np.nan)
+    far_observed = _safe_float(row.get("far_observed_at_end_year", row.get("far_observed")), np.nan)
+    ir_p10 = _safe_float(row.get("ir_p10_at_end_year", row.get("ir_p10")), np.nan)
+    capture_ratio_pv = _safe_float(row.get("capture_ratio_pv_at_end_year", row.get("capture_ratio_pv")), np.nan)
+    capture_ratio_wind = _safe_float(row.get("capture_ratio_wind_at_end_year", row.get("capture_ratio_wind")), np.nan)
+
+    return bool(
+        (np.isfinite(h_negative) and h_negative >= h_negative_stage2_min)
+        or (np.isfinite(h_below_5) and h_below_5 >= h_below_5_stage2_min)
+        or (np.isfinite(sr_hours) and sr_hours >= sr_hours_stage2_min)
+        or (np.isfinite(far_observed) and far_observed < far_stage2_min)
+        or (np.isfinite(ir_p10) and ir_p10 >= ir_p10_stage2_min)
+        or (np.isfinite(capture_ratio_pv) and capture_ratio_pv <= capture_ratio_pv_stage2_max)
+        or (np.isfinite(capture_ratio_wind) and capture_ratio_wind <= capture_ratio_wind_stage2_max)
+    )
 
 
 def _max_finite(values: pd.Series, default: float = 0.0) -> float:
@@ -173,8 +207,43 @@ def _derive_q1_hourly_scenario_params(
     country: str,
     scenario_years: list[int],
 ) -> dict[str, Any]:
+    sid = str(scenario_id).strip().upper()
     params: dict[str, Any] = {"scenario_id": str(scenario_id)}
+    floor_reasons: list[str] = []
+
+    def _apply_q1_floor_if_needed(demand_factor: float, must_run_scale: float) -> tuple[float, float]:
+        demand_val = float(demand_factor)
+        must_run_val = float(must_run_scale)
+        if sid == "DEMAND_UP":
+            if not np.isfinite(demand_val):
+                demand_val = 1.03
+                floor_reasons.append("demand_factor_floor_missing_assumptions")
+            elif demand_val < 1.03:
+                demand_val = 1.03
+                floor_reasons.append("demand_factor_floor_raised_to_1.03")
+        if sid == "LOW_RIGIDITY":
+            if not np.isfinite(must_run_val):
+                must_run_val = 0.97
+                floor_reasons.append("must_run_scale_floor_missing_assumptions")
+            elif must_run_val > 0.97:
+                must_run_val = 0.97
+                floor_reasons.append("must_run_scale_floor_lowered_to_0.97")
+        return demand_val, must_run_val
+
+    def _attach_floor_metadata() -> None:
+        if floor_reasons:
+            params["_q1_floor_applied"] = True
+            params["_q1_floor_reason"] = "; ".join(sorted(set([str(x) for x in floor_reasons if str(x).strip()])))
+
     if assumptions_phase2 is None or assumptions_phase2.empty:
+        demand_floor, must_run_floor = _apply_q1_floor_if_needed(np.nan, np.nan)
+        if np.isfinite(demand_floor):
+            params["demand_factor"] = float(max(0.0, demand_floor))
+            params["demand_uplift"] = float(max(-1.0, demand_floor - 1.0))
+        if np.isfinite(must_run_floor):
+            params["must_run_scale"] = float(np.clip(must_run_floor, 0.0, 2.0))
+            params["rigidity_reduction"] = float(max(0.0, 1.0 - must_run_floor))
+        _attach_floor_metadata()
         return params
 
     p2 = assumptions_phase2.copy()
@@ -194,6 +263,14 @@ def _derive_q1_hourly_scenario_params(
         & (p2["year"].isin(years_set))
     ].copy()
     if scen.empty or base.empty:
+        demand_floor, must_run_floor = _apply_q1_floor_if_needed(np.nan, np.nan)
+        if np.isfinite(demand_floor):
+            params["demand_factor"] = float(max(0.0, demand_floor))
+            params["demand_uplift"] = float(max(-1.0, demand_floor - 1.0))
+        if np.isfinite(must_run_floor):
+            params["must_run_scale"] = float(np.clip(must_run_floor, 0.0, 2.0))
+            params["rigidity_reduction"] = float(max(0.0, 1.0 - must_run_floor))
+        _attach_floor_metadata()
         return params
 
     merged = scen.merge(
@@ -203,6 +280,14 @@ def _derive_q1_hourly_scenario_params(
         suffixes=("_scen", "_base"),
     )
     if merged.empty:
+        demand_floor, must_run_floor = _apply_q1_floor_if_needed(np.nan, np.nan)
+        if np.isfinite(demand_floor):
+            params["demand_factor"] = float(max(0.0, demand_floor))
+            params["demand_uplift"] = float(max(-1.0, demand_floor - 1.0))
+        if np.isfinite(must_run_floor):
+            params["must_run_scale"] = float(np.clip(must_run_floor, 0.0, 2.0))
+            params["rigidity_reduction"] = float(max(0.0, 1.0 - must_run_floor))
+        _attach_floor_metadata()
         return params
 
     demand_ratio = (
@@ -215,12 +300,14 @@ def _derive_q1_hourly_scenario_params(
     )
     demand_factor = _safe_float(demand_ratio.median(), np.nan)
     must_run_scale = _safe_float(must_run_ratio.median(), np.nan)
+    demand_factor, must_run_scale = _apply_q1_floor_if_needed(demand_factor, must_run_scale)
     if np.isfinite(demand_factor):
         params["demand_factor"] = float(max(0.0, demand_factor))
         params["demand_uplift"] = float(max(-1.0, demand_factor - 1.0))
     if np.isfinite(must_run_scale):
         params["must_run_scale"] = float(np.clip(must_run_scale, 0.0, 2.0))
         params["rigidity_reduction"] = float(max(0.0, 1.0 - must_run_scale))
+    _attach_floor_metadata()
     return params
 
 
@@ -233,9 +320,10 @@ def _build_q1_historical_scenario_inputs(
     annual_hist: pd.DataFrame,
     hourly_hist_map: dict[tuple[str, int], pd.DataFrame],
     assumptions_phase2: pd.DataFrame,
-) -> tuple[pd.DataFrame, dict[tuple[str, int], pd.DataFrame]]:
+) -> tuple[pd.DataFrame, dict[tuple[str, int], pd.DataFrame], list[dict[str, Any]]]:
     annual_rows: list[dict[str, Any]] = []
     hourly_map: dict[tuple[str, int], pd.DataFrame] = {}
+    floor_events: list[dict[str, Any]] = []
     countries_cfg = load_countries().get("countries", {})
 
     for country in countries:
@@ -248,6 +336,14 @@ def _build_q1_historical_scenario_inputs(
             country=str(country),
             scenario_years=scenario_years_for_params if scenario_years_for_params else historical_years,
         )
+        if bool(scen_params.get("_q1_floor_applied", False)):
+            floor_events.append(
+                {
+                    "country": str(country),
+                    "scenario_id": str(scenario_id),
+                    "reason": str(scen_params.get("_q1_floor_reason", "floor_applied")).strip(),
+                }
+            )
         for year in historical_years:
             key = (str(country), int(year))
             hourly = hourly_hist_map.get(key)
@@ -284,9 +380,9 @@ def _build_q1_historical_scenario_inputs(
             hourly_map[key] = hourly_s
 
     if not annual_rows:
-        return pd.DataFrame(), hourly_map
+        return pd.DataFrame(), hourly_map, floor_events
     annual_df = pd.DataFrame(annual_rows).sort_values(["country", "year"]).reset_index(drop=True)
-    return annual_df, hourly_map
+    return annual_df, hourly_map, floor_events
 
 
 def _concat_hourly(country: str, years: list[int], hourly_map: dict[tuple[str, int], pd.DataFrame]) -> pd.DataFrame:
@@ -1023,7 +1119,7 @@ def _run_scen_module(
         if qid == "Q1":
             hourly_map_future = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
             hist_years = _selection_years(selection, annual_hist)
-            annual_hist_scen, hourly_map_hist_scen = _build_q1_historical_scenario_inputs(
+            annual_hist_scen, hourly_map_hist_scen, floor_events = _build_q1_historical_scenario_inputs(
                 scenario_id=scenario_id,
                 countries=countries,
                 historical_years=hist_years,
@@ -1045,7 +1141,20 @@ def _run_scen_module(
                 scen_sel["horizon_year"] = int(max(years_full))
             hourly_map_all = dict(hourly_map_hist_scen)
             hourly_map_all.update(hourly_map_future)
-            return run_q1(annual_all, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map_all)
+            res = run_q1(annual_all, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map_all)
+            if floor_events:
+                for event in floor_events:
+                    res.checks.append(
+                        {
+                            "status": "WARN",
+                            "code": "Q1_SCENARIO_FLOOR_APPLIED",
+                            "message": (
+                                f"{str(event.get('country', '')).strip()}-{str(event.get('scenario_id', scenario_id)).strip()}: "
+                                + str(event.get("reason", "floor_applied"))
+                            ),
+                        }
+                    )
+            return res
         if qid == "Q2":
             hourly_map = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
             hist_ref = run_q2(
@@ -1084,12 +1193,44 @@ def _run_scen_module(
             }
             return run_q2(annual_scen, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map)
         hourly_map = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
+        annual_hist_scoped = annual_hist[annual_hist["country"].astype(str).isin(countries)].copy()
+        annual_all = pd.concat([annual_hist_scoped, annual_scen], ignore_index=True)
+        if not annual_all.empty:
+            annual_all["country"] = annual_all["country"].astype(str)
+            annual_all["year"] = pd.to_numeric(annual_all["year"], errors="coerce")
+            annual_all = (
+                annual_all.sort_values(["country", "year"])
+                .drop_duplicates(subset=["country", "year"], keep="last")
+                .reset_index(drop=True)
+            )
+        hourly_map_all = dict(hourly_hist_map)
+        hourly_map_all.update(hourly_map)
+        q3_hist_stage2_reference_by_country: dict[str, bool] = {}
+        all_params = {
+            str(r["param_name"]): float(r["param_value"])
+            for _, r in assumptions_phase1.iterrows()
+            if str(r.get("param_name", "")).strip() != ""
+        }
+        for country in countries:
+            c_rows = annual_hist_scoped[annual_hist_scoped["country"].astype(str) == str(country)].copy()
+            if c_rows.empty:
+                continue
+            c_rows["year"] = pd.to_numeric(c_rows["year"], errors="coerce")
+            c_rows = c_rows.sort_values("year")
+            q3_hist_stage2_reference_by_country[str(country)] = bool(
+                _stage2_active_hist_reference(c_rows.iloc[-1], all_params)
+            )
+        scen_sel = {
+            **scen_sel,
+            "q3_hist_stage2_reference_by_country": q3_hist_stage2_reference_by_country,
+            "q3_force_scenario_applicability_from_hist": True,
+        }
         assumptions_q3 = assumptions_phase1.copy()
         if len(scenario_years) < 3:
             mask = assumptions_q3["param_name"].astype(str) == "trend_window_years"
             if mask.any():
                 assumptions_q3.loc[mask, "param_value"] = 2
-        return run_q3(annual_scen, hourly_map, assumptions_q3, scen_sel, run_id)
+        return run_q3(annual_all if not annual_all.empty else annual_scen, hourly_map_all, assumptions_q3, scen_sel, run_id)
 
     if qid == "Q4":
         year = int(selection.get("horizon_year", max(scenario_years) if scenario_years else max(DEFAULT_SCENARIO_YEARS)))
@@ -1761,31 +1902,91 @@ def _evaluate_test_ledger(
                         "Q4_NO_IMPACT_WITHOUT_DISPATCH",
                         "Q4_SOC_END_BOUNDARY",
                     }
-                    hist_fails = [c for c in hist_result.checks if str(c.get("status", "")).upper() == "FAIL"]
-                    extra_relevant_fails = []
-                    for mode_res in extra_hist.values():
+                    hist_country = ""
+                    hist_year = ""
+                    hist_frontier = hist_result.tables.get("Q4_bess_frontier", pd.DataFrame())
+                    if isinstance(hist_frontier, pd.DataFrame) and not hist_frontier.empty:
+                        hist_country = str(hist_frontier.iloc[0].get("country", "")).strip()
+                        hist_year_val = _safe_float(hist_frontier.iloc[0].get("year"), np.nan)
+                        hist_year = str(int(hist_year_val)) if np.isfinite(hist_year_val) else ""
+                    if not hist_country:
+                        hist_country = str(hist_result.selection.get("country", "")).strip()
+                    if not hist_year:
+                        hist_year_val = _safe_float(hist_result.selection.get("year"), np.nan)
+                        hist_year = str(int(hist_year_val)) if np.isfinite(hist_year_val) else ""
+
+                    hist_fails = [
+                        {
+                            **c,
+                            "_mode": "HIST_SURPLUS_FIRST",
+                            "_country": hist_country,
+                            "_year": hist_year,
+                        }
+                        for c in hist_result.checks
+                        if str(c.get("status", "")).upper() == "FAIL"
+                    ]
+                    extra_relevant_fails: list[dict[str, Any]] = []
+                    for mode_key, mode_res in extra_hist.items():
+                        mode_country = ""
+                        mode_year = ""
+                        mode_frontier = mode_res.tables.get("Q4_bess_frontier", pd.DataFrame())
+                        if isinstance(mode_frontier, pd.DataFrame) and not mode_frontier.empty:
+                            mode_country = str(mode_frontier.iloc[0].get("country", "")).strip()
+                            mode_year_val = _safe_float(mode_frontier.iloc[0].get("year"), np.nan)
+                            mode_year = str(int(mode_year_val)) if np.isfinite(mode_year_val) else ""
+                        if not mode_country:
+                            mode_country = str(mode_res.selection.get("country", "")).strip()
+                        if not mode_year:
+                            mode_year_val = _safe_float(mode_res.selection.get("year"), np.nan)
+                            mode_year = str(int(mode_year_val)) if np.isfinite(mode_year_val) else ""
                         for c in mode_res.checks:
                             if str(c.get("status", "")).upper() != "FAIL":
                                 continue
                             code = str(c.get("code", "")).upper()
                             if code in extra_relevant_fail_codes:
-                                extra_relevant_fails.append(c)
+                                extra_relevant_fails.append(
+                                    {
+                                        **c,
+                                        "_mode": str(mode_key),
+                                        "_country": mode_country,
+                                        "_year": mode_year,
+                                    }
+                                )
                     evaluated_checks = hist_result.checks + [c for r in extra_hist.values() for c in r.checks]
                     has_fail = bool(hist_fails or extra_relevant_fails)
                     has_warn = any(str(c.get("status", "")).upper() == "WARN" for c in evaluated_checks)
                     fail_codes: dict[str, int] = {}
+                    fail_context: dict[str, int] = {}
                     if has_fail:
                         for c in (hist_fails + extra_relevant_fails):
                             code = str(c.get("code", "")).strip().upper() or "UNKNOWN"
                             fail_codes[code] = int(fail_codes.get(code, 0)) + 1
+                            mode_ctx = str(c.get("_mode", "")).strip()
+                            country_ctx = str(c.get("_country", "")).strip()
+                            year_ctx = str(c.get("_year", "")).strip()
+                            ctx_parts = [code]
+                            if mode_ctx:
+                                ctx_parts.append(mode_ctx)
+                            if country_ctx:
+                                ctx_parts.append(country_ctx)
+                            if year_ctx:
+                                ctx_parts.append(year_ctx)
+                            ctx_key = "@".join(ctx_parts)
+                            fail_context[ctx_key] = int(fail_context.get(ctx_key, 0)) + 1
                     fail_top = sorted(fail_codes.items(), key=lambda item: (-item[1], item[0]))[:5]
                     fail_top_text = ",".join([f"{code}(x{count})" if int(count) > 1 else code for code, count in fail_top])
+                    fail_ctx_top = sorted(fail_context.items(), key=lambda item: (-item[1], item[0]))[:5]
+                    fail_ctx_text = ";".join([f"{ctx}(x{count})" if int(count) > 1 else ctx for ctx, count in fail_ctx_top])
                     if has_fail:
                         status = "FAIL"
                         value = f"FAIL_CODES:{fail_top_text}" if fail_top_text else "FAIL"
+                        if fail_ctx_text:
+                            value = value + f";CTX:{fail_ctx_text}"
                         interp = "Au moins un invariant physique batterie est viole."
                         if fail_top_text:
                             interp += f" Codes: {fail_top_text}."
+                        if fail_ctx_text:
+                            interp += f" Contextes: {fail_ctx_text}."
                     else:
                         status = "PASS"
                         value = "WARN" if has_warn else "PASS"
@@ -2375,12 +2576,31 @@ def run_question_bundle(
             if mode_suffix.upper().startswith("HIST_"):
                 mode_suffix = mode_suffix[len("HIST_") :]
             mode_scope = f"HIST_MODE_{mode_suffix}"
+            mode_frontier = mode_res.tables.get("Q4_bess_frontier", pd.DataFrame())
+            mode_country = str(mode_res.selection.get("country", "")).strip()
+            mode_year = _safe_float(mode_res.selection.get("year"), np.nan)
+            mode_power = np.nan
+            mode_duration = np.nan
+            mode_dispatch = str(mode_res.selection.get("dispatch_mode", mode_suffix)).strip()
+            if isinstance(mode_frontier, pd.DataFrame) and not mode_frontier.empty:
+                first_row = mode_frontier.iloc[0]
+                mode_country = str(first_row.get("country", mode_country)).strip()
+                mode_year = _safe_float(first_row.get("year", mode_year), mode_year)
+                mode_power = _safe_float(first_row.get("bess_power_mw_test"), np.nan)
+                mode_duration = _safe_float(first_row.get("bess_duration_h_test"), np.nan)
+                mode_dispatch = str(first_row.get("dispatch_mode", mode_dispatch)).strip()
             for c in mode_res.checks:
                 checks.append({**c, "scope": mode_scope, "scenario_id": str(mode_key)})
                 rows_extra.append(
                     {
                         "mode_key": str(mode_key),
                         "scope": mode_scope,
+                        "dispatch_mode": mode_dispatch,
+                        "country": mode_country,
+                        "year": int(mode_year) if np.isfinite(mode_year) else np.nan,
+                        "scenario_id": str(mode_res.scenario_id or mode_key),
+                        "bess_power_mw_test": mode_power,
+                        "bess_duration_h_test": mode_duration,
                         "status": str(c.get("status", "")),
                         "code": str(c.get("code", "")),
                         "message": str(c.get("message", "")),
@@ -2633,20 +2853,35 @@ def run_question_bundle(
 
     if not ledger.empty:
         ledger_fail_count = int((ledger["status"].astype(str) == "FAIL").sum())
-        consolidated_fail_count = int(
-            sum(
-                1
-                for c in checks
-                if str(c.get("status", "")).upper() == "FAIL"
-                and str(c.get("code", "")).upper() != "BUNDLE_LEDGER_STATUS"
-            )
-        )
+        consolidated_fail_checks = [
+            c
+            for c in checks
+            if str(c.get("status", "")).upper() == "FAIL"
+            and str(c.get("code", "")).upper() != "BUNDLE_LEDGER_STATUS"
+        ]
+        consolidated_fail_count = int(len(consolidated_fail_checks))
         if ledger_fail_count == 0 and consolidated_fail_count > 0:
+            mismatch_only_bundle_diagnostics = bool(
+                all(
+                    str(c.get("scope", "")).upper() == "BUNDLE"
+                    and not str(c.get("code", "")).upper().startswith("TEST_")
+                    for c in consolidated_fail_checks
+                )
+            )
+            mismatch_status = "WARN" if mismatch_only_bundle_diagnostics else "FAIL"
+            mismatch_reason = (
+                "ecart lie uniquement a des checks bundle diagnostiques."
+                if mismatch_only_bundle_diagnostics
+                else "ecart lie a des checks consolides critiques."
+            )
             checks.append(
                 {
-                    "status": "FAIL",
+                    "status": mismatch_status,
                     "code": "BUNDLE_LEDGER_CONSOLIDATED_MISMATCH",
-                    "message": "Le ledger affiche FAIL=0 alors que des checks consolides sont en FAIL.",
+                    "message": (
+                        "Le ledger affiche FAIL=0 alors que des checks consolides sont en FAIL "
+                        f"({mismatch_reason})"
+                    ),
                     "scope": "BUNDLE",
                     "scenario_id": "",
                 }

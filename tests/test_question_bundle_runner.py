@@ -119,6 +119,9 @@ def test_run_question_bundle_q4_executes_hist_modes(
     mode_scopes = {str(c.get("scope", "")) for c in bundle.checks}
     assert any(scope.startswith("HIST_MODE_") for scope in mode_scopes)
     assert "Q4_extra_mode_checks" in bundle.hist_result.tables
+    q4_extra = bundle.hist_result.tables.get("Q4_extra_mode_checks", pd.DataFrame())
+    for col in ["country", "year", "dispatch_mode", "scenario_id", "bess_power_mw_test", "bess_duration_h_test"]:
+        assert col in q4_extra.columns
 
 
 def test_run_question_bundle_q4_multicountry_hist(
@@ -503,6 +506,109 @@ def test_q4_h02_fails_on_relevant_extra_mode_physical_fail() -> None:
     assert row["status"] == "FAIL"
     assert "FAIL_CODES:" in str(row["value"])
     assert "Q4_SOC_NEG" in str(row["value"])
+    assert "CTX:" in str(row["value"])
+
+
+def test_q1_floor_applied_when_scenario_assumptions_are_too_weak() -> None:
+    assumptions_phase2 = pd.DataFrame(
+        [
+            {
+                "scenario_id": "BASE",
+                "country": "DE",
+                "year": 2030,
+                "demand_total_twh": 100.0,
+                "must_run_min_output_factor": 1.0,
+            },
+            {
+                "scenario_id": "DEMAND_UP",
+                "country": "DE",
+                "year": 2030,
+                "demand_total_twh": 100.0,
+                "must_run_min_output_factor": 1.0,
+            },
+        ]
+    )
+    params = qbundle_runner._derive_q1_hourly_scenario_params(
+        assumptions_phase2,
+        scenario_id="DEMAND_UP",
+        country="DE",
+        scenario_years=[2030],
+    )
+    assert bool(params.get("_q1_floor_applied", False)) is True
+    assert float(params.get("demand_factor", 0.0)) >= 1.03
+
+
+def test_run_scen_module_q3_uses_hist_reference_for_applicability(monkeypatch) -> None:
+    assumptions_phase1 = pd.DataFrame(
+        [
+            {"param_name": "h_negative_stage2_min", "param_value": 200.0},
+            {"param_name": "h_below_5_stage2_min", "param_value": 500.0},
+            {"param_name": "sr_hours_stage2_min", "param_value": 0.10},
+            {"param_name": "far_stage2_min", "param_value": 0.95},
+            {"param_name": "ir_p10_stage2_min", "param_value": 1.5},
+            {"param_name": "capture_ratio_pv_stage2_max", "param_value": 0.80},
+            {"param_name": "capture_ratio_wind_stage2_max", "param_value": 0.90},
+        ]
+    )
+    assumptions_phase2 = pd.DataFrame(
+        [
+            {"scenario_id": "DEMAND_UP", "country": "DE", "year": 2030},
+            {"scenario_id": "DEMAND_UP", "country": "DE", "year": 2031},
+        ]
+    )
+    annual_hist = pd.DataFrame(
+        [
+            {"country": "DE", "year": 2024, "h_negative_obs": 250.0, "h_below_5_obs": 600.0, "sr_hours": 0.20, "far_observed": 0.90, "ir_p10": 1.7},
+        ]
+    )
+    annual_scen = pd.DataFrame(
+        [
+            {"country": "DE", "year": 2030, "h_negative_obs": 0.0, "h_below_5_obs": 0.0, "sr_hours": 0.0, "far_observed": 1.0, "ir_p10": 0.2},
+            {"country": "DE", "year": 2031, "h_negative_obs": 0.0, "h_below_5_obs": 0.0, "sr_hours": 0.0, "far_observed": 1.0, "ir_p10": 0.2},
+        ]
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_load_scenario_annual_safe(scenario_id: str) -> pd.DataFrame:
+        _ = scenario_id
+        return annual_scen.copy()
+
+    def _fake_load_scenario_hourly_map(scenario_id: str, countries: list[str], years: list[int]) -> dict[tuple[str, int], pd.DataFrame]:
+        _ = scenario_id
+        _ = countries
+        _ = years
+        return {}
+
+    def _fake_run_q3(annual_df, hourly_by_country_year, assumptions_df, selection, run_id):  # type: ignore[no-untyped-def]
+        _ = hourly_by_country_year
+        _ = assumptions_df
+        captured["annual_rows"] = int(len(annual_df))
+        captured["selection"] = dict(selection)
+        return _empty_module_result("Q3", "SCEN", scenario_id=str(selection.get("scenario_id", "")))
+
+    monkeypatch.setattr(qbundle_runner, "_load_scenario_annual_safe", _fake_load_scenario_annual_safe)
+    monkeypatch.setattr(qbundle_runner, "_load_scenario_hourly_map", _fake_load_scenario_hourly_map)
+    monkeypatch.setattr(qbundle_runner, "run_q3", _fake_run_q3)
+
+    res = qbundle_runner._run_scen_module(
+        question_id="Q3",
+        scenario_id="DEMAND_UP",
+        annual_hist=annual_hist,
+        assumptions_phase1=assumptions_phase1,
+        assumptions_phase2=assumptions_phase2,
+        selection={"countries": ["DE"], "run_id": "TEST_Q3_SCEN"},
+        scenario_years=[2030, 2031],
+        hourly_hist_map={},
+    )
+    assert res is not None
+    assert int(captured.get("annual_rows", 0)) >= 3
+    scen_selection = captured.get("selection", {})
+    assert isinstance(scen_selection, dict)
+    assert bool(scen_selection.get("q3_force_scenario_applicability_from_hist", False)) is True
+    hist_ref = scen_selection.get("q3_hist_stage2_reference_by_country", {})
+    assert isinstance(hist_ref, dict)
+    assert bool(hist_ref.get("DE", False)) is True
 
 
 def test_q1_scenario_effect_present_fails_when_non_base_delta_is_zero() -> None:

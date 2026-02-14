@@ -143,10 +143,13 @@ def run_bess_dispatch(
             raise ValueError(f"Unsupported dispatch_mode={dispatch_mode}")
 
         # Terminal SOC feasibility: force discharge when SOC is above the maximum removable envelope.
-        if soc > max_soc_if_no_discharge_now + tol:
+        forced_terminal_discharge = bool(soc > max_soc_if_no_discharge_now + tol)
+        if forced_terminal_discharge:
             discharge_opp = max(discharge_opp, (soc - max_soc_if_no_discharge_now) * eta_d)
             charge_condition = False
             discharge_condition = True
+            # Priority to terminal feasibility over daily throughput cap.
+            remaining_discharge_budget = np.inf
 
         ch = 0.0
         dis = 0.0

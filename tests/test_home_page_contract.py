@@ -25,6 +25,7 @@ def test_home_page_contains_session_cache_controls() -> None:
     assert "Telecharger le dernier pack d'audit" in content
     assert "Statut global run" in content
     assert "Statut scope pack DE/ES" in content
+    assert "Divergence global/scope DE/ES" in content
     assert 'st.session_state["last_delivery_zip_path"]' in content
     assert 'st.session_state["last_onedrive_upload_status"]' in content
     assert 'st.session_state["last_status_summary_global_path"]' in content

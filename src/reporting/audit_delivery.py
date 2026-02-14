@@ -103,6 +103,14 @@ def build_delivery_package(
         combined_base_dir=Path("outputs/combined"),
     )
 
+    audit_manifest: dict[str, Any] = {}
+    audit_manifest_path = audit_root / "manifest.json"
+    if audit_manifest_path.exists():
+        try:
+            audit_manifest = json.loads(audit_manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            audit_manifest = {}
+
     delivery_manifest_path = delivery_dir / "delivery_manifest.json"
     zip_path = delivery_base / f"{package_name}.zip"
 
@@ -119,6 +127,12 @@ def build_delivery_package(
         "llm_reports_dir": str(delivery_dir / "llm_reports") if (delivery_dir / "llm_reports").exists() else "",
         "results_xlsx_path": str(results_xlsx_path),
         "extrait_result": extrait_result,
+        "critical_fail_codes_global": list(audit_manifest.get("critical_fail_codes_global", []))
+        if isinstance(audit_manifest.get("critical_fail_codes_global", []), list)
+        else [],
+        "critical_fail_codes_scope_de_es": list(audit_manifest.get("critical_fail_codes_scope_de_es", []))
+        if isinstance(audit_manifest.get("critical_fail_codes_scope_de_es", []), list)
+        else [],
     }
     delivery_manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -145,4 +159,3 @@ def build_delivery_package(
         "results_xlsx_path": str(results_xlsx_path),
         "event_log_path": str(event_log_path),
     }
-

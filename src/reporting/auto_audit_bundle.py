@@ -190,6 +190,31 @@ def _build_question_status_summary_scope(
     return out
 
 
+def _critical_fail_codes_from_status(status_df: pd.DataFrame, limit: int = 12) -> list[str]:
+    if status_df is None or status_df.empty:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for _, row in status_df.iterrows():
+        quality_status = str(row.get("quality_status", "")).upper().strip()
+        if quality_status != "FAIL":
+            continue
+        raw_codes = str(row.get("top_fail_codes", "")).strip()
+        if not raw_codes:
+            continue
+        parts = [str(x).strip() for x in raw_codes.split("|")]
+        for part in parts:
+            if not part:
+                continue
+            if part in seen:
+                continue
+            seen.add(part)
+            out.append(part)
+            if len(out) >= int(limit):
+                return out
+    return out
+
+
 def _build_question_fail_matrix(run_id: str, checks_catalog: pd.DataFrame) -> pd.DataFrame:
     if checks_catalog.empty:
         return pd.DataFrame(
@@ -392,6 +417,8 @@ def build_auto_audit_bundle(
         checks_catalog,
         scope_countries=["DE", "ES"],
     )
+    critical_fail_codes_global = _critical_fail_codes_from_status(q_status)
+    critical_fail_codes_scope_de_es = _critical_fail_codes_from_status(q_status_scope)
     fail_matrix = _build_question_fail_matrix(run_id_clean, checks_catalog)
 
     evidence_path = reports_dir / f"evidence_catalog_{run_id_clean}.csv"
@@ -449,6 +476,8 @@ def build_auto_audit_bundle(
             "detailed_markdown": str(detailed_md_path),
         },
         "llm_reports": llm_info,
+        "critical_fail_codes_global": critical_fail_codes_global,
+        "critical_fail_codes_scope_de_es": critical_fail_codes_scope_de_es,
         "retention_removed": removed_dirs,
         "warnings": warnings,
     }
@@ -463,6 +492,8 @@ def build_auto_audit_bundle(
         "question_status_summary_path": str(status_path),
         "question_status_summary_global_path": str(status_global_path),
         "question_status_summary_scope_path": str(status_scope_path),
+        "critical_fail_codes_global": critical_fail_codes_global,
+        "critical_fail_codes_scope_de_es": critical_fail_codes_scope_de_es,
         "warnings": warnings,
         "llm_reports_copied": llm_info.get("copied", []),
         "llm_reports_missing": llm_info.get("missing", []),

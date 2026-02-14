@@ -471,6 +471,15 @@ def run_q3(
     assumed_demand_multiplier = _safe_float(selection.get("demand_multiplier", 1.0), 1.0)
     assumed_must_run_reduction_factor = _safe_float(selection.get("must_run_reduction_factor", 0.0), 0.0)
     assumed_flex_multiplier = _safe_float(selection.get("flex_multiplier", 1.0), 1.0)
+    hist_stage2_reference_input = selection.get("q3_hist_stage2_reference_by_country", {})
+    q3_hist_stage2_reference_by_country: dict[str, bool] = {}
+    if isinstance(hist_stage2_reference_input, dict):
+        for k, v in hist_stage2_reference_input.items():
+            key = str(k).strip()
+            if not key:
+                continue
+            q3_hist_stage2_reference_by_country[key] = bool(v)
+    q3_force_scenario_applicability_from_hist = bool(selection.get("q3_force_scenario_applicability_from_hist", False))
 
     q1 = run_q1(
         annual_df,
@@ -526,6 +535,9 @@ def run_q3(
             all_params,
             suffix="_at_end_year",
         )
+        hist_stage2_ref = bool(q3_hist_stage2_reference_by_country.get(str(country), False))
+        if mode == "SCEN" and q3_force_scenario_applicability_from_hist and hist_stage2_ref:
+            stage2_active_end_year = True
         end_year_q1 = _safe_float(c_sum_row.get("end_year"), np.nan) if c_sum_row is not None else np.nan
         if (not np.isfinite(end_year_q1)) and (not c_panel.empty):
             end_year_q1 = _safe_float(c_panel["year"].max(), np.nan)
@@ -572,6 +584,15 @@ def run_q3(
                 else:
                     bascule_ref = np.nan
                     bascule_source = f"{bascule_source}_insufficient_low_price_evidence"
+        if (
+            mode == "SCEN"
+            and q3_force_scenario_applicability_from_hist
+            and hist_stage2_ref
+            and (not np.isfinite(bascule_ref))
+            and np.isfinite(end_year_q1)
+        ):
+            bascule_ref = float(int(end_year_q1))
+            bascule_source = "historical_reference_override"
 
         audit_common = {
             "scenario_id": scenario_id,

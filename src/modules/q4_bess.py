@@ -24,7 +24,7 @@ Q4_PARAMS = [
     "target_surplus_unabs_energy_twh",
 ]
 
-Q4_ENGINE_VERSION = "v2.2.2"
+Q4_ENGINE_VERSION = "v2.2.3"
 Q4_CACHE_BASE = Path("data/cache/q4")
 Q4_OUTPUT_SCHEMA_VERSION = "2.0.0"
 
@@ -1455,7 +1455,12 @@ def run_q4(
         )
 
     balance_rhs = charge_sum * eta_rt_series + (soc_start - soc_end) + tol
-    if bool((discharge_sum - balance_rhs > 0.0).any()):
+    balance_scale = np.maximum(
+        np.maximum(discharge_sum.abs(), (charge_sum * eta_rt_series).abs()),
+        (soc_start - soc_end).abs(),
+    )
+    balance_tol = np.maximum(1e-6, balance_scale * 1e-6)
+    if bool((discharge_sum - balance_rhs > balance_tol).any()):
         checks.append(
             {
                 "status": "FAIL",

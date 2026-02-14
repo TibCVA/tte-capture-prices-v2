@@ -425,6 +425,37 @@ def test_q4_no_impact_without_dispatch(make_raw_panel, countries_cfg, thresholds
     ).abs().le(1e-9).all()
 
 
+@pytest.mark.parametrize("dispatch_mode", ["SURPLUS_FIRST", "PRICE_ARBITRAGE_SIMPLE", "PV_COLOCATED"])
+def test_q4_physics_invariants_hold_across_dispatch_modes(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch, dispatch_mode):
+    monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")
+    raw = make_raw_panel(n=240)
+    hourly = build_hourly_table(raw, "FR", 2024, countries_cfg["countries"]["FR"], thresholds_cfg, "FR")
+    assumptions = pd.read_csv("data/assumptions/phase1_assumptions.csv")
+    res = run_q4(
+        hourly,
+        assumptions,
+        {
+            "country": "FR",
+            "year": 2024,
+            "objective": "LOW_PRICE_TARGET",
+            "power_grid": [0.0, 200.0, 500.0],
+            "duration_grid": [2.0, 4.0],
+            "force_recompute": True,
+        },
+        f"test_{dispatch_mode}",
+        dispatch_mode=dispatch_mode,
+    )
+    fail_codes = {str(c.get("code", "")).upper() for c in res.checks if str(c.get("status", "")).upper() == "FAIL"}
+    assert "Q4_ENERGY_BALANCE" not in fail_codes
+    assert "Q4_SOC_END_BOUNDARY" not in fail_codes
+    assert "TEST_Q4_001" not in fail_codes
+    f = res.tables["Q4_bess_frontier"].copy()
+    end = pd.to_numeric(f["soc_end_mwh"], errors="coerce").fillna(0.0).abs()
+    e = pd.to_numeric(f["bess_energy_mwh_test"], errors="coerce").fillna(0.0)
+    tol = (e.clip(lower=1.0) * 1e-6) + 1e-9
+    assert (end <= tol).all()
+
+
 @pytest.mark.performance
 def test_q4_performance_smoke(make_raw_panel, countries_cfg, thresholds_cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(q4_module, "Q4_CACHE_BASE", tmp_path / "q4cache")

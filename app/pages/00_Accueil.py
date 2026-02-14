@@ -1089,6 +1089,8 @@ def render() -> None:
                                 warnings = audit_report.get("warnings", [])
                                 if isinstance(warnings, list) and warnings:
                                     st.warning("Audit auto warnings: " + " | ".join([str(w) for w in warnings]))
+                                status_global_df: pd.DataFrame | None = None
+                                status_scope_df: pd.DataFrame | None = None
                                 status_global_path = str(
                                     audit_report.get(
                                         "question_status_summary_global_path",
@@ -1120,6 +1122,43 @@ def render() -> None:
                                             st.info("Statut scope pack DE/ES: tableau vide.")
                                         else:
                                             st.dataframe(status_scope_df, use_container_width=True, hide_index=True)
+                                if (
+                                    isinstance(status_global_df, pd.DataFrame)
+                                    and isinstance(status_scope_df, pd.DataFrame)
+                                    and not status_global_df.empty
+                                    and not status_scope_df.empty
+                                ):
+                                    global_view = status_global_df[
+                                        ["question_id", "quality_status", "top_fail_codes"]
+                                    ].rename(
+                                        columns={
+                                            "quality_status": "quality_status_global",
+                                            "top_fail_codes": "top_fail_codes_global",
+                                        }
+                                    )
+                                    scope_view = status_scope_df[
+                                        ["question_id", "quality_status", "top_fail_codes"]
+                                    ].rename(
+                                        columns={
+                                            "quality_status": "quality_status_scope",
+                                            "top_fail_codes": "top_fail_codes_scope",
+                                        }
+                                    )
+                                    merged_status = global_view.merge(scope_view, on="question_id", how="inner")
+                                    diverged = merged_status[
+                                        (merged_status["quality_status_global"].astype(str).str.upper() == "FAIL")
+                                        & (merged_status["quality_status_scope"].astype(str).str.upper() != "FAIL")
+                                    ]
+                                    if not diverged.empty:
+                                        details: list[str] = []
+                                        for _, row in diverged.iterrows():
+                                            qid = str(row.get("question_id", "")).strip()
+                                            global_codes = str(row.get("top_fail_codes_global", "")).strip() or "n/a"
+                                            scope_codes = str(row.get("top_fail_codes_scope", "")).strip() or "n/a"
+                                            details.append(
+                                                f"{qid}: global FAIL ({global_codes}) / scope {row.get('quality_status_scope', '')} ({scope_codes})"
+                                            )
+                                        st.info("Divergence global/scope DE/ES: " + " | ".join(details))
 
                                 delivery_report = audit_report.get("delivery", {})
                                 if isinstance(delivery_report, dict):
