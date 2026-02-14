@@ -316,6 +316,8 @@ def test_build_auto_audit_bundle_after_refresh_uses_bundle_hashes(monkeypatch) -
         return {
             "audit_dir": "outputs/audit_runs/RUN_AUDIT",
             "detailed_markdown_path": "outputs/audit_runs/RUN_AUDIT/reports/detailed_es_de_RUN_AUDIT.md",
+            "question_status_summary_global_path": "outputs/audit_runs/RUN_AUDIT/reports/question_status_summary_global_RUN_AUDIT.csv",
+            "question_status_summary_scope_path": "outputs/audit_runs/RUN_AUDIT/reports/question_status_summary_scope_DE_ES_RUN_AUDIT.csv",
             "warnings": [],
         }
 
@@ -360,6 +362,14 @@ def test_build_auto_audit_bundle_after_refresh_uses_bundle_hashes(monkeypatch) -
     assert session_state["last_delivery_zip_path"] == "outputs/audit_runs/RUN_AUDIT/delivery/FULL_RUN_AUDIT_DE_ES.zip"
     assert session_state["last_delivery_manifest"] == "outputs/audit_runs/RUN_AUDIT/delivery/FULL_RUN_AUDIT_DE_ES/delivery_manifest.json"
     assert session_state["last_onedrive_upload_status"]["status"] == "UPLOADED"
+    assert (
+        session_state["last_status_summary_global_path"]
+        == "outputs/audit_runs/RUN_AUDIT/reports/question_status_summary_global_RUN_AUDIT.csv"
+    )
+    assert (
+        session_state["last_status_summary_scope_path"]
+        == "outputs/audit_runs/RUN_AUDIT/reports/question_status_summary_scope_DE_ES_RUN_AUDIT.csv"
+    )
     assert len(captured_upload.get("args", [])) == 1
 
 

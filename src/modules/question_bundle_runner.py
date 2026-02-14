@@ -1773,15 +1773,26 @@ def _evaluate_test_ledger(
                     evaluated_checks = hist_result.checks + [c for r in extra_hist.values() for c in r.checks]
                     has_fail = bool(hist_fails or extra_relevant_fails)
                     has_warn = any(str(c.get("status", "")).upper() == "WARN" for c in evaluated_checks)
+                    fail_codes: dict[str, int] = {}
+                    if has_fail:
+                        for c in (hist_fails + extra_relevant_fails):
+                            code = str(c.get("code", "")).strip().upper() or "UNKNOWN"
+                            fail_codes[code] = int(fail_codes.get(code, 0)) + 1
+                    fail_top = sorted(fail_codes.items(), key=lambda item: (-item[1], item[0]))[:5]
+                    fail_top_text = ",".join([f"{code}(x{count})" if int(count) > 1 else code for code, count in fail_top])
                     if has_fail:
                         status = "FAIL"
+                        value = f"FAIL_CODES:{fail_top_text}" if fail_top_text else "FAIL"
                         interp = "Au moins un invariant physique batterie est viole."
+                        if fail_top_text:
+                            interp += f" Codes: {fail_top_text}."
                     else:
                         status = "PASS"
+                        value = "WARN" if has_warn else "PASS"
                         interp = "Les invariants physiques batterie sont respectes."
                         if has_warn:
                             interp += " Des avertissements non-physiques peuvent subsister (objectif/scenario)."
-                    _append_test_row(rows, spec, status, "FAIL" if has_fail else ("WARN" if has_warn else "PASS"), "aucun FAIL physique", interp)
+                    _append_test_row(rows, spec, status, value, "aucun FAIL physique", interp)
             elif qid == "Q5":
                 out = hist_result.tables.get("Q5_summary", pd.DataFrame())
                 if spec.test_id == "Q5-H-01":
@@ -2088,6 +2099,142 @@ def _evaluate_test_ledger(
     return pd.DataFrame(rows)
 
 
+def _check_q1_scenario_effect_present(comparison: pd.DataFrame) -> list[dict[str, Any]]:
+    if comparison is None or comparison.empty:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q1_SCENARIO_EFFECT_PRESENT",
+                "message": "Comparaison Q1 indisponible.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+    if "scenario_id" not in comparison.columns or "delta" not in comparison.columns:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q1_SCENARIO_EFFECT_PRESENT",
+                "message": "Colonnes scenario_id/delta manquantes pour Q1.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+
+    scen_ids = comparison["scenario_id"].astype(str).str.upper().str.strip()
+    non_base = comparison[scen_ids != "BASE"].copy()
+    if non_base.empty:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q1_SCENARIO_EFFECT_PRESENT",
+                "message": "Aucun scenario non-BASE a evaluer pour Q1.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+
+    delta = pd.to_numeric(non_base["delta"], errors="coerce")
+    finite = delta[np.isfinite(delta)]
+    if finite.empty:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q1_SCENARIO_EFFECT_PRESENT",
+                "message": "Aucun delta fini sur scenarios non-BASE pour Q1.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+
+    nonzero = int((finite.abs() > 1e-9).sum())
+    total = int(len(finite))
+    share = nonzero / total if total > 0 else 0.0
+    status = "FAIL" if nonzero == 0 else "PASS"
+    return [
+        {
+            "status": status,
+            "code": "Q1_SCENARIO_EFFECT_PRESENT",
+            "message": (
+                f"nonzero_share={share:.2%}; nonzero={nonzero}; finite={total}. "
+                + ("Les scenarios non-BASE n'ont aucun effet detectable." if status == "FAIL" else "Effet scenario detectable.")
+            ),
+            "scope": "BUNDLE",
+            "scenario_id": "",
+        }
+    ]
+
+
+def _check_q3_scenario_stress_sufficiency(comparison: pd.DataFrame) -> list[dict[str, Any]]:
+    if comparison is None or comparison.empty:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q3_SCENARIO_STRESS_SUFFICIENCY",
+                "message": "Comparaison Q3 indisponible.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+    if "scenario_id" not in comparison.columns or "scen_status" not in comparison.columns:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q3_SCENARIO_STRESS_SUFFICIENCY",
+                "message": "Colonnes scenario_id/scen_status manquantes pour Q3.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+
+    scen_ids = comparison["scenario_id"].astype(str).str.upper().str.strip()
+    non_base = comparison[scen_ids != "BASE"].copy()
+    if non_base.empty:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q3_SCENARIO_STRESS_SUFFICIENCY",
+                "message": "Aucun scenario non-BASE a evaluer pour Q3.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+
+    rows: list[tuple[str, float]] = []
+    for sid, grp in non_base.groupby("scenario_id"):
+        statuses = grp["scen_status"].astype(str).str.upper().str.strip()
+        if len(statuses) == 0:
+            continue
+        share_hors_scope = float((statuses == "HORS_SCOPE_PHASE2").mean())
+        rows.append((str(sid), share_hors_scope))
+
+    if not rows:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q3_SCENARIO_STRESS_SUFFICIENCY",
+                "message": "Impossible de calculer la part hors scope sur scenarios non-BASE.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+
+    fail_all = all(share >= 0.90 for _, share in rows)
+    details = "; ".join([f"{sid}:{share:.0%}" for sid, share in rows])
+    return [
+        {
+            "status": "FAIL" if fail_all else "PASS",
+            "code": "Q3_SCENARIO_STRESS_SUFFICIENCY",
+            "message": (
+                f"hors_scope_share_non_base={details}. "
+                + ("Stress scenario insuffisant (>=90% hors scope sur tous les scenarios non-BASE)." if fail_all else "Stress scenario exploitable.")
+            ),
+            "scope": "BUNDLE",
+            "scenario_id": "",
+        }
+    ]
+
+
 def run_question_bundle(
     question_id: str,
     annual_hist: pd.DataFrame,
@@ -2215,11 +2362,33 @@ def run_question_bundle(
     comparison = _annotate_comparison_interpretability(qid, comparison)
 
     checks: list[dict[str, Any]] = []
+    q4_extra_mode_checks = pd.DataFrame()
     for c in hist_result.checks:
         checks.append({**c, "scope": "HIST", "scenario_id": ""})
     for sid, scen_res in scen_results.items():
         for c in scen_res.checks:
             checks.append({**c, "scope": "SCEN", "scenario_id": sid})
+    if qid == "Q4" and extra_hist:
+        rows_extra: list[dict[str, Any]] = []
+        for mode_key, mode_res in extra_hist.items():
+            mode_suffix = str(mode_key).strip()
+            if mode_suffix.upper().startswith("HIST_"):
+                mode_suffix = mode_suffix[len("HIST_") :]
+            mode_scope = f"HIST_MODE_{mode_suffix}"
+            for c in mode_res.checks:
+                checks.append({**c, "scope": mode_scope, "scenario_id": str(mode_key)})
+                rows_extra.append(
+                    {
+                        "mode_key": str(mode_key),
+                        "scope": mode_scope,
+                        "status": str(c.get("status", "")),
+                        "code": str(c.get("code", "")),
+                        "message": str(c.get("message", "")),
+                    }
+                )
+        if rows_extra:
+            q4_extra_mode_checks = pd.DataFrame(rows_extra)
+            hist_result.tables["Q4_extra_mode_checks"] = q4_extra_mode_checks
 
     if not ledger.empty:
         n_fail = int((ledger["status"].astype(str) == "FAIL").sum())
@@ -2457,6 +2626,10 @@ def run_question_bundle(
         checks.extend(_check_q4_reporting_consistency(hist_result, scen_results, comparison))
     if qid == "Q5":
         checks.extend(_check_q5_ttl_obs_consistency(hist_result, scen_results, comparison))
+    if qid == "Q1":
+        checks.extend(_check_q1_scenario_effect_present(comparison))
+    if qid == "Q3":
+        checks.extend(_check_q3_scenario_stress_sufficiency(comparison))
 
     if not ledger.empty:
         ledger_fail_count = int((ledger["status"].astype(str) == "FAIL").sum())

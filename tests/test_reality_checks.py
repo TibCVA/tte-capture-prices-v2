@@ -97,3 +97,24 @@ def test_non_negative_suffix_field_cannot_be_negative():
     )
     checks = build_common_checks(annual)
     assert _first_status(checks, "RC_NON_NEGATIVE_FIELD_NEGATIVE") == "FAIL"
+
+
+def test_rc_ir_gt_1_is_warn_not_fail():
+    annual = pd.DataFrame(
+        [
+            {
+                "country": "FR",
+                "year": 2024,
+                "n_hours": 8760,
+                "coverage_price": 1.0,
+                "coverage_load_total": 1.0,
+                "sr_energy": 0.02,
+                "far_energy": 0.95,
+                "ir_p10": 1.1,
+                "p10_must_run_mw": 110.0,
+                "p10_load_mw": 100.0,
+            }
+        ]
+    )
+    checks = build_common_checks(annual)
+    assert _first_status(checks, "RC_IR_GT_1") == "WARN"

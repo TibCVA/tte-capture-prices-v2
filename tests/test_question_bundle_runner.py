@@ -5,7 +5,14 @@ import pandas as pd
 
 import src.modules.question_bundle_runner as qbundle_runner
 from src.config_loader import load_phase2_assumptions
-from src.modules.question_bundle_runner import _annotate_comparison_interpretability, _evaluate_test_ledger, _q1_comparison, run_question_bundle
+from src.modules.question_bundle_runner import (
+    _annotate_comparison_interpretability,
+    _check_q1_scenario_effect_present,
+    _check_q3_scenario_stress_sufficiency,
+    _evaluate_test_ledger,
+    _q1_comparison,
+    run_question_bundle,
+)
 from src.modules.result import ModuleResult
 from src.modules.test_registry import get_question_tests
 from src.processing import build_hourly_table
@@ -109,6 +116,9 @@ def test_run_question_bundle_q4_executes_hist_modes(
     assert bundle.hist_result.module_id == "Q4"
     assert not bundle.test_ledger.empty
     assert "Q4-H-01" in bundle.test_ledger["test_id"].tolist()
+    mode_scopes = {str(c.get("scope", "")) for c in bundle.checks}
+    assert any(scope.startswith("HIST_MODE_") for scope in mode_scopes)
+    assert "Q4_extra_mode_checks" in bundle.hist_result.tables
 
 
 def test_run_question_bundle_q4_multicountry_hist(
@@ -491,6 +501,38 @@ def test_q4_h02_fails_on_relevant_extra_mode_physical_fail() -> None:
     ledger = _evaluate_test_ledger("Q4", spec, hist, {}, {"HIST_PV_COLOCATED": extra_mode})
     row = ledger.iloc[0]
     assert row["status"] == "FAIL"
+    assert "FAIL_CODES:" in str(row["value"])
+    assert "Q4_SOC_NEG" in str(row["value"])
+
+
+def test_q1_scenario_effect_present_fails_when_non_base_delta_is_zero() -> None:
+    comparison = pd.DataFrame(
+        [
+            {"country": "DE", "scenario_id": "BASE", "delta": 0.0},
+            {"country": "ES", "scenario_id": "DEMAND_UP", "delta": 0.0},
+            {"country": "DE", "scenario_id": "LOW_RIGIDITY", "delta": 0.0},
+        ]
+    )
+    checks = _check_q1_scenario_effect_present(comparison)
+    assert len(checks) == 1
+    assert checks[0]["code"] == "Q1_SCENARIO_EFFECT_PRESENT"
+    assert checks[0]["status"] == "FAIL"
+
+
+def test_q3_scenario_stress_sufficiency_fails_when_all_non_base_are_hors_scope() -> None:
+    comparison = pd.DataFrame(
+        [
+            {"country": "DE", "scenario_id": "BASE", "scen_status": "stable"},
+            {"country": "DE", "scenario_id": "DEMAND_UP", "scen_status": "HORS_SCOPE_PHASE2"},
+            {"country": "ES", "scenario_id": "DEMAND_UP", "scen_status": "HORS_SCOPE_PHASE2"},
+            {"country": "DE", "scenario_id": "LOW_RIGIDITY", "scen_status": "HORS_SCOPE_PHASE2"},
+            {"country": "ES", "scenario_id": "LOW_RIGIDITY", "scen_status": "HORS_SCOPE_PHASE2"},
+        ]
+    )
+    checks = _check_q3_scenario_stress_sufficiency(comparison)
+    assert len(checks) == 1
+    assert checks[0]["code"] == "Q3_SCENARIO_STRESS_SUFFICIENCY"
+    assert checks[0]["status"] == "FAIL"
 
 
 def test_run_question_bundle_q5_adds_market_coherence_checks(monkeypatch) -> None:

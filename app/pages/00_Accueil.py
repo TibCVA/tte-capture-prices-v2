@@ -536,6 +536,8 @@ def _clear_question_bundle_session_state() -> None:
     st.session_state.pop("last_delivery_zip_path", None)
     st.session_state.pop("last_delivery_manifest", None)
     st.session_state.pop("last_onedrive_upload_status", None)
+    st.session_state.pop("last_status_summary_global_path", None)
+    st.session_state.pop("last_status_summary_scope_path", None)
 
 
 def _collect_bundle_hash_by_question() -> dict[str, str]:
@@ -587,6 +589,10 @@ def _build_auto_audit_bundle_after_refresh(run_id: str) -> tuple[bool, dict[str,
         delivery_report = {"status": "FAILED_BUILD", "error": str(exc)}
 
     result["delivery"] = delivery_report
+    status_global_path = str(result.get("question_status_summary_global_path", result.get("question_status_summary_path", ""))).strip()
+    status_scope_path = str(result.get("question_status_summary_scope_path", "")).strip()
+    st.session_state["last_status_summary_global_path"] = status_global_path
+    st.session_state["last_status_summary_scope_path"] = status_scope_path
     st.session_state["last_delivery_zip_path"] = str(delivery_report.get("zip_path", "")).strip()
     st.session_state["last_delivery_manifest"] = str(delivery_report.get("delivery_manifest_path", "")).strip()
 
@@ -1083,6 +1089,37 @@ def render() -> None:
                                 warnings = audit_report.get("warnings", [])
                                 if isinstance(warnings, list) and warnings:
                                     st.warning("Audit auto warnings: " + " | ".join([str(w) for w in warnings]))
+                                status_global_path = str(
+                                    audit_report.get(
+                                        "question_status_summary_global_path",
+                                        audit_report.get("question_status_summary_path", ""),
+                                    )
+                                ).strip()
+                                status_scope_path = str(audit_report.get("question_status_summary_scope_path", "")).strip()
+                                if status_global_path:
+                                    st.session_state["last_status_summary_global_path"] = status_global_path
+                                    st.caption(f"Statut global run: {status_global_path}")
+                                    try:
+                                        status_global_df = pd.read_csv(status_global_path)
+                                    except Exception as exc:
+                                        st.warning(f"Lecture statut global impossible: {exc}")
+                                    else:
+                                        if status_global_df.empty:
+                                            st.info("Statut global run: tableau vide.")
+                                        else:
+                                            st.dataframe(status_global_df, use_container_width=True, hide_index=True)
+                                if status_scope_path:
+                                    st.session_state["last_status_summary_scope_path"] = status_scope_path
+                                    st.caption(f"Statut scope pack DE/ES: {status_scope_path}")
+                                    try:
+                                        status_scope_df = pd.read_csv(status_scope_path)
+                                    except Exception as exc:
+                                        st.warning(f"Lecture statut scope DE/ES impossible: {exc}")
+                                    else:
+                                        if status_scope_df.empty:
+                                            st.info("Statut scope pack DE/ES: tableau vide.")
+                                        else:
+                                            st.dataframe(status_scope_df, use_container_width=True, hide_index=True)
 
                                 delivery_report = audit_report.get("delivery", {})
                                 if isinstance(delivery_report, dict):
@@ -1157,6 +1194,12 @@ def render() -> None:
         st.caption("Aucun pack d'audit livre dans cette session.")
     if last_manifest_path:
         st.caption(f"Dernier manifest: {last_manifest_path}")
+    last_status_global_path = str(st.session_state.get("last_status_summary_global_path", "")).strip()
+    last_status_scope_path = str(st.session_state.get("last_status_summary_scope_path", "")).strip()
+    if last_status_global_path:
+        st.caption(f"Statut global run: {last_status_global_path}")
+    if last_status_scope_path:
+        st.caption(f"Statut scope pack DE/ES: {last_status_scope_path}")
     last_upload_status = st.session_state.get("last_onedrive_upload_status")
     if isinstance(last_upload_status, dict) and last_upload_status:
         status = str(last_upload_status.get("status", "")).upper()

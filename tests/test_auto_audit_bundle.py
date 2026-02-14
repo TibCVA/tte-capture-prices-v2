@@ -92,6 +92,8 @@ def test_build_auto_audit_bundle_generates_expected_artifacts(tmp_path: Path, mo
     assert (audit_dir / "reports" / f"test_traceability_{run_id}.csv").exists()
     assert (audit_dir / "reports" / f"checks_catalog_{run_id}.csv").exists()
     assert (audit_dir / "reports" / f"question_status_summary_{run_id}.csv").exists()
+    assert (audit_dir / "reports" / f"question_status_summary_global_{run_id}.csv").exists()
+    assert (audit_dir / "reports" / f"question_status_summary_scope_DE_ES_{run_id}.csv").exists()
     assert (audit_dir / "reports" / f"question_fail_matrix_{run_id}.csv").exists()
     assert (audit_dir / "reports" / f"detailed_es_de_{run_id}.md").exists()
     assert (audit_dir / "llm_reports" / "Q1_HASHQ1.json").exists()

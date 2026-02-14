@@ -21,6 +21,8 @@ def _build_minimal_audit_dir(audit_dir: Path, run_id: str) -> None:
         f"checks_catalog_{run_id}.csv",
         f"question_fail_matrix_{run_id}.csv",
         f"question_status_summary_{run_id}.csv",
+        f"question_status_summary_global_{run_id}.csv",
+        f"question_status_summary_scope_DE_ES_{run_id}.csv",
         f"test_traceability_{run_id}.csv",
         f"evidence_catalog_{run_id}.csv",
         f"detailed_es_de_{run_id}.md",
@@ -77,4 +79,6 @@ def test_build_delivery_package_creates_zip_and_manifest(tmp_path: Path, monkeyp
         assert any(name.endswith("delivery_manifest.json") for name in names)
         assert any("/combined_run/Q1/summary.json" in name for name in names)
         assert any("/reports/checks_catalog_" in name for name in names)
+        assert any("/reports/question_status_summary_global_" in name for name in names)
+        assert any("/reports/question_status_summary_scope_DE_ES_" in name for name in names)
         assert any("/results_es_de_" in name and name.endswith(".xlsx") for name in names)

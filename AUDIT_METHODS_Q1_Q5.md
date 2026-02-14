@@ -1,4 +1,4 @@
-# Audit Methods Reference (Q1-Q5)
+﻿# Audit Methods Reference (Q1-Q5)
 
 Last updated: 2026-02-10 20:11 UTC
 Auto-generated from Python source code by `scripts/generate_audit_methods.py`.
@@ -163,7 +163,7 @@ Le pipeline applique 3 niveaux de controle :
 - `RC_IR_NEGATIVE` : IR negatif → FAIL
 - `RC_CAPTURE_RANGE` : capture price PV hors [-200, 500] EUR/MWh → WARN
 - `RC_TTL_LOW` : TTL < baseload - 20 EUR/MWh → WARN
-- `RC_IR_GT_1` : IR > 1 (must-run depasse la charge en creux) → WARN
+- `RC_IR_GT_1` : IR > 1 (must-run depasse la charge en creux) -> WARN (non bloquant seul)
 - `RC_LOW_REGIME_COHERENCE` : coherence regime < 0.55 → WARN
 - `RC_TTL_LOW_SAMPLE` : TTL calcule sur moins de 500 heures C+D → WARN
 - `RC_NEG_NOT_IN_AB` : moins de 50% des heures negatives en regime A/B → WARN
@@ -418,3 +418,4 @@ Status semantics: `PASS` (test passed), `WARN` (potential fragility), `FAIL` (ha
 2. Scenario logic is pragmatic stress-testing, not market forecast.
 3. Some question/scenario pairs can be `NON_TESTABLE` by design when stress is absent.
 4. Correlations and slopes are explanatory signals, not automatic causal proof.
+

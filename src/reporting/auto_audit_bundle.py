@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import shutil
 from typing import Any
 
@@ -114,6 +115,79 @@ def _build_question_status_summary(
         )
 
     return pd.DataFrame(rows)
+
+
+_COUNTRY_YEAR_IN_MESSAGE_RE = re.compile(r"\b([A-Z_]{2,})-(\d{4})\b")
+
+
+def _country_from_check_message(value: Any) -> str:
+    txt = str(value or "")
+    m = _COUNTRY_YEAR_IN_MESSAGE_RE.search(txt)
+    if not m:
+        return ""
+    return str(m.group(1)).upper().strip()
+
+
+def _build_question_status_summary_scope(
+    run_id: str,
+    global_status: pd.DataFrame,
+    checks_catalog: pd.DataFrame,
+    scope_countries: list[str],
+) -> pd.DataFrame:
+    scope_set = {str(c).upper().strip() for c in scope_countries if str(c).strip()}
+    if not scope_set:
+        scope_set = {"DE", "ES"}
+
+    out = global_status.copy()
+    for col in [
+        "checks_PASS",
+        "checks_WARN",
+        "checks_FAIL",
+        "checks_NON_TESTABLE",
+        "checks_INFO",
+        "checks_UNKNOWN",
+        "quality_status",
+        "top_fail_codes",
+    ]:
+        if col not in out.columns:
+            out[col] = 0 if col.startswith("checks_") else ""
+
+    checks = checks_catalog.copy()
+    if checks.empty:
+        out["quality_status"] = "MISSING_SCOPE"
+        out["top_fail_codes"] = ""
+        return out
+
+    if "scope" not in checks.columns:
+        checks["scope"] = ""
+    if "message" not in checks.columns:
+        checks["message"] = ""
+    if "country" in checks.columns:
+        checks["country_scope"] = checks["country"].astype(str).str.upper().str.strip()
+    else:
+        checks["country_scope"] = checks["message"].map(_country_from_check_message)
+    checks["is_bundle_scope"] = checks["scope"].astype(str).str.upper().eq("BUNDLE")
+    checks["in_scope"] = checks["country_scope"].astype(str).isin(scope_set)
+
+    for qid in REQUIRED_QUESTIONS:
+        q_mask = checks["question_id"].astype(str).str.upper().eq(str(qid).upper())
+        q_checks_all = checks[q_mask].copy()
+        q_checks = q_checks_all[q_checks_all["is_bundle_scope"] | q_checks_all["in_scope"]].copy()
+        check_counts = _status_count(q_checks.get("status", pd.Series(dtype=object)))
+        fail_codes = _top_fail_codes(q_checks, limit=5)
+        row_mask = out["question_id"].astype(str).str.upper().eq(str(qid).upper())
+        if not bool(row_mask.any()):
+            continue
+        out.loc[row_mask, "checks_PASS"] = int(check_counts.get("PASS", 0))
+        out.loc[row_mask, "checks_WARN"] = int(check_counts.get("WARN", 0))
+        out.loc[row_mask, "checks_FAIL"] = int(check_counts.get("FAIL", 0))
+        out.loc[row_mask, "checks_NON_TESTABLE"] = int(check_counts.get("NON_TESTABLE", 0))
+        out.loc[row_mask, "checks_INFO"] = int(check_counts.get("INFO", 0))
+        out.loc[row_mask, "checks_UNKNOWN"] = int(check_counts.get("UNKNOWN", 0))
+        out.loc[row_mask, "quality_status"] = _status_from_check_counts(check_counts)
+        out.loc[row_mask, "top_fail_codes"] = " | ".join(fail_codes)
+
+    return out
 
 
 def _build_question_fail_matrix(run_id: str, checks_catalog: pd.DataFrame) -> pd.DataFrame:
@@ -312,12 +386,20 @@ def build_auto_audit_bundle(
     traceability = build_test_traceability(run_dir, blocks)
     checks_catalog = build_checks_catalog(run_dir, blocks)
     q_status = _build_question_status_summary(run_id_clean, blocks)
+    q_status_scope = _build_question_status_summary_scope(
+        run_id_clean,
+        q_status,
+        checks_catalog,
+        scope_countries=["DE", "ES"],
+    )
     fail_matrix = _build_question_fail_matrix(run_id_clean, checks_catalog)
 
     evidence_path = reports_dir / f"evidence_catalog_{run_id_clean}.csv"
     traceability_path = reports_dir / f"test_traceability_{run_id_clean}.csv"
     checks_path = reports_dir / f"checks_catalog_{run_id_clean}.csv"
     status_path = reports_dir / f"question_status_summary_{run_id_clean}.csv"
+    status_global_path = reports_dir / f"question_status_summary_global_{run_id_clean}.csv"
+    status_scope_path = reports_dir / f"question_status_summary_scope_DE_ES_{run_id_clean}.csv"
     fail_matrix_path = reports_dir / f"question_fail_matrix_{run_id_clean}.csv"
     detailed_md_path = reports_dir / f"detailed_es_de_{run_id_clean}.md"
 
@@ -325,6 +407,8 @@ def build_auto_audit_bundle(
     traceability.to_csv(traceability_path, index=False)
     checks_catalog.to_csv(checks_path, index=False)
     q_status.to_csv(status_path, index=False)
+    q_status.to_csv(status_global_path, index=False)
+    q_status_scope.to_csv(status_scope_path, index=False)
     fail_matrix.to_csv(fail_matrix_path, index=False)
 
     country_scope = [str(c).upper().strip() for c in (countries or DEFAULT_COUNTRY_SCOPE) if str(c).strip()]
@@ -359,6 +443,8 @@ def build_auto_audit_bundle(
             "test_traceability": str(traceability_path),
             "checks_catalog": str(checks_path),
             "question_status_summary": str(status_path),
+            "question_status_summary_global": str(status_global_path),
+            "question_status_summary_scope_de_es": str(status_scope_path),
             "question_fail_matrix": str(fail_matrix_path),
             "detailed_markdown": str(detailed_md_path),
         },
@@ -374,9 +460,11 @@ def build_auto_audit_bundle(
         "audit_dir": str(audit_dir),
         "manifest_path": str(manifest_path),
         "detailed_markdown_path": str(detailed_md_path),
+        "question_status_summary_path": str(status_path),
+        "question_status_summary_global_path": str(status_global_path),
+        "question_status_summary_scope_path": str(status_scope_path),
         "warnings": warnings,
         "llm_reports_copied": llm_info.get("copied", []),
         "llm_reports_missing": llm_info.get("missing", []),
         "retention_removed": removed_dirs,
     }
-

@@ -185,7 +185,7 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
         if _finite(p10_must_run) and _finite(p10_load):
             checks.append(
                 {
-                    "status": "FAIL",
+                    "status": "WARN",
                     "code": "RC_IR_GT_1",
                     "message": (
                         f"{label}: IR > 1 (ratio hors borne). "
@@ -194,7 +194,7 @@ def _check_row(row: pd.Series, prefix: str = "") -> list[dict[str, str]]:
                 }
             )
         else:
-            checks.append({"status": "FAIL", "code": "RC_IR_GT_1", "message": f"{label}: IR > 1 (ratio hors borne)."})
+            checks.append({"status": "WARN", "code": "RC_IR_GT_1", "message": f"{label}: IR > 1 (ratio hors borne)."})
     if _finite(regime_coherence) and float(regime_coherence) < 0.55:
         checks.append({"status": "WARN", "code": "RC_LOW_REGIME_COHERENCE", "message": f"{label}: regime_coherence < 0.55."})
     if _finite(h_regime_c) and _finite(h_regime_d) and (_finite(ttl)) and (float(h_regime_c) + float(h_regime_d) < 500):
