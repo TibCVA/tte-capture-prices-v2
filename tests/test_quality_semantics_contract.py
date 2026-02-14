@@ -23,6 +23,13 @@ def test_q1_floor_and_effect_trace_contract_present() -> None:
     assert "Q1_SCENARIO_FLOOR_APPLIED" in content
     assert "Q1_scenario_param_trace" in content
     assert "effect_nonzero_flag" in content
+    assert "h_negative_at_end_year" in content
+    assert "stress_nonzero_share" in content
+
+
+def test_q3_differentiation_check_contract_present() -> None:
+    content = Path("src/modules/question_bundle_runner.py").read_text(encoding="utf-8")
+    assert "Q3_SCENARIO_DIFFERENTIATION" in content
 
 
 def test_auto_audit_bundle_exports_global_and_scope_status_files() -> None:

@@ -349,7 +349,7 @@ def _build_ceo_readiness_markdown(
     status_global: pd.DataFrame,
     status_scope: pd.DataFrame,
     output_path: Path,
-) -> tuple[str, list[str], list[str]]:
+) -> tuple[str, list[str], list[str], list[dict[str, str]], list[dict[str, str]]]:
     fail_rows_scope = status_scope[status_scope.get("quality_status", pd.Series(dtype=object)).astype(str).str.upper() == "FAIL"].copy()
     critical_scope: list[str] = []
     non_critical_scope: list[str] = []
@@ -373,6 +373,31 @@ def _build_ceo_readiness_markdown(
         decision = "GO_WITH_WARNINGS"
     else:
         decision = "GO"
+
+    ceo_no_go_reasons: list[dict[str, str]] = []
+    if decision == "NO-GO":
+        for tagged in critical_scope:
+            qid = ""
+            code = str(tagged)
+            if ":" in code:
+                qid, code = code.split(":", 1)
+            ceo_no_go_reasons.append(
+                {
+                    "question_id": str(qid).strip(),
+                    "code": str(code).strip(),
+                    "reason": "critical_fail_code_in_scope_de_es",
+                }
+            )
+
+    ceo_scope_summary: list[dict[str, str]] = []
+    for _, row in status_scope.iterrows():
+        ceo_scope_summary.append(
+            {
+                "question_id": str(row.get("question_id", "")).strip(),
+                "quality_status": str(row.get("quality_status", "")).strip(),
+                "top_fail_codes": str(row.get("top_fail_codes", "")).strip(),
+            }
+        )
 
     global_fail = status_global[status_global.get("quality_status", pd.Series(dtype=object)).astype(str).str.upper() == "FAIL"].copy()
     scope_fail = fail_rows_scope
@@ -410,10 +435,17 @@ def _build_ceo_readiness_markdown(
             top_codes = str(row.get("top_fail_codes", "")).strip() or "(no code)"
             lines.append(f"- {qid}: {top_codes}")
         lines.append("")
+    lines.append("## NO_GO_REASON_DETAIL")
+    if ceo_no_go_reasons:
+        for item in ceo_no_go_reasons:
+            lines.append(f"- {item.get('question_id','')}:{item.get('code','')} -> {item.get('reason','')}")
+    else:
+        lines.append("- none")
+    lines.append("")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines), encoding="utf-8")
-    return decision, critical_scope, non_critical_scope
+    return decision, critical_scope, non_critical_scope, ceo_no_go_reasons, ceo_scope_summary
 
 
 def _copy_llm_reports(
@@ -545,7 +577,7 @@ def build_auto_audit_bundle(
         output_md=detailed_md_path,
         warnings=warnings,
     )
-    ceo_decision, ceo_critical_scope, ceo_non_critical_scope = _build_ceo_readiness_markdown(
+    ceo_decision, ceo_critical_scope, ceo_non_critical_scope, ceo_no_go_reasons, ceo_scope_summary = _build_ceo_readiness_markdown(
         run_id=run_id_clean,
         status_global=q_status,
         status_scope=q_status_scope,
@@ -584,6 +616,8 @@ def build_auto_audit_bundle(
         "ceo_decision": ceo_decision,
         "ceo_critical_fail_codes_scope_de_es": ceo_critical_scope,
         "ceo_non_critical_fail_codes_scope_de_es": ceo_non_critical_scope,
+        "ceo_no_go_reasons": ceo_no_go_reasons,
+        "ceo_scope_summary": ceo_scope_summary,
         "retention_removed": removed_dirs,
         "warnings": warnings,
     }
@@ -604,6 +638,8 @@ def build_auto_audit_bundle(
         "critical_fail_codes_scope_de_es": critical_fail_codes_scope_de_es,
         "ceo_critical_fail_codes_scope_de_es": ceo_critical_scope,
         "ceo_non_critical_fail_codes_scope_de_es": ceo_non_critical_scope,
+        "ceo_no_go_reasons": ceo_no_go_reasons,
+        "ceo_scope_summary": ceo_scope_summary,
         "warnings": warnings,
         "llm_reports_copied": llm_info.get("copied", []),
         "llm_reports_missing": llm_info.get("missing", []),

@@ -1438,58 +1438,96 @@ def _q1_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
     if hist.empty:
         return pd.DataFrame()
     rows: list[dict[str, Any]] = []
+    metric_specs: list[tuple[str, str, bool]] = [
+        ("bascule_year_market", "bascule_year_market", True),
+        ("h_negative_at_end_year", "h_negative_at_end_year", False),
+        ("sr_energy_at_end_year", "sr_energy_at_end_year", False),
+        ("far_energy_at_end_year", "far_energy_at_end_year", False),
+        ("ir_p10_at_end_year", "ir_p10_at_end_year", False),
+    ]
     for sid, res in scen_results.items():
         scen = res.tables.get("Q1_country_summary", pd.DataFrame())
         if scen.empty:
             continue
-        merged = hist[["country", "bascule_year_market", "bascule_status_market"]].merge(
-            scen[["country", "bascule_year_market", "bascule_status_market"]],
+        hist_cols = ["country", "bascule_status_market"] + [col for _, col, _ in metric_specs]
+        scen_cols = ["country", "bascule_status_market"] + [col for _, col, _ in metric_specs]
+        hist_sel = hist[[c for c in hist_cols if c in hist.columns]].copy()
+        scen_sel = scen[[c for c in scen_cols if c in scen.columns]].copy()
+        merged = hist_sel.merge(
+            scen_sel,
             on="country",
             how="inner",
             suffixes=("_hist", "_scen"),
         )
         for _, r in merged.iterrows():
-            h = _safe_float(r.get("bascule_year_market_hist"), np.nan)
-            s = _safe_float(r.get("bascule_year_market_scen"), np.nan)
-            hist_value: int | None = int(h) if np.isfinite(h) else None
-            scen_value: int | None = int(s) if np.isfinite(s) else None
-            delta_years: int | None = (int(scen_value - hist_value) if (hist_value is not None and scen_value is not None) else None)
             scen_status = str(r.get("bascule_status_market_scen", "")).strip().lower()
             hist_status = str(r.get("bascule_status_market_hist", "")).strip().lower()
-            if scen_value is None:
-                if scen_status in {"not_reached_in_window", "not_reached_by_horizon"}:
-                    cmp_status = "OK_NOT_REACHED"
-                    cmp_reason = "bascule_not_reached_by_horizon"
+            for metric_name, source_col, is_year_metric in metric_specs:
+                h = _safe_float(r.get(f"{source_col}_hist"), np.nan)
+                s = _safe_float(r.get(f"{source_col}_scen"), np.nan)
+                if is_year_metric:
+                    hist_value: int | None = int(h) if np.isfinite(h) else None
+                    scen_value: int | None = int(s) if np.isfinite(s) else None
+                    delta_value: int | None = (
+                        int(scen_value - hist_value)
+                        if (hist_value is not None and scen_value is not None)
+                        else None
+                    )
+                    if scen_value is None:
+                        if scen_status in {"not_reached_in_window", "not_reached_by_horizon"}:
+                            cmp_status = "OK_NOT_REACHED"
+                            cmp_reason = "bascule_not_reached_by_horizon"
+                        else:
+                            cmp_status = "NOT_APPLICABLE"
+                            cmp_reason = f"bascule_missing_scenario:{scen_status or 'unknown'}"
+                    elif hist_value is None:
+                        cmp_status = "NOT_IN_SCOPE"
+                        cmp_reason = f"historical_bascule_missing:{hist_status or 'unknown'}"
+                    else:
+                        cmp_status = "OK"
+                        cmp_reason = "delta_interpretable"
+                    rows.append(
+                        {
+                            "country": r["country"],
+                            "scenario_id": sid,
+                            "metric": metric_name,
+                            "hist_value": hist_value,
+                            "scen_value": scen_value,
+                            "delta_years": delta_value,
+                            "delta": delta_value,
+                            "status": cmp_status,
+                            "reason": cmp_reason,
+                            "hist_bascule_status": hist_status,
+                            "scen_bascule_status": scen_status,
+                        }
+                    )
                 else:
-                    cmp_status = "NOT_APPLICABLE"
-                    cmp_reason = f"bascule_missing_scenario:{scen_status or 'unknown'}"
-            elif hist_value is None:
-                cmp_status = "NOT_IN_SCOPE"
-                cmp_reason = f"historical_bascule_missing:{hist_status or 'unknown'}"
-            else:
-                cmp_status = "OK"
-                cmp_reason = "delta_interpretable"
-            rows.append(
-                {
-                    "country": r["country"],
-                    "scenario_id": sid,
-                    "metric": "bascule_year_market",
-                    "hist_value": hist_value,
-                    "scen_value": scen_value,
-                    "delta_years": delta_years,
-                    "delta": delta_years,
-                    "status": cmp_status,
-                    "reason": cmp_reason,
-                    "hist_bascule_status": hist_status,
-                    "scen_bascule_status": scen_status,
-                }
-            )
+                    cmp_status = "OK" if np.isfinite(h) and np.isfinite(s) else "NOT_APPLICABLE"
+                    cmp_reason = "delta_interpretable" if cmp_status == "OK" else "metric_missing_or_non_finite"
+                    rows.append(
+                        {
+                            "country": r["country"],
+                            "scenario_id": sid,
+                            "metric": metric_name,
+                            "hist_value": h if np.isfinite(h) else np.nan,
+                            "scen_value": s if np.isfinite(s) else np.nan,
+                            "delta_years": np.nan,
+                            "delta": (s - h) if (np.isfinite(s) and np.isfinite(h)) else np.nan,
+                            "status": cmp_status,
+                            "reason": cmp_reason,
+                            "hist_bascule_status": hist_status,
+                            "scen_bascule_status": scen_status,
+                        }
+                    )
     out = pd.DataFrame(rows)
     if out.empty:
         return out
     for col in ["hist_value", "scen_value", "delta_years", "delta"]:
-        coerced = [int(v) if np.isfinite(_safe_float(v, np.nan)) else None for v in out[col].tolist()]
-        out[col] = pd.Series(coerced, index=out.index, dtype=object)
+        if col == "delta_years":
+            coerced = [int(v) if np.isfinite(_safe_float(v, np.nan)) else None for v in out[col].tolist()]
+            out[col] = pd.Series(coerced, index=out.index, dtype=object)
+        else:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
 
 
@@ -1534,8 +1572,11 @@ def _q3_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
         scen = res.tables.get("Q3_status", pd.DataFrame())
         if scen.empty:
             continue
-        merged = hist[["country", "status", "inversion_k_demand", "inversion_r_mustrun"]].merge(
-            scen[["country", "status", "inversion_k_demand", "inversion_r_mustrun"]],
+        optional_cols = ["required_demand_uplift_mw", "required_mustrun_reduction_ratio"]
+        hist_cols = ["country", "status", "inversion_k_demand", "inversion_r_mustrun"] + [c for c in optional_cols if c in hist.columns]
+        scen_cols = ["country", "status", "inversion_k_demand", "inversion_r_mustrun"] + [c for c in optional_cols if c in scen.columns]
+        merged = hist[hist_cols].merge(
+            scen[scen_cols],
             on="country",
             how="inner",
             suffixes=("_hist", "_scen"),
@@ -1569,6 +1610,21 @@ def _q3_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
                     "scen_status": str(r.get("status_scen", "")),
                 }
             )
+            if "required_demand_uplift_mw_hist" in merged.columns and "required_demand_uplift_mw_scen" in merged.columns:
+                hu = _safe_float(r.get("required_demand_uplift_mw_hist"), np.nan)
+                su = _safe_float(r.get("required_demand_uplift_mw_scen"), np.nan)
+                rows.append(
+                    {
+                        "country": r["country"],
+                        "scenario_id": sid,
+                        "metric": "required_demand_uplift_mw",
+                        "hist_value": hu,
+                        "scen_value": su,
+                        "delta": su - hu if np.isfinite(hu) and np.isfinite(su) else np.nan,
+                        "hist_status": str(r.get("status_hist", "")),
+                        "scen_status": str(r.get("status_scen", "")),
+                    }
+                )
     return pd.DataFrame(rows)
 
 
@@ -2120,19 +2176,25 @@ def _evaluate_test_ledger(
                             )
                             continue
 
-                        merged = base_summary[["country", "bascule_year_market"]].merge(
-                            summary[
+                        stress_cols = [
+                            "h_negative_at_end_year",
+                            "sr_energy_at_end_year",
+                            "far_energy_at_end_year",
+                            "ir_p10_at_end_year",
+                        ]
+                        base_cols = ["country", "bascule_year_market"] + [c for c in stress_cols if c in base_summary.columns]
+                        scen_cols = ["country", "bascule_year_market"] + [c for c in stress_cols if c in summary.columns]
+                        if {"required_demand_uplift_to_avoid_phase2", "required_flex_uplift_to_avoid_phase2"}.issubset(set(summary.columns)):
+                            scen_cols.extend(
                                 [
-                                    "country",
-                                    "bascule_year_market",
                                     "required_demand_uplift_to_avoid_phase2",
                                     "required_flex_uplift_to_avoid_phase2",
                                     "required_demand_uplift_status",
                                     "required_flex_uplift_status",
                                 ]
-                            ]
-                            if {"required_demand_uplift_to_avoid_phase2", "required_flex_uplift_to_avoid_phase2"}.issubset(set(summary.columns))
-                            else summary[["country", "bascule_year_market"]],
+                            )
+                        merged = base_summary[base_cols].merge(
+                            summary[scen_cols],
                             on="country",
                             how="outer",
                             suffixes=("_base", "_scen"),
@@ -2152,10 +2214,35 @@ def _evaluate_test_ledger(
 
                         base_vals = pd.to_numeric(merged["bascule_year_market_base"], errors="coerce")
                         scen_vals = pd.to_numeric(merged["bascule_year_market_scen"], errors="coerce")
-                        finite_mask = np.isfinite(base_vals) & np.isfinite(scen_vals)
-                        finite_share = float(finite_mask.mean())
-                        deltas = (scen_vals - base_vals).where(finite_mask, np.nan)
-                        nonzero_share = float((deltas.abs().fillna(0.0) > 0.0).mean())
+                        year_finite_mask = np.isfinite(base_vals) & np.isfinite(scen_vals)
+                        year_deltas = (scen_vals - base_vals).where(year_finite_mask, np.nan)
+                        year_nonzero_share = float((year_deltas.abs().fillna(0.0) >= Q1_EFFECT_THRESHOLDS["bascule_year_market"]).mean())
+
+                        stress_metrics = [
+                            "h_negative_at_end_year",
+                            "sr_energy_at_end_year",
+                            "far_energy_at_end_year",
+                            "ir_p10_at_end_year",
+                        ]
+                        stress_comparable = pd.Series(False, index=merged.index, dtype=bool)
+                        stress_nonzero = pd.Series(False, index=merged.index, dtype=bool)
+                        for metric in stress_metrics:
+                            base_col = f"{metric}_base"
+                            scen_col = f"{metric}_scen"
+                            if base_col not in merged.columns or scen_col not in merged.columns:
+                                continue
+                            b = pd.to_numeric(merged[base_col], errors="coerce")
+                            s = pd.to_numeric(merged[scen_col], errors="coerce")
+                            finite_metric = np.isfinite(b) & np.isfinite(s)
+                            stress_comparable = stress_comparable | finite_metric
+                            metric_delta = (s - b).where(finite_metric, np.nan)
+                            thr = float(Q1_EFFECT_THRESHOLDS.get(metric, 1e-9))
+                            stress_nonzero = stress_nonzero | (metric_delta.abs().fillna(0.0) >= thr)
+                        if int(stress_comparable.sum()) > 0:
+                            stress_nonzero_share = float(stress_nonzero[stress_comparable].mean())
+                        else:
+                            stress_nonzero_share = 0.0
+                        finite_share = float((year_finite_mask | stress_comparable).mean())
                         req_defined_share = 0.0
                         if "required_demand_uplift_to_avoid_phase2" in merged.columns or "required_flex_uplift_to_avoid_phase2" in merged.columns:
                             k = pd.to_numeric(merged.get("required_demand_uplift_to_avoid_phase2"), errors="coerce")
@@ -2171,22 +2258,29 @@ def _evaluate_test_ledger(
                                 interp = "Aucun delta bascule comparable vs BASE (finite_share=0), meme si des solveurs sont renseignes."
                             else:
                                 interp = "Aucun delta defini vs BASE (finite_share=0)."
-                        elif nonzero_share >= 0.20:
+                        effect_share = max(float(year_nonzero_share), float(stress_nonzero_share))
+                        if effect_share >= 0.20:
                             status = _status_from_threshold(spec, condition_met=True, evaluable=True)
                             interp = "Sensibilite scenario observable vs BASE."
                         else:
                             status = _status_from_threshold(spec, condition_met=False, evaluable=True)
-                            if nonzero_share == 0.0:
-                                interp = "Delta vs BASE defini mais nul sur tous les pays."
+                            if effect_share == 0.0:
+                                interp = "Effet scenario nul vs BASE sur annee de bascule et metriques de stress."
                             else:
-                                interp = "Sensibilite faible: deltas non nuls sur moins de 20% des pays."
+                                interp = "Sensibilite faible: effet detecte sur moins de 20% du scope exploitable."
 
                         _append_test_row(
                             rows,
                             spec,
                             status,
-                            f"finite_share={finite_share:.2%}; nonzero_share={nonzero_share:.2%}; req_defined={req_defined_share:.2%}; n_countries={n_countries}",
-                            "nonzero_share >= 20% (scenarios non-BASE)",
+                            (
+                                f"finite_share={finite_share:.2%}; "
+                                f"year_nonzero_share={year_nonzero_share:.2%}; "
+                                f"stress_nonzero_share={stress_nonzero_share:.2%}; "
+                                f"req_defined={req_defined_share:.2%}; "
+                                f"n_countries={n_countries}"
+                            ),
+                            "max(year_nonzero_share,stress_nonzero_share) >= 20% (scenarios non-BASE)",
                             interp,
                             sid,
                         )
@@ -2337,6 +2431,22 @@ def _evaluate_test_ledger(
     return pd.DataFrame(rows)
 
 
+Q1_EFFECT_THRESHOLDS: dict[str, float] = {
+    "bascule_year_market": 1.0,
+    "h_negative_at_end_year": 24.0,
+    "sr_energy_at_end_year": 0.01,
+    "far_energy_at_end_year": 0.01,
+    "ir_p10_at_end_year": 0.05,
+}
+
+
+def _q1_is_effect_nonzero(metric: str, delta: float) -> bool:
+    threshold = float(Q1_EFFECT_THRESHOLDS.get(str(metric), 1e-9))
+    if not np.isfinite(delta):
+        return False
+    return bool(abs(float(delta)) >= threshold)
+
+
 def _check_q1_scenario_effect_present(comparison: pd.DataFrame) -> list[dict[str, Any]]:
     if comparison is None or comparison.empty:
         return [
@@ -2359,8 +2469,11 @@ def _check_q1_scenario_effect_present(comparison: pd.DataFrame) -> list[dict[str
             }
         ]
 
-    scen_ids = comparison["scenario_id"].astype(str).str.upper().str.strip()
-    non_base = comparison[scen_ids != "BASE"].copy()
+    comp = comparison.copy()
+    if "metric" not in comp.columns:
+        comp["metric"] = "bascule_year_market"
+    scen_ids = comp["scenario_id"].astype(str).str.upper().str.strip()
+    non_base = comp[scen_ids != "BASE"].copy()
     if non_base.empty:
         return [
             {
@@ -2372,8 +2485,8 @@ def _check_q1_scenario_effect_present(comparison: pd.DataFrame) -> list[dict[str
             }
         ]
 
-    delta = pd.to_numeric(non_base["delta"], errors="coerce")
-    finite = delta[np.isfinite(delta)]
+    non_base["delta_num"] = pd.to_numeric(non_base["delta"], errors="coerce")
+    finite = non_base[np.isfinite(non_base["delta_num"])].copy()
     if finite.empty:
         return [
             {
@@ -2385,17 +2498,50 @@ def _check_q1_scenario_effect_present(comparison: pd.DataFrame) -> list[dict[str
             }
         ]
 
-    nonzero = int((finite.abs() > 1e-9).sum())
-    total = int(len(finite))
-    share = nonzero / total if total > 0 else 0.0
-    status = "FAIL" if nonzero == 0 else "PASS"
+    finite["effect_nonzero"] = [
+        _q1_is_effect_nonzero(str(m), _safe_float(d, np.nan))
+        for m, d in zip(finite.get("metric", pd.Series(dtype=object)), finite["delta_num"])
+    ]
+    scen_stats: list[tuple[str, int, int, float]] = []
+    for sid, grp in finite.groupby("scenario_id"):
+        total = int(len(grp))
+        nonzero = int(pd.Series(grp["effect_nonzero"]).fillna(False).astype(bool).sum())
+        share = (nonzero / total) if total > 0 else 0.0
+        scen_stats.append((str(sid), nonzero, total, share))
+    if not scen_stats:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q1_SCENARIO_EFFECT_PRESENT",
+                "message": "Aucun groupe scenario non-BASE exploitable pour Q1.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+    best_share = float(max([s[3] for s in scen_stats]))
+    if best_share == 0.0:
+        status = "FAIL"
+    elif best_share < 0.20:
+        status = "WARN"
+    else:
+        status = "PASS"
+    detail_parts = [f"{sid}:nonzero={nz}/{tot}({share:.0%})" for sid, nz, tot, share in sorted(scen_stats, key=lambda x: x[0])]
     return [
         {
             "status": status,
             "code": "Q1_SCENARIO_EFFECT_PRESENT",
             "message": (
-                f"nonzero_share={share:.2%}; nonzero={nonzero}; finite={total}. "
-                + ("Les scenarios non-BASE n'ont aucun effet detectable." if status == "FAIL" else "Effet scenario detectable.")
+                " ; ".join(detail_parts)
+                + ". "
+                + (
+                    "Les scenarios non-BASE n'ont aucun effet detectable sur les metriques Q1."
+                    if status == "FAIL"
+                    else (
+                        "Effet scenario faible sur les metriques Q1."
+                        if status == "WARN"
+                        else "Effet scenario detectable sur les metriques Q1."
+                    )
+                )
             ),
             "scope": "BUNDLE",
             "scenario_id": "",
@@ -2466,6 +2612,117 @@ def _check_q3_scenario_stress_sufficiency(comparison: pd.DataFrame) -> list[dict
             "message": (
                 f"hors_scope_share_non_base={details}. "
                 + ("Stress scenario insuffisant (>=90% hors scope sur tous les scenarios non-BASE)." if fail_all else "Stress scenario exploitable.")
+            ),
+            "scope": "BUNDLE",
+            "scenario_id": "",
+        }
+    ]
+
+
+def _check_q3_scenario_differentiation(comparison: pd.DataFrame) -> list[dict[str, Any]]:
+    if comparison is None or comparison.empty:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q3_SCENARIO_DIFFERENTIATION",
+                "message": "Comparaison Q3 indisponible.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+    if "scenario_id" not in comparison.columns:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q3_SCENARIO_DIFFERENTIATION",
+                "message": "Colonne scenario_id manquante pour Q3.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+
+    cmp = comparison.copy()
+    cmp["scenario_id"] = cmp["scenario_id"].astype(str)
+    base = cmp[cmp["scenario_id"].str.upper() == "BASE"].copy()
+    non_base = cmp[cmp["scenario_id"].str.upper() != "BASE"].copy()
+    if base.empty or non_base.empty:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q3_SCENARIO_DIFFERENTIATION",
+                "message": "Comparaison BASE/non-BASE indisponible pour Q3.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+
+    key_cols = ["country", "metric"]
+    if "metric" not in cmp.columns:
+        key_cols = ["country"]
+    base_keys = [k for k in key_cols if k in base.columns]
+    if not base_keys:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q3_SCENARIO_DIFFERENTIATION",
+                "message": "Clés de comparaison Q3 insuffisantes.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+    base_map = base[base_keys + [c for c in ["delta", "scen_status"] if c in base.columns]].copy()
+    rows_total = 0
+    rows_different = 0
+    details: list[str] = []
+    for sid, grp in non_base.groupby("scenario_id"):
+        merged = grp.merge(base_map, on=base_keys, how="inner", suffixes=("_nb", "_base"))
+        if merged.empty:
+            continue
+        d_nb = pd.to_numeric(merged.get("delta_nb"), errors="coerce")
+        d_base = pd.to_numeric(merged.get("delta_base"), errors="coerce")
+        diff_delta = (d_nb - d_base).abs() > 1e-9
+        s_nb = merged.get("scen_status_nb", pd.Series("", index=merged.index)).astype(str).str.upper().str.strip()
+        s_base = merged.get("scen_status_base", pd.Series("", index=merged.index)).astype(str).str.upper().str.strip()
+        diff_status = s_nb != s_base
+        diff_any = diff_delta.fillna(False) | diff_status.fillna(False)
+        n_total = int(len(merged))
+        n_diff = int(diff_any.sum())
+        share = (n_diff / n_total) if n_total > 0 else 0.0
+        rows_total += n_total
+        rows_different += n_diff
+        details.append(f"{sid}:{n_diff}/{n_total}({share:.0%})")
+    if rows_total == 0:
+        return [
+            {
+                "status": "NON_TESTABLE",
+                "code": "Q3_SCENARIO_DIFFERENTIATION",
+                "message": "Aucune ligne comparable BASE/non-BASE pour Q3.",
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        ]
+    share_global = rows_different / rows_total
+    if share_global <= 0.01:
+        status = "FAIL"
+    elif share_global < 0.20:
+        status = "WARN"
+    else:
+        status = "PASS"
+    return [
+        {
+            "status": status,
+            "code": "Q3_SCENARIO_DIFFERENTIATION",
+            "message": (
+                f"differentiation_share={share_global:.2%}; details={' ; '.join(details)}. "
+                + (
+                    "Differenciation scenario Q3 nulle/quasi nulle."
+                    if status == "FAIL"
+                    else (
+                        "Differenciation scenario Q3 faible."
+                        if status == "WARN"
+                        else "Differenciation scenario Q3 significative."
+                    )
+                )
             ),
             "scope": "BUNDLE",
             "scenario_id": "",
@@ -2611,8 +2868,12 @@ def run_question_bundle(
     comparison = _annotate_comparison_interpretability(qid, comparison)
     if qid == "Q1" and comparison is not None and not comparison.empty:
         delta_vals = pd.to_numeric(comparison.get("delta"), errors="coerce")
+        metrics = comparison.get("metric", pd.Series("bascule_year_market", index=comparison.index))
         comparison["effect_nonzero_flag"] = pd.Series(
-            [bool(abs(v) > 1e-9) if np.isfinite(v) else None for v in delta_vals.to_numpy(dtype=float)],
+            [
+                _q1_is_effect_nonzero(str(m), _safe_float(v, np.nan)) if np.isfinite(_safe_float(v, np.nan)) else None
+                for m, v in zip(metrics, delta_vals.to_numpy(dtype=float))
+            ],
             index=comparison.index,
             dtype=object,
         )
@@ -2905,15 +3166,19 @@ def run_question_bundle(
         checks.extend(_check_q1_scenario_effect_present(comparison))
     if qid == "Q3":
         checks.extend(_check_q3_scenario_stress_sufficiency(comparison))
-        has_q3_contract_check = any(str(c.get("code", "")).upper() == "Q3_SCENARIO_STRESS_SUFFICIENCY" for c in checks)
+        checks.extend(_check_q3_scenario_differentiation(comparison))
+        has_q3_contract_check = any(
+            str(c.get("code", "")).upper() in {"Q3_SCENARIO_STRESS_SUFFICIENCY", "Q3_SCENARIO_DIFFERENTIATION"}
+            for c in checks
+        )
         checks.append(
             {
                 "status": "PASS" if has_q3_contract_check else "WARN",
                 "code": "Q3_CONTRACT_CHECKS_PRESENT",
                 "message": (
-                    "Contrat Q3 OK: check Q3_SCENARIO_STRESS_SUFFICIENCY present."
+                    "Contrat Q3 OK: checks de stress et differenciation scenario presents."
                     if has_q3_contract_check
-                    else "Contrat Q3 degrade: check Q3_SCENARIO_STRESS_SUFFICIENCY manquant."
+                    else "Contrat Q3 degrade: checks scenario Q3 manquants."
                 ),
                 "scope": "BUNDLE",
                 "scenario_id": "",

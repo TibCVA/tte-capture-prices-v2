@@ -9,6 +9,7 @@ from src.modules.question_bundle_runner import (
     _annotate_comparison_interpretability,
     _derive_q1_hourly_scenario_params,
     _check_q1_scenario_effect_present,
+    _check_q3_scenario_differentiation,
     _check_q3_scenario_stress_sufficiency,
     _evaluate_test_ledger,
     _q1_comparison,
@@ -287,9 +288,15 @@ def test_q1_comparison_encodes_not_reached_without_nan() -> None:
     cmp = _q1_comparison(hist, {"LOW_RIGIDITY": scen})
     assert not cmp.empty
     assert cmp["reason"].astype(str).str.contains("delta_non_interpretable_nan").sum() == 0
-    for v in cmp["scen_value"].tolist():
-        assert isinstance(v, int) or (v is None)
-    de = cmp[cmp["country"].astype(str) == "DE"].iloc[0]
+    cmp_year = cmp[cmp["metric"].astype(str) == "bascule_year_market"].copy()
+    assert not cmp_year.empty
+    for v in cmp_year["scen_value"].tolist():
+        if v is None:
+            continue
+        if isinstance(v, float) and np.isnan(v):
+            continue
+        assert np.isfinite(float(v))
+    de = cmp_year[cmp_year["country"].astype(str) == "DE"].iloc[0]
     assert str(de["status"]) == "OK_NOT_REACHED"
     assert str(de["reason"]) == "bascule_not_reached_by_horizon"
 
@@ -400,6 +407,56 @@ def test_q1_s02_pass_when_nonzero_share_reaches_threshold() -> None:
     ledger = _evaluate_test_ledger("Q1", spec, hist, scen_results, {})
     row = ledger[ledger["scenario_id"] == "LOW_RIGIDITY"].iloc[0]
     assert row["status"] == "PASS"
+
+
+def test_q1_s02_pass_when_stress_nonzero_even_if_year_nonzero_is_zero() -> None:
+    spec = [s for s in get_question_tests("Q1", mode="SCEN") if s.test_id == "Q1-S-02"]
+    hist = _empty_module_result("Q1", "HIST")
+    base_df = pd.DataFrame(
+        [
+            {"country": "FR", "bascule_year_market": 2030.0, "h_negative_at_end_year": 300.0, "sr_energy_at_end_year": 0.08, "far_energy_at_end_year": 0.92, "ir_p10_at_end_year": 1.10},
+            {"country": "DE", "bascule_year_market": 2030.0, "h_negative_at_end_year": 280.0, "sr_energy_at_end_year": 0.07, "far_energy_at_end_year": 0.93, "ir_p10_at_end_year": 1.00},
+            {"country": "ES", "bascule_year_market": 2030.0, "h_negative_at_end_year": 260.0, "sr_energy_at_end_year": 0.06, "far_energy_at_end_year": 0.94, "ir_p10_at_end_year": 0.95},
+            {"country": "NL", "bascule_year_market": 2030.0, "h_negative_at_end_year": 240.0, "sr_energy_at_end_year": 0.05, "far_energy_at_end_year": 0.95, "ir_p10_at_end_year": 0.90},
+            {"country": "BE", "bascule_year_market": 2030.0, "h_negative_at_end_year": 220.0, "sr_energy_at_end_year": 0.04, "far_energy_at_end_year": 0.96, "ir_p10_at_end_year": 0.85},
+        ]
+    )
+    scen_df = base_df.copy()
+    scen_df.loc[scen_df["country"] == "FR", "h_negative_at_end_year"] = 180.0  # delta=-120 on 1/5 countries => 20%
+    scen_results = {
+        "BASE": ModuleResult(
+            module_id="Q1",
+            run_id="TEST_Q1_BASE",
+            selection={"mode": "SCEN", "scenario_id": "BASE"},
+            assumptions_used=[],
+            kpis={},
+            tables={"Q1_country_summary": base_df},
+            figures=[],
+            narrative_md="",
+            checks=[],
+            warnings=[],
+            mode="SCEN",
+            scenario_id="BASE",
+        ),
+        "DEMAND_UP": ModuleResult(
+            module_id="Q1",
+            run_id="TEST_Q1_DEMAND_UP",
+            selection={"mode": "SCEN", "scenario_id": "DEMAND_UP"},
+            assumptions_used=[],
+            kpis={},
+            tables={"Q1_country_summary": scen_df},
+            figures=[],
+            narrative_md="",
+            checks=[],
+            warnings=[],
+            mode="SCEN",
+            scenario_id="DEMAND_UP",
+        ),
+    }
+    ledger = _evaluate_test_ledger("Q1", spec, hist, scen_results, {})
+    row = ledger[ledger["scenario_id"] == "DEMAND_UP"].iloc[0]
+    assert row["status"] == "PASS"
+    assert "stress_nonzero_share=20.00%" in str(row["value"])
 
 
 def test_q3_s01_non_testable_when_hors_scope_majority() -> None:
@@ -626,6 +683,21 @@ def test_q1_scenario_effect_present_fails_when_non_base_delta_is_zero() -> None:
     assert checks[0]["status"] == "FAIL"
 
 
+def test_q1_scenario_effect_present_passes_when_stress_metrics_move_even_if_year_static() -> None:
+    comparison = pd.DataFrame(
+        [
+            {"country": "DE", "scenario_id": "BASE", "metric": "bascule_year_market", "delta": 0.0},
+            {"country": "DE", "scenario_id": "DEMAND_UP", "metric": "bascule_year_market", "delta": 0.0},
+            {"country": "ES", "scenario_id": "DEMAND_UP", "metric": "h_negative_at_end_year", "delta": -48.0},
+            {"country": "DE", "scenario_id": "LOW_RIGIDITY", "metric": "far_energy_at_end_year", "delta": 0.03},
+        ]
+    )
+    checks = _check_q1_scenario_effect_present(comparison)
+    assert len(checks) == 1
+    assert checks[0]["code"] == "Q1_SCENARIO_EFFECT_PRESENT"
+    assert checks[0]["status"] == "PASS"
+
+
 def test_q3_scenario_stress_sufficiency_fails_when_all_non_base_are_hors_scope() -> None:
     comparison = pd.DataFrame(
         [
@@ -639,6 +711,21 @@ def test_q3_scenario_stress_sufficiency_fails_when_all_non_base_are_hors_scope()
     checks = _check_q3_scenario_stress_sufficiency(comparison)
     assert len(checks) == 1
     assert checks[0]["code"] == "Q3_SCENARIO_STRESS_SUFFICIENCY"
+    assert checks[0]["status"] == "FAIL"
+
+
+def test_q3_scenario_differentiation_fails_when_non_base_equals_base() -> None:
+    comparison = pd.DataFrame(
+        [
+            {"country": "DE", "scenario_id": "BASE", "metric": "inversion_k_demand", "delta": -100.0, "scen_status": "STOP_CONFIRMED"},
+            {"country": "DE", "scenario_id": "DEMAND_UP", "metric": "inversion_k_demand", "delta": -100.0, "scen_status": "STOP_CONFIRMED"},
+            {"country": "ES", "scenario_id": "BASE", "metric": "inversion_r_mustrun", "delta": -0.5, "scen_status": "STOP_CONFIRMED"},
+            {"country": "ES", "scenario_id": "LOW_RIGIDITY", "metric": "inversion_r_mustrun", "delta": -0.5, "scen_status": "STOP_CONFIRMED"},
+        ]
+    )
+    checks = _check_q3_scenario_differentiation(comparison)
+    assert len(checks) == 1
+    assert checks[0]["code"] == "Q3_SCENARIO_DIFFERENTIATION"
     assert checks[0]["status"] == "FAIL"
 
 

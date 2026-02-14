@@ -104,9 +104,14 @@ def test_build_auto_audit_bundle_generates_expected_artifacts(tmp_path: Path, mo
     assert manifest.get("ceo_decision") == "GO"
     assert "ceo_critical_fail_codes_scope_de_es" in manifest
     assert "ceo_non_critical_fail_codes_scope_de_es" in manifest
+    assert "ceo_no_go_reasons" in manifest
+    assert "ceo_scope_summary" in manifest
+    assert isinstance(manifest.get("ceo_no_go_reasons"), list)
+    assert isinstance(manifest.get("ceo_scope_summary"), list)
 
     ceo_md = (audit_dir / "reports" / f"ceo_readiness_{run_id}.md").read_text(encoding="utf-8")
     assert "Decision: **GO**" in ceo_md
+    assert "## NO_GO_REASON_DETAIL" in ceo_md
 
     fail_matrix = pd.read_csv(audit_dir / "reports" / f"question_fail_matrix_{run_id}.csv")
     assert "RC_IR_GT_1" in fail_matrix.get("code", pd.Series(dtype=str)).astype(str).tolist()

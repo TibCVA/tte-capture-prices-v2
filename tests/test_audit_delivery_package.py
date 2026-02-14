@@ -37,6 +37,8 @@ def _build_minimal_audit_dir(audit_dir: Path, run_id: str) -> None:
                 "ceo_decision": "NO-GO",
                 "ceo_critical_fail_codes_scope_de_es": ["Q1_SCENARIO_EFFECT_PRESENT"],
                 "ceo_non_critical_fail_codes_scope_de_es": [],
+                "ceo_no_go_reasons": [{"question_id": "Q1", "code": "Q1_SCENARIO_EFFECT_PRESENT", "reason": "critical_fail_code_in_scope_de_es"}],
+                "ceo_scope_summary": [{"question_id": "Q1", "quality_status": "FAIL", "top_fail_codes": "Q1_SCENARIO_EFFECT_PRESENT"}],
             },
             ensure_ascii=False,
         ),
@@ -93,6 +95,8 @@ def test_build_delivery_package_creates_zip_and_manifest(tmp_path: Path, monkeyp
     assert manifest.get("ceo_decision") == "NO-GO"
     assert "ceo_critical_fail_codes_scope_de_es" in manifest
     assert "ceo_non_critical_fail_codes_scope_de_es" in manifest
+    assert "ceo_no_go_reasons" in manifest
+    assert "ceo_scope_summary" in manifest
 
     with zipfile.ZipFile(zip_path) as zf:
         names = zf.namelist()

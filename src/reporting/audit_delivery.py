@@ -140,6 +140,12 @@ def build_delivery_package(
         "ceo_non_critical_fail_codes_scope_de_es": list(audit_manifest.get("ceo_non_critical_fail_codes_scope_de_es", []))
         if isinstance(audit_manifest.get("ceo_non_critical_fail_codes_scope_de_es", []), list)
         else [],
+        "ceo_no_go_reasons": list(audit_manifest.get("ceo_no_go_reasons", []))
+        if isinstance(audit_manifest.get("ceo_no_go_reasons", []), list)
+        else [],
+        "ceo_scope_summary": list(audit_manifest.get("ceo_scope_summary", []))
+        if isinstance(audit_manifest.get("ceo_scope_summary", []), list)
+        else [],
     }
     delivery_manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
