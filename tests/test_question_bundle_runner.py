@@ -7,6 +7,7 @@ import src.modules.question_bundle_runner as qbundle_runner
 from src.config_loader import load_phase2_assumptions
 from src.modules.question_bundle_runner import (
     _annotate_comparison_interpretability,
+    _derive_q1_hourly_scenario_params,
     _check_q1_scenario_effect_present,
     _check_q3_scenario_stress_sufficiency,
     _evaluate_test_ledger,
@@ -639,6 +640,99 @@ def test_q3_scenario_stress_sufficiency_fails_when_all_non_base_are_hors_scope()
     assert len(checks) == 1
     assert checks[0]["code"] == "Q3_SCENARIO_STRESS_SUFFICIENCY"
     assert checks[0]["status"] == "FAIL"
+
+
+def test_derive_q1_hourly_scenario_params_applies_floor_on_noop_sources() -> None:
+    assumptions_phase2 = pd.DataFrame(
+        [
+            {
+                "scenario_id": "BASE",
+                "country": "DE",
+                "year": 2030,
+                "demand_total_twh": 100.0,
+                "must_run_min_output_factor": 0.80,
+            },
+            {
+                "scenario_id": "DEMAND_UP",
+                "country": "DE",
+                "year": 2030,
+                "demand_total_twh": 100.0,
+                "must_run_min_output_factor": 0.80,
+            },
+            {
+                "scenario_id": "LOW_RIGIDITY",
+                "country": "DE",
+                "year": 2030,
+                "demand_total_twh": 100.0,
+                "must_run_min_output_factor": 0.80,
+            },
+        ]
+    )
+    demand_params = _derive_q1_hourly_scenario_params(
+        assumptions_phase2,
+        scenario_id="DEMAND_UP",
+        country="DE",
+        scenario_years=[2030],
+    )
+    rigidity_params = _derive_q1_hourly_scenario_params(
+        assumptions_phase2,
+        scenario_id="LOW_RIGIDITY",
+        country="DE",
+        scenario_years=[2030],
+    )
+
+    assert abs(float(demand_params.get("_q1_demand_factor_source", np.nan)) - 1.0) < 1e-9
+    assert abs(float(demand_params.get("demand_factor", np.nan)) - 1.03) < 1e-9
+    assert bool(demand_params.get("_q1_floor_applied", False)) is True
+
+    assert abs(float(rigidity_params.get("_q1_must_run_scale_source", np.nan)) - 1.0) < 1e-9
+    assert abs(float(rigidity_params.get("must_run_scale", np.nan)) - 0.97) < 1e-9
+    assert bool(rigidity_params.get("_q1_floor_applied", False)) is True
+
+
+def test_derive_q1_hourly_scenario_params_keeps_explicit_non_base_deltas() -> None:
+    assumptions_phase2 = pd.DataFrame(
+        [
+            {
+                "scenario_id": "BASE",
+                "country": "DE",
+                "year": 2030,
+                "demand_total_twh": 100.0,
+                "must_run_min_output_factor": 1.00,
+            },
+            {
+                "scenario_id": "DEMAND_UP",
+                "country": "DE",
+                "year": 2030,
+                "demand_total_twh": 108.0,
+                "must_run_min_output_factor": 1.00,
+            },
+            {
+                "scenario_id": "LOW_RIGIDITY",
+                "country": "DE",
+                "year": 2030,
+                "demand_total_twh": 100.0,
+                "must_run_min_output_factor": 0.92,
+            },
+        ]
+    )
+    demand_params = _derive_q1_hourly_scenario_params(
+        assumptions_phase2,
+        scenario_id="DEMAND_UP",
+        country="DE",
+        scenario_years=[2030],
+    )
+    rigidity_params = _derive_q1_hourly_scenario_params(
+        assumptions_phase2,
+        scenario_id="LOW_RIGIDITY",
+        country="DE",
+        scenario_years=[2030],
+    )
+
+    assert abs(float(demand_params.get("demand_factor", np.nan)) - 1.08) < 1e-9
+    assert abs(float(rigidity_params.get("must_run_scale", np.nan)) - 0.92) < 1e-9
+    assert bool(demand_params.get("_q1_floor_applied", False)) is False
+    assert bool(rigidity_params.get("_q1_floor_applied", False)) is False
 
 
 def test_run_question_bundle_q5_adds_market_coherence_checks(monkeypatch) -> None:

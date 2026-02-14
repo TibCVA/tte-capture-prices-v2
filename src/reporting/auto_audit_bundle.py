@@ -24,6 +24,12 @@ DEFAULT_AUDIT_ROOT = Path("outputs/audit_runs")
 DEFAULT_COMBINED_BASE = Path("outputs/combined")
 DEFAULT_LLM_REPORTS_DIR = Path("outputs/llm_reports")
 DEFAULT_COUNTRY_SCOPE = ["ES", "DE"]
+CEO_CRITICAL_FAIL_CODES = {
+    "Q1_SCENARIO_EFFECT_PRESENT",
+    "Q3_SCENARIO_STRESS_SUFFICIENCY",
+    "Q4_ENERGY_BALANCE",
+    "Q4_SOC_END_BOUNDARY",
+}
 
 
 def _status_from_check_counts(check_counts: dict[str, int]) -> str:
@@ -321,6 +327,95 @@ def _generate_detailed_markdown_es_de(
         _fallback_detailed_markdown(run_id, countries, blocks, output_md)
 
 
+def _parse_top_fail_codes(raw: Any) -> list[str]:
+    txt = str(raw or "").strip()
+    if not txt:
+        return []
+    parts = [str(x).strip() for x in txt.split("|")]
+    out: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        if " (x" in part:
+            part = part.split(" (x", 1)[0].strip()
+        if part:
+            out.append(part)
+    return out
+
+
+def _build_ceo_readiness_markdown(
+    *,
+    run_id: str,
+    status_global: pd.DataFrame,
+    status_scope: pd.DataFrame,
+    output_path: Path,
+) -> tuple[str, list[str], list[str]]:
+    fail_rows_scope = status_scope[status_scope.get("quality_status", pd.Series(dtype=object)).astype(str).str.upper() == "FAIL"].copy()
+    critical_scope: list[str] = []
+    non_critical_scope: list[str] = []
+    for _, row in fail_rows_scope.iterrows():
+        qid = str(row.get("question_id", "")).strip()
+        for code in _parse_top_fail_codes(row.get("top_fail_codes", "")):
+            tagged = f"{qid}:{code}" if qid else code
+            if code in CEO_CRITICAL_FAIL_CODES:
+                critical_scope.append(tagged)
+            else:
+                non_critical_scope.append(tagged)
+    critical_scope = sorted(set(critical_scope))
+    non_critical_scope = sorted(set(non_critical_scope))
+
+    has_warn_scope = bool(
+        status_scope.get("quality_status", pd.Series(dtype=object)).astype(str).str.upper().isin(["WARN"]).any()
+    )
+    if critical_scope:
+        decision = "NO-GO"
+    elif not fail_rows_scope.empty or has_warn_scope:
+        decision = "GO_WITH_WARNINGS"
+    else:
+        decision = "GO"
+
+    global_fail = status_global[status_global.get("quality_status", pd.Series(dtype=object)).astype(str).str.upper() == "FAIL"].copy()
+    scope_fail = fail_rows_scope
+    lines: list[str] = []
+    lines.append(f"# CEO readiness - {run_id}")
+    lines.append("")
+    lines.append(f"Decision: **{decision}**")
+    lines.append("")
+    lines.append("## Scope")
+    lines.append("- Scope decision evaluated on DE/ES status summary.")
+    lines.append("- Global status retained for governance visibility.")
+    lines.append("")
+    lines.append("## Status snapshot")
+    lines.append(f"- Global questions in FAIL: {int(len(global_fail))}")
+    lines.append(f"- Scope DE/ES questions in FAIL: {int(len(scope_fail))}")
+    lines.append("")
+    lines.append("## Critical fail codes (scope DE/ES)")
+    if critical_scope:
+        for item in critical_scope:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("## Non-critical fail codes (scope DE/ES)")
+    if non_critical_scope:
+        for item in non_critical_scope:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    if not global_fail.empty:
+        lines.append("## Global FAIL overview")
+        for _, row in global_fail.iterrows():
+            qid = str(row.get("question_id", "")).strip()
+            top_codes = str(row.get("top_fail_codes", "")).strip() or "(no code)"
+            lines.append(f"- {qid}: {top_codes}")
+        lines.append("")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return decision, critical_scope, non_critical_scope
+
+
 def _copy_llm_reports(
     run_id: str,
     *,
@@ -429,6 +524,7 @@ def build_auto_audit_bundle(
     status_scope_path = reports_dir / f"question_status_summary_scope_DE_ES_{run_id_clean}.csv"
     fail_matrix_path = reports_dir / f"question_fail_matrix_{run_id_clean}.csv"
     detailed_md_path = reports_dir / f"detailed_es_de_{run_id_clean}.md"
+    ceo_readiness_path = reports_dir / f"ceo_readiness_{run_id_clean}.md"
 
     evidence_catalog.to_csv(evidence_path, index=False)
     traceability.to_csv(traceability_path, index=False)
@@ -448,6 +544,12 @@ def build_auto_audit_bundle(
         blocks=blocks,
         output_md=detailed_md_path,
         warnings=warnings,
+    )
+    ceo_decision, ceo_critical_scope, ceo_non_critical_scope = _build_ceo_readiness_markdown(
+        run_id=run_id_clean,
+        status_global=q_status,
+        status_scope=q_status_scope,
+        output_path=ceo_readiness_path,
     )
 
     llm_info = _copy_llm_reports(
@@ -474,10 +576,14 @@ def build_auto_audit_bundle(
             "question_status_summary_scope_de_es": str(status_scope_path),
             "question_fail_matrix": str(fail_matrix_path),
             "detailed_markdown": str(detailed_md_path),
+            "ceo_readiness": str(ceo_readiness_path),
         },
         "llm_reports": llm_info,
         "critical_fail_codes_global": critical_fail_codes_global,
         "critical_fail_codes_scope_de_es": critical_fail_codes_scope_de_es,
+        "ceo_decision": ceo_decision,
+        "ceo_critical_fail_codes_scope_de_es": ceo_critical_scope,
+        "ceo_non_critical_fail_codes_scope_de_es": ceo_non_critical_scope,
         "retention_removed": removed_dirs,
         "warnings": warnings,
     }
@@ -492,8 +598,12 @@ def build_auto_audit_bundle(
         "question_status_summary_path": str(status_path),
         "question_status_summary_global_path": str(status_global_path),
         "question_status_summary_scope_path": str(status_scope_path),
+        "ceo_readiness_path": str(ceo_readiness_path),
+        "ceo_decision": ceo_decision,
         "critical_fail_codes_global": critical_fail_codes_global,
         "critical_fail_codes_scope_de_es": critical_fail_codes_scope_de_es,
+        "ceo_critical_fail_codes_scope_de_es": ceo_critical_scope,
+        "ceo_non_critical_fail_codes_scope_de_es": ceo_non_critical_scope,
         "warnings": warnings,
         "llm_reports_copied": llm_info.get("copied", []),
         "llm_reports_missing": llm_info.get("missing", []),

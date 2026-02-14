@@ -12,7 +12,13 @@ from src.constants import DEFAULT_COUNTRIES
 from src.hash_utils import hash_object
 from src.metrics import compute_annual_metrics
 from src.modules.bundle_result import QuestionBundleResult
-from src.modules.q1_transition import run_q1, stage2_active_from_metrics
+from src.modules.q1_transition import (
+    Q1_SCENARIO_DEMAND_FACTOR_FLOOR,
+    Q1_SCENARIO_MUST_RUN_SCALE_FLOOR,
+    Q1_SCENARIO_NOOP_EPSILON,
+    run_q1,
+    stage2_active_from_metrics,
+)
 from src.modules.q2_slope import run_q2
 from src.modules.q3_exit import run_q3
 from src.modules.q4_bess import run_q4
@@ -211,39 +217,50 @@ def _derive_q1_hourly_scenario_params(
     params: dict[str, Any] = {"scenario_id": str(scenario_id)}
     floor_reasons: list[str] = []
 
-    def _apply_q1_floor_if_needed(demand_factor: float, must_run_scale: float) -> tuple[float, float]:
-        demand_val = float(demand_factor)
-        must_run_val = float(must_run_scale)
+    def _apply_q1_floor_if_needed(demand_factor_source: float, must_run_scale_source: float) -> tuple[float, float]:
+        demand_val = float(demand_factor_source)
+        must_run_val = float(must_run_scale_source)
         if sid == "DEMAND_UP":
             if not np.isfinite(demand_val):
-                demand_val = 1.03
+                demand_val = float(Q1_SCENARIO_DEMAND_FACTOR_FLOOR)
                 floor_reasons.append("demand_factor_floor_missing_assumptions")
-            elif demand_val < 1.03:
-                demand_val = 1.03
-                floor_reasons.append("demand_factor_floor_raised_to_1.03")
+            elif abs(demand_val - 1.0) < float(Q1_SCENARIO_NOOP_EPSILON):
+                demand_val = float(max(demand_val, Q1_SCENARIO_DEMAND_FACTOR_FLOOR))
+                floor_reasons.append("demand_factor_floor_noop_source")
         if sid == "LOW_RIGIDITY":
             if not np.isfinite(must_run_val):
-                must_run_val = 0.97
+                must_run_val = float(Q1_SCENARIO_MUST_RUN_SCALE_FLOOR)
                 floor_reasons.append("must_run_scale_floor_missing_assumptions")
-            elif must_run_val > 0.97:
-                must_run_val = 0.97
-                floor_reasons.append("must_run_scale_floor_lowered_to_0.97")
+            elif abs(must_run_val - 1.0) < float(Q1_SCENARIO_NOOP_EPSILON):
+                must_run_val = float(min(must_run_val, Q1_SCENARIO_MUST_RUN_SCALE_FLOOR))
+                floor_reasons.append("must_run_scale_floor_noop_source")
         return demand_val, must_run_val
 
-    def _attach_floor_metadata() -> None:
+    def _attach_floor_metadata(
+        demand_factor_source: float,
+        must_run_scale_source: float,
+        demand_factor_effective: float,
+        must_run_scale_effective: float,
+    ) -> None:
+        params["_q1_floor_applied"] = bool(floor_reasons)
         if floor_reasons:
-            params["_q1_floor_applied"] = True
             params["_q1_floor_reason"] = "; ".join(sorted(set([str(x) for x in floor_reasons if str(x).strip()])))
+        params["_q1_demand_factor_source"] = float(demand_factor_source) if np.isfinite(demand_factor_source) else np.nan
+        params["_q1_must_run_scale_source"] = float(must_run_scale_source) if np.isfinite(must_run_scale_source) else np.nan
+        params["_q1_demand_factor_effective"] = float(demand_factor_effective) if np.isfinite(demand_factor_effective) else np.nan
+        params["_q1_must_run_scale_effective"] = float(must_run_scale_effective) if np.isfinite(must_run_scale_effective) else np.nan
 
     if assumptions_phase2 is None or assumptions_phase2.empty:
-        demand_floor, must_run_floor = _apply_q1_floor_if_needed(np.nan, np.nan)
+        demand_source = np.nan
+        must_run_source = np.nan
+        demand_floor, must_run_floor = _apply_q1_floor_if_needed(demand_source, must_run_source)
         if np.isfinite(demand_floor):
             params["demand_factor"] = float(max(0.0, demand_floor))
             params["demand_uplift"] = float(max(-1.0, demand_floor - 1.0))
         if np.isfinite(must_run_floor):
             params["must_run_scale"] = float(np.clip(must_run_floor, 0.0, 2.0))
             params["rigidity_reduction"] = float(max(0.0, 1.0 - must_run_floor))
-        _attach_floor_metadata()
+        _attach_floor_metadata(demand_source, must_run_source, demand_floor, must_run_floor)
         return params
 
     p2 = assumptions_phase2.copy()
@@ -263,14 +280,16 @@ def _derive_q1_hourly_scenario_params(
         & (p2["year"].isin(years_set))
     ].copy()
     if scen.empty or base.empty:
-        demand_floor, must_run_floor = _apply_q1_floor_if_needed(np.nan, np.nan)
+        demand_source = np.nan
+        must_run_source = np.nan
+        demand_floor, must_run_floor = _apply_q1_floor_if_needed(demand_source, must_run_source)
         if np.isfinite(demand_floor):
             params["demand_factor"] = float(max(0.0, demand_floor))
             params["demand_uplift"] = float(max(-1.0, demand_floor - 1.0))
         if np.isfinite(must_run_floor):
             params["must_run_scale"] = float(np.clip(must_run_floor, 0.0, 2.0))
             params["rigidity_reduction"] = float(max(0.0, 1.0 - must_run_floor))
-        _attach_floor_metadata()
+        _attach_floor_metadata(demand_source, must_run_source, demand_floor, must_run_floor)
         return params
 
     merged = scen.merge(
@@ -280,14 +299,16 @@ def _derive_q1_hourly_scenario_params(
         suffixes=("_scen", "_base"),
     )
     if merged.empty:
-        demand_floor, must_run_floor = _apply_q1_floor_if_needed(np.nan, np.nan)
+        demand_source = np.nan
+        must_run_source = np.nan
+        demand_floor, must_run_floor = _apply_q1_floor_if_needed(demand_source, must_run_source)
         if np.isfinite(demand_floor):
             params["demand_factor"] = float(max(0.0, demand_floor))
             params["demand_uplift"] = float(max(-1.0, demand_floor - 1.0))
         if np.isfinite(must_run_floor):
             params["must_run_scale"] = float(np.clip(must_run_floor, 0.0, 2.0))
             params["rigidity_reduction"] = float(max(0.0, 1.0 - must_run_floor))
-        _attach_floor_metadata()
+        _attach_floor_metadata(demand_source, must_run_source, demand_floor, must_run_floor)
         return params
 
     demand_ratio = (
@@ -298,16 +319,16 @@ def _derive_q1_hourly_scenario_params(
         pd.to_numeric(merged.get("must_run_min_output_factor_scen"), errors="coerce")
         / pd.to_numeric(merged.get("must_run_min_output_factor_base"), errors="coerce").replace(0.0, np.nan)
     )
-    demand_factor = _safe_float(demand_ratio.median(), np.nan)
-    must_run_scale = _safe_float(must_run_ratio.median(), np.nan)
-    demand_factor, must_run_scale = _apply_q1_floor_if_needed(demand_factor, must_run_scale)
+    demand_source = _safe_float(demand_ratio.median(), np.nan)
+    must_run_source = _safe_float(must_run_ratio.median(), np.nan)
+    demand_factor, must_run_scale = _apply_q1_floor_if_needed(demand_source, must_run_source)
     if np.isfinite(demand_factor):
         params["demand_factor"] = float(max(0.0, demand_factor))
         params["demand_uplift"] = float(max(-1.0, demand_factor - 1.0))
     if np.isfinite(must_run_scale):
         params["must_run_scale"] = float(np.clip(must_run_scale, 0.0, 2.0))
         params["rigidity_reduction"] = float(max(0.0, 1.0 - must_run_scale))
-    _attach_floor_metadata()
+    _attach_floor_metadata(demand_source, must_run_source, demand_factor, must_run_scale)
     return params
 
 
@@ -320,10 +341,11 @@ def _build_q1_historical_scenario_inputs(
     annual_hist: pd.DataFrame,
     hourly_hist_map: dict[tuple[str, int], pd.DataFrame],
     assumptions_phase2: pd.DataFrame,
-) -> tuple[pd.DataFrame, dict[tuple[str, int], pd.DataFrame], list[dict[str, Any]]]:
+) -> tuple[pd.DataFrame, dict[tuple[str, int], pd.DataFrame], list[dict[str, Any]], pd.DataFrame]:
     annual_rows: list[dict[str, Any]] = []
     hourly_map: dict[tuple[str, int], pd.DataFrame] = {}
     floor_events: list[dict[str, Any]] = []
+    param_trace_rows: list[dict[str, Any]] = []
     countries_cfg = load_countries().get("countries", {})
 
     for country in countries:
@@ -335,6 +357,18 @@ def _build_q1_historical_scenario_inputs(
             scenario_id=scenario_id,
             country=str(country),
             scenario_years=scenario_years_for_params if scenario_years_for_params else historical_years,
+        )
+        param_trace_rows.append(
+            {
+                "country": str(country),
+                "scenario_id": str(scenario_id),
+                "demand_factor_source": _safe_float(scen_params.get("_q1_demand_factor_source"), np.nan),
+                "must_run_scale_source": _safe_float(scen_params.get("_q1_must_run_scale_source"), np.nan),
+                "demand_factor_effective": _safe_float(scen_params.get("_q1_demand_factor_effective"), np.nan),
+                "must_run_scale_effective": _safe_float(scen_params.get("_q1_must_run_scale_effective"), np.nan),
+                "floor_applied": bool(scen_params.get("_q1_floor_applied", False)),
+                "floor_reason": str(scen_params.get("_q1_floor_reason", "")).strip(),
+            }
         )
         if bool(scen_params.get("_q1_floor_applied", False)):
             floor_events.append(
@@ -379,10 +413,11 @@ def _build_q1_historical_scenario_inputs(
             annual_rows.append(annual_row)
             hourly_map[key] = hourly_s
 
+    trace_df = pd.DataFrame(param_trace_rows)
     if not annual_rows:
-        return pd.DataFrame(), hourly_map, floor_events
+        return pd.DataFrame(), hourly_map, floor_events, trace_df
     annual_df = pd.DataFrame(annual_rows).sort_values(["country", "year"]).reset_index(drop=True)
-    return annual_df, hourly_map, floor_events
+    return annual_df, hourly_map, floor_events, trace_df
 
 
 def _concat_hourly(country: str, years: list[int], hourly_map: dict[tuple[str, int], pd.DataFrame]) -> pd.DataFrame:
@@ -1119,7 +1154,7 @@ def _run_scen_module(
         if qid == "Q1":
             hourly_map_future = _load_scenario_hourly_map(scenario_id, countries, scenario_years)
             hist_years = _selection_years(selection, annual_hist)
-            annual_hist_scen, hourly_map_hist_scen, floor_events = _build_q1_historical_scenario_inputs(
+            annual_hist_scen, hourly_map_hist_scen, floor_events, q1_param_trace = _build_q1_historical_scenario_inputs(
                 scenario_id=scenario_id,
                 countries=countries,
                 historical_years=hist_years,
@@ -1142,6 +1177,8 @@ def _run_scen_module(
             hourly_map_all = dict(hourly_map_hist_scen)
             hourly_map_all.update(hourly_map_future)
             res = run_q1(annual_all, assumptions_phase1, scen_sel, run_id, hourly_by_country_year=hourly_map_all)
+            if isinstance(q1_param_trace, pd.DataFrame) and not q1_param_trace.empty:
+                res.tables["Q1_scenario_param_trace"] = q1_param_trace.copy()
             if floor_events:
                 for event in floor_events:
                     res.checks.append(
@@ -2543,6 +2580,17 @@ def run_question_bundle(
             continue
         scen_results[sid] = scen_res
 
+    if qid == "Q1":
+        q1_trace_parts: list[pd.DataFrame] = []
+        for sid, scen_res in scen_results.items():
+            if str(sid).upper() == "BASE":
+                continue
+            trace_df = scen_res.tables.get("Q1_scenario_param_trace", pd.DataFrame())
+            if isinstance(trace_df, pd.DataFrame) and not trace_df.empty:
+                q1_trace_parts.append(trace_df.copy())
+        if q1_trace_parts:
+            hist_result.tables["Q1_scenario_param_trace"] = pd.concat(q1_trace_parts, ignore_index=True)
+
     if qid in {"Q1", "Q2"} and "BASE" in [str(s) for s in scenario_ids]:
         if "BASE" not in scen_results:
             warnings.append("BASE: fallback explicite sur historique (scenario non disponible).")
@@ -2561,6 +2609,13 @@ def run_question_bundle(
     )
     comparison = _comparison_for_question(qid, hist_result, scen_results, extra_hist)
     comparison = _annotate_comparison_interpretability(qid, comparison)
+    if qid == "Q1" and comparison is not None and not comparison.empty:
+        delta_vals = pd.to_numeric(comparison.get("delta"), errors="coerce")
+        comparison["effect_nonzero_flag"] = pd.Series(
+            [bool(abs(v) > 1e-9) if np.isfinite(v) else None for v in delta_vals.to_numpy(dtype=float)],
+            index=comparison.index,
+            dtype=object,
+        )
 
     checks: list[dict[str, Any]] = []
     q4_extra_mode_checks = pd.DataFrame()
@@ -2850,6 +2905,51 @@ def run_question_bundle(
         checks.extend(_check_q1_scenario_effect_present(comparison))
     if qid == "Q3":
         checks.extend(_check_q3_scenario_stress_sufficiency(comparison))
+        has_q3_contract_check = any(str(c.get("code", "")).upper() == "Q3_SCENARIO_STRESS_SUFFICIENCY" for c in checks)
+        checks.append(
+            {
+                "status": "PASS" if has_q3_contract_check else "WARN",
+                "code": "Q3_CONTRACT_CHECKS_PRESENT",
+                "message": (
+                    "Contrat Q3 OK: check Q3_SCENARIO_STRESS_SUFFICIENCY present."
+                    if has_q3_contract_check
+                    else "Contrat Q3 degrade: check Q3_SCENARIO_STRESS_SUFFICIENCY manquant."
+                ),
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        )
+    if qid == "Q4":
+        q4_physical_codes = {
+            "Q4_ENERGY_BALANCE",
+            "Q4_SOC_END_BOUNDARY",
+            "Q4_ENERGY_BALANCE_RESIDUAL",
+            "Q4_SOC_NEG",
+            "Q4_SOC_ABOVE_EMAX",
+        }
+        q4_fail_codes = {
+            str(c.get("code", "")).upper()
+            for c in checks
+            if str(c.get("status", "")).upper() == "FAIL"
+        }
+        q4_extra_mode = hist_result.tables.get("Q4_extra_mode_checks", pd.DataFrame())
+        has_q4_trace_table = isinstance(q4_extra_mode, pd.DataFrame) and (not q4_extra_mode.empty)
+        status_q4_contract = "PASS"
+        if (q4_fail_codes & q4_physical_codes) and (not has_q4_trace_table):
+            status_q4_contract = "WARN"
+        checks.append(
+            {
+                "status": status_q4_contract,
+                "code": "Q4_CONTRACT_TRACEABILITY",
+                "message": (
+                    "Contrat Q4 OK: checks physiques traceables via exports."
+                    if status_q4_contract == "PASS"
+                    else "Contrat Q4 degrade: FAIL physiques sans trace Q4_extra_mode_checks."
+                ),
+                "scope": "BUNDLE",
+                "scenario_id": "",
+            }
+        )
 
     if not ledger.empty:
         ledger_fail_count = int((ledger["status"].astype(str) == "FAIL").sum())

@@ -133,6 +133,13 @@ def build_delivery_package(
         "critical_fail_codes_scope_de_es": list(audit_manifest.get("critical_fail_codes_scope_de_es", []))
         if isinstance(audit_manifest.get("critical_fail_codes_scope_de_es", []), list)
         else [],
+        "ceo_decision": str(audit_manifest.get("ceo_decision", "")).strip(),
+        "ceo_critical_fail_codes_scope_de_es": list(audit_manifest.get("ceo_critical_fail_codes_scope_de_es", []))
+        if isinstance(audit_manifest.get("ceo_critical_fail_codes_scope_de_es", []), list)
+        else [],
+        "ceo_non_critical_fail_codes_scope_de_es": list(audit_manifest.get("ceo_non_critical_fail_codes_scope_de_es", []))
+        if isinstance(audit_manifest.get("ceo_non_critical_fail_codes_scope_de_es", []), list)
+        else [],
     }
     delivery_manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 

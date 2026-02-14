@@ -18,6 +18,13 @@ def test_bundle_mismatch_check_is_explicitly_emitted() -> None:
     assert 'mismatch_status = "WARN" if mismatch_only_bundle_diagnostics else "FAIL"' in content
 
 
+def test_q1_floor_and_effect_trace_contract_present() -> None:
+    content = Path("src/modules/question_bundle_runner.py").read_text(encoding="utf-8")
+    assert "Q1_SCENARIO_FLOOR_APPLIED" in content
+    assert "Q1_scenario_param_trace" in content
+    assert "effect_nonzero_flag" in content
+
+
 def test_auto_audit_bundle_exports_global_and_scope_status_files() -> None:
     content = Path("src/reporting/auto_audit_bundle.py").read_text(encoding="utf-8")
     assert "question_status_summary_global_" in content
