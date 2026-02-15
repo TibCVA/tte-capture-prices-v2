@@ -26,6 +26,8 @@ def test_home_page_contains_session_cache_controls() -> None:
     assert "Statut global run" in content
     assert "Statut scope pack DE/ES" in content
     assert "Divergence global/scope DE/ES" in content
+    assert "Generation IA terminee avec succes partiel non bloquant" in content
+    assert "rapports precedents conserves" in content
     assert 'st.session_state["last_delivery_zip_path"]' in content
     assert 'st.session_state["last_onedrive_upload_status"]' in content
     assert 'st.session_state["last_status_summary_global_path"]' in content
@@ -38,3 +40,8 @@ def test_checks_wording_is_explicit_and_not_global() -> None:
     assert "Statut checks techniques: WARN" in content
     assert "Statut checks techniques: PASS" in content
     assert "Statut global: FAIL" not in content
+
+
+def test_llm_section_supports_fallback_wording() -> None:
+    content = Path("app/llm_analysis.py").read_text(encoding="utf-8")
+    assert "Rapport precedent (bundle different) charge en fallback" in content

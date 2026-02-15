@@ -126,3 +126,32 @@ def test_validate_llm_batch_rows_flags_mismatch_duplicate_and_missing() -> None:
     assert any("incoherent" in issue for issue in issues)
     assert any("Doublon" in issue for issue in issues)
     assert any("manquante" in issue for issue in issues)
+
+
+def test_run_parallel_llm_generation_handles_global_executor_failure(monkeypatch) -> None:
+    class _BrokenExecutor:
+        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = args
+            _ = kwargs
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            raise RuntimeError("executor boom")
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            _ = exc_type
+            _ = exc
+            _ = tb
+            return False
+
+    monkeypatch.setattr(llm_batch, "ThreadPoolExecutor", _BrokenExecutor)
+
+    prepared_items = [
+        {"question_id": "Q1", "bundle_hash": "hash_q1", "bundle_data": {"x": 1}},
+        {"question_id": "Q2", "bundle_hash": "hash_q2", "bundle_data": {"x": 2}},
+    ]
+
+    rows = llm_batch.run_parallel_llm_generation(prepared_items=prepared_items, api_key="dummy", max_workers=2)
+    by_q = {row["question_id"]: row for row in rows}
+    assert by_q["Q1"]["status"] == "FAILED_LLM"
+    assert by_q["Q2"]["status"] == "FAILED_LLM"
+    assert "Echec global batch IA" in str(by_q["Q1"]["error"])

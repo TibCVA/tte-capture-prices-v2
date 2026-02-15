@@ -182,77 +182,95 @@ def run_parallel_llm_generation(
             continue
         runnable.append(item)
 
-    with ThreadPoolExecutor(max_workers=max(1, int(max_workers))) as pool:
-        future_map = {
-            pool.submit(
-                run_llm_analysis,
-                item["question_id"],
-                item["bundle_hash"],
-                item["bundle_data"],
-                api_key,
-            ): item
-            for item in runnable
-        }
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, int(max_workers))) as pool:
+            future_map = {
+                pool.submit(
+                    run_llm_analysis,
+                    item["question_id"],
+                    item["bundle_hash"],
+                    item["bundle_data"],
+                    api_key,
+                ): item
+                for item in runnable
+            }
 
-        for future in as_completed(future_map):
-            item = future_map[future]
-            qid = str(item["question_id"]).upper()
-            bundle_hash = str(item["bundle_hash"])
-            report_file = LLM_REPORTS_DIR / f"{qid}_{bundle_hash}.json"
-            try:
-                report = future.result()
-            except Exception as exc:
+            for future in as_completed(future_map):
+                item = future_map[future]
+                qid = str(item["question_id"]).upper()
+                bundle_hash = str(item["bundle_hash"])
+                report_file = LLM_REPORTS_DIR / f"{qid}_{bundle_hash}.json"
+                try:
+                    report = future.result()
+                except Exception as exc:
+                    results.append(
+                        {
+                            "question_id": qid,
+                            "status": "FAILED_LLM",
+                            "bundle_hash": bundle_hash,
+                            "tokens_input": 0,
+                            "tokens_output": 0,
+                            "error": str(exc),
+                            "report_file": None,
+                        }
+                    )
+                    continue
+
+                error = report.get("error")
+                if error:
+                    results.append(
+                        {
+                            "question_id": qid,
+                            "status": "FAILED_LLM",
+                            "bundle_hash": bundle_hash,
+                            "tokens_input": 0,
+                            "tokens_output": 0,
+                            "error": str(error),
+                            "report_file": None,
+                        }
+                    )
+                    continue
+
+                if not report_file.exists():
+                    results.append(
+                        {
+                            "question_id": qid,
+                            "status": "FAILED_SAVE",
+                            "bundle_hash": bundle_hash,
+                            "tokens_input": int(report.get("tokens_input", 0) or 0),
+                            "tokens_output": int(report.get("tokens_output", 0) or 0),
+                            "error": "Rapport non trouve apres generation.",
+                            "report_file": None,
+                        }
+                    )
+                    continue
+
                 results.append(
                     {
                         "question_id": qid,
-                        "status": "FAILED_LLM",
-                        "bundle_hash": bundle_hash,
-                        "tokens_input": 0,
-                        "tokens_output": 0,
-                        "error": str(exc),
-                        "report_file": None,
-                    }
-                )
-                continue
-
-            error = report.get("error")
-            if error:
-                results.append(
-                    {
-                        "question_id": qid,
-                        "status": "FAILED_LLM",
-                        "bundle_hash": bundle_hash,
-                        "tokens_input": 0,
-                        "tokens_output": 0,
-                        "error": str(error),
-                        "report_file": None,
-                    }
-                )
-                continue
-
-            if not report_file.exists():
-                results.append(
-                    {
-                        "question_id": qid,
-                        "status": "FAILED_SAVE",
+                        "status": "OK",
                         "bundle_hash": bundle_hash,
                         "tokens_input": int(report.get("tokens_input", 0) or 0),
                         "tokens_output": int(report.get("tokens_output", 0) or 0),
-                        "error": "Rapport non trouve apres generation.",
-                        "report_file": None,
+                        "error": "",
+                        "report_file": str(report_file),
                     }
                 )
+    except Exception as exc:
+        existing_qids = {str(r.get("question_id", "")).upper() for r in results if isinstance(r, dict)}
+        for item in runnable:
+            qid = str(item.get("question_id", "")).upper()
+            if not qid or qid in existing_qids:
                 continue
-
             results.append(
                 {
                     "question_id": qid,
-                    "status": "OK",
-                    "bundle_hash": bundle_hash,
-                    "tokens_input": int(report.get("tokens_input", 0) or 0),
-                    "tokens_output": int(report.get("tokens_output", 0) or 0),
-                    "error": "",
-                    "report_file": str(report_file),
+                    "status": "FAILED_LLM",
+                    "bundle_hash": str(item.get("bundle_hash", "")),
+                    "tokens_input": 0,
+                    "tokens_output": 0,
+                    "error": f"Echec global batch IA: {exc}",
+                    "report_file": None,
                 }
             )
 

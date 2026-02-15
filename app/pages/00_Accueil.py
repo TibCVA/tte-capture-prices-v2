@@ -850,7 +850,6 @@ def _merge_llm_batch_rows(
     previous_rows: list[dict[str, object]],
     new_rows: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    anomaly_statuses = {"FAILED_MISMATCH", "FAILED_DUPLICATE", "FAILED_INCOMPLETE"}
     merged: dict[str, dict[str, object]] = {}
 
     for raw in previous_rows:
@@ -870,8 +869,12 @@ def _merge_llm_batch_rows(
         candidate = dict(raw)
         status = str(candidate.get("status", "")).upper().strip()
         existing = merged.get(qid)
-        if status in anomaly_statuses and isinstance(existing, dict):
+        if status.startswith("FAILED_") and isinstance(existing, dict):
             if str(existing.get("status", "")).upper().strip() == "OK":
+                existing["last_attempt_status"] = status
+                existing["last_attempt_error"] = str(candidate.get("error", "")).strip()
+                existing["attempted_at_utc"] = datetime.now(timezone.utc).isoformat()
+                merged[qid] = existing
                 continue
         merged[qid] = candidate
 
@@ -1351,13 +1354,27 @@ def render() -> None:
                             )
                         if row_issues:
                             st.warning("Controles batch IA: " + " | ".join(row_issues))
-                        ok_count = sum(1 for row in merged_rows if row.get("status") == "OK")
-                        fail_count = len(merged_rows) - ok_count
-                        if fail_count == 0:
+                        ok_count = sum(1 for row in merged_rows if str(row.get("status", "")).upper() == "OK")
+                        raw_fail_rows = [row for row in rows if str(row.get("status", "")).upper().startswith("FAILED_")]
+                        raw_fail_count = len(raw_fail_rows)
+                        preserved_rows = [
+                            row
+                            for row in merged_rows
+                            if str(row.get("status", "")).upper() == "OK"
+                            and str(row.get("last_attempt_status", "")).upper().startswith("FAILED_")
+                        ]
+                        if preserved_rows:
+                            preserved_q = ", ".join(str(r.get("question_id", "")) for r in preserved_rows if str(r.get("question_id", "")).strip())
+                            st.info(
+                                "Generation IA: rapports precedents conserves pour les questions en echec de la tentative courante"
+                                + (f" ({preserved_q})." if preserved_q else ".")
+                            )
+                        if raw_fail_count == 0:
                             st.success(f"Generation IA terminee: {ok_count}/{len(merged_rows)} questions traitees.")
                         else:
                             st.warning(
-                                f"Generation IA terminee avec erreurs: {ok_count} succes, {fail_count} echec(s)."
+                                "Generation IA terminee avec succes partiel non bloquant: "
+                                + f"{ok_count} questions disponibles, {raw_fail_count} echec(s) sur la tentative courante."
                             )
             finally:
                 st.session_state["llm_batch_running"] = False

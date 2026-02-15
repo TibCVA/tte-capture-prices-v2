@@ -389,3 +389,32 @@ def test_build_auto_audit_bundle_after_refresh_non_blocking_on_error(monkeypatch
     ok, report = module._build_auto_audit_bundle_after_refresh("RUN_ERR")
     assert ok is False
     assert "boom-audit" in str(report.get("error", ""))
+
+
+def test_merge_llm_batch_rows_keeps_previous_ok_when_new_attempt_failed() -> None:
+    module = _load_accueil_module()
+    previous = [
+        {
+            "question_id": "Q1",
+            "status": "OK",
+            "bundle_hash": "hash_q1",
+            "report_file": "old_report.json",
+            "error": "",
+        }
+    ]
+    new_rows = [
+        {
+            "question_id": "Q1",
+            "status": "FAILED_LLM",
+            "bundle_hash": "hash_q1",
+            "report_file": None,
+            "error": "context overflow",
+        }
+    ]
+    merged = module._merge_llm_batch_rows(previous, new_rows)
+    assert len(merged) == 1
+    row = merged[0]
+    assert row["status"] == "OK"
+    assert row["report_file"] == "old_report.json"
+    assert row["last_attempt_status"] == "FAILED_LLM"
+    assert "context overflow" in str(row.get("last_attempt_error", ""))

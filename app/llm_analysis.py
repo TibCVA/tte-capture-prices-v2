@@ -19,6 +19,12 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from app.llm_context_policy import (
+    compress_bundle_for_profile,
+    estimate_prompt_tokens_approx,
+    is_context_overflow_error,
+    select_initial_profile,
+)
 from src.modules.bundle_result import QuestionBundleResult
 from src.reporting.interpretation_rules import QUESTION_BUSINESS_TEXT, QUESTION_DEFINITIONS
 
@@ -117,6 +123,11 @@ Le ton est direct, structure, actionnable. Chaque affirmation cle est appuyee pa
 1-2 chiffres issus des donnees. Cette section doit etre autonome : un decideur doit \
 pouvoir la lire seule et en tirer une conclusion operationnelle. Pas de jargon technique \
 inutile, pas de formules — uniquement la synthese strategique.
+
+## Explication simple pour non-specialiste
+Ajoute juste apres la reponse strategique un paragraphe pedagogique court (120-180 mots), \
+en mots simples, pour un lecteur neophyte. Evite le jargon et explique les resultats \
+avec des formulations concretes.
 
 === PARTIE 2 : METHODOLOGIE ET CADRE D'ANALYSE ===
 
@@ -308,6 +319,34 @@ def serialize_bundle_for_llm(bundle: QuestionBundleResult) -> dict[str, Any]:
 
     # Comparison table
     comparison = _df_to_records(bundle.comparison_table)
+    check_counts: dict[str, int] = {}
+    top_fail_codes: list[str] = []
+    top_warn_codes: list[str] = []
+    if isinstance(bundle.checks, list):
+        counts: dict[str, int] = {}
+        code_fail: dict[str, int] = {}
+        code_warn: dict[str, int] = {}
+        for raw in bundle.checks:
+            if not isinstance(raw, dict):
+                continue
+            status = str(raw.get("status", "UNKNOWN")).upper().strip()
+            counts[status] = int(counts.get(status, 0)) + 1
+            code = str(raw.get("code", "")).strip()
+            if not code:
+                continue
+            if status == "FAIL":
+                code_fail[code] = int(code_fail.get(code, 0)) + 1
+            if status == "WARN":
+                code_warn[code] = int(code_warn.get(code, 0)) + 1
+        check_counts = counts
+        top_fail_codes = [
+            f"{code} (x{count})" if int(count) > 1 else code
+            for code, count in sorted(code_fail.items(), key=lambda x: (-x[1], x[0]))[:5]
+        ]
+        top_warn_codes = [
+            f"{code} (x{count})" if int(count) > 1 else code
+            for code, count in sorted(code_warn.items(), key=lambda x: (-x[1], x[0]))[:5]
+        ]
 
     return {
         "question_id": qid,
@@ -322,6 +361,9 @@ def serialize_bundle_for_llm(bundle: QuestionBundleResult) -> dict[str, Any]:
         "test_ledger_summary": ledger_summary,
         "comparison_hist_vs_scen": comparison,
         "checks": bundle.checks,
+        "check_counts": check_counts,
+        "top_fail_codes": top_fail_codes,
+        "top_warn_codes": top_warn_codes,
         "warnings": bundle.warnings,
     }
 
@@ -348,7 +390,13 @@ def _dict_to_markdown_sections(data: dict[str, Any], indent: int = 0) -> str:
     return "\n".join(lines)
 
 
-def build_analysis_prompt(question_id: str, bundle_data: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+def build_analysis_prompt(
+    question_id: str,
+    bundle_data: dict[str, Any],
+    *,
+    context_profile: str = "FULL",
+    context_compaction_notes: list[str] | None = None,
+) -> tuple[str, list[dict[str, str]]]:
     """Build instructions + input items for the Responses API.
 
     Returns (instructions, input_items) where:
@@ -376,12 +424,10 @@ def build_analysis_prompt(question_id: str, bundle_data: dict[str, Any]) -> tupl
     for tname, tdata in bundle_data.get("hist_tables", {}).items():
         hist_md += f"\n### {tname}\n"
         if isinstance(tdata, dict) and "rows" in tdata:
-            hist_md += json.dumps(tdata["rows"][:50], ensure_ascii=False, indent=1, default=str)
+            hist_md += json.dumps(tdata["rows"], ensure_ascii=False, indent=1, default=str)
             hist_md += f"\n{tdata.get('note', '')}\n"
         elif isinstance(tdata, list):
-            hist_md += json.dumps(tdata[:50], ensure_ascii=False, indent=1, default=str)
-            if len(tdata) > 50:
-                hist_md += f"\n... ({len(tdata)} lignes au total)\n"
+            hist_md += json.dumps(tdata, ensure_ascii=False, indent=1, default=str)
         else:
             hist_md += str(tdata)
 
@@ -395,12 +441,10 @@ def build_analysis_prompt(question_id: str, bundle_data: dict[str, Any]) -> tupl
         for tname, tdata in tables.items():
             scen_md += f"##### {tname}\n"
             if isinstance(tdata, dict) and "rows" in tdata:
-                scen_md += json.dumps(tdata["rows"][:50], ensure_ascii=False, indent=1, default=str)
+                scen_md += json.dumps(tdata["rows"], ensure_ascii=False, indent=1, default=str)
                 scen_md += f"\n{tdata.get('note', '')}\n"
             elif isinstance(tdata, list):
-                scen_md += json.dumps(tdata[:50], ensure_ascii=False, indent=1, default=str)
-                if len(tdata) > 50:
-                    scen_md += f"\n... ({len(tdata)} lignes au total)\n"
+                scen_md += json.dumps(tdata, ensure_ascii=False, indent=1, default=str)
             else:
                 scen_md += str(tdata)
 
@@ -417,19 +461,31 @@ def build_analysis_prompt(question_id: str, bundle_data: dict[str, Any]) -> tupl
 
     # Comparison
     comp_data = bundle_data.get("comparison_hist_vs_scen", [])
-    if isinstance(comp_data, list):
-        comp_md = json.dumps(comp_data[:100], ensure_ascii=False, indent=1, default=str)
+    if isinstance(comp_data, dict) and "rows" in comp_data:
+        comp_md = json.dumps(comp_data.get("rows", []), ensure_ascii=False, indent=1, default=str)
+    elif isinstance(comp_data, list):
+        comp_md = json.dumps(comp_data, ensure_ascii=False, indent=1, default=str)
     else:
         comp_md = str(comp_data)
 
     # Checks & warnings
-    checks_md = json.dumps(bundle_data.get("checks", []), ensure_ascii=False, indent=1, default=str)
+    checks_data = bundle_data.get("checks", [])
+    if isinstance(checks_data, dict) and "rows" in checks_data:
+        checks_md = json.dumps(checks_data.get("rows", []), ensure_ascii=False, indent=1, default=str)
+    else:
+        checks_md = json.dumps(checks_data, ensure_ascii=False, indent=1, default=str)
+    check_counts_md = json.dumps(bundle_data.get("check_counts", {}), ensure_ascii=False, default=str)
+    top_fail_codes = ", ".join(bundle_data.get("top_fail_codes", []) or []) or "(aucun)"
+    top_warn_codes = ", ".join(bundle_data.get("top_warn_codes", []) or []) or "(aucun)"
     warnings = "\n".join(bundle_data.get("warnings", [])) or "(aucun warning)"
+    compaction_notes = " | ".join([str(x) for x in (context_compaction_notes or []) if str(x).strip()]) or "(aucune)"
 
     sub_questions = QUESTION_SUB_QUESTIONS.get(qid, "")
 
     user_content = f"""\
 IMPORTANT : Tu analyses UNIQUEMENT la question {qid}. Ne traite aucune autre question.
+Profil de contexte applique: {context_profile}
+Notes de compaction: {compaction_notes}
 
 Voici les resultats complets de l'analyse {qid} pour l'outil TTE Capture Prices V2.
 
@@ -458,6 +514,9 @@ Resume: {summary_line}
 
 --- CHECKS QUALITE ---
 {checks_md}
+Resume checks: {check_counts_md}
+Top FAIL codes: {top_fail_codes}
+Top WARN codes: {top_warn_codes}
 
 --- WARNINGS ---
 {warnings}
@@ -495,6 +554,45 @@ def load_saved_report(question_id: str, bundle_hash: str) -> dict[str, Any] | No
         return None
 
 
+def _is_valid_report_payload(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("error"):
+        return False
+    return bool(str(payload.get("report_md", "")).strip())
+
+
+def load_latest_valid_report(question_id: str) -> dict[str, Any] | None:
+    qid = str(question_id).upper().strip()
+    if not qid or not LLM_REPORTS_DIR.exists():
+        return None
+    candidates = sorted(
+        LLM_REPORTS_DIR.glob(f"{qid}_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not _is_valid_report_payload(payload):
+            continue
+        payload["_fallback_report_path"] = str(path)
+        return payload
+    return None
+
+
+def load_report_with_fallback(question_id: str, bundle_hash: str) -> tuple[dict[str, Any] | None, bool]:
+    exact = load_saved_report(question_id, bundle_hash)
+    if _is_valid_report_payload(exact):
+        return exact, False
+    fallback = load_latest_valid_report(question_id)
+    if _is_valid_report_payload(fallback):
+        return fallback, True
+    return None, False
+
+
 def _save_report(question_id: str, bundle_hash: str, report: dict[str, Any]) -> None:
     """Save an LLM report to disk."""
     LLM_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -516,48 +614,100 @@ def run_llm_analysis(
     if client is None:
         return {"error": "Cle API OpenAI non configuree. Ajouter OPENAI_API_KEY dans .env ou Streamlit secrets."}
 
-    instructions, input_items = build_analysis_prompt(question_id, bundle_data)
+    initial_profile = select_initial_profile(bundle_data)
+    retry_sequence = [initial_profile]
+    if initial_profile == "FULL":
+        retry_sequence.extend(["COMPACT", "MINIMAL"])
+    elif initial_profile == "COMPACT":
+        retry_sequence.append("MINIMAL")
 
-    try:
-        response = client.responses.create(
-            model=MODEL,
-            instructions=instructions,
-            input=input_items,
-            max_output_tokens=MAX_COMPLETION_TOKENS,
-            reasoning={"effort": REASONING_EFFORT},
+    last_error = ""
+    last_profile = initial_profile
+    last_estimated_tokens = 0
+    last_notes: list[str] = []
+
+    for attempt_idx, profile in enumerate(retry_sequence):
+        compressed_bundle, compaction_notes = compress_bundle_for_profile(bundle_data, profile)
+        instructions, input_items = build_analysis_prompt(
+            question_id,
+            compressed_bundle,
+            context_profile=profile,
+            context_compaction_notes=compaction_notes,
         )
-    except Exception as exc:
-        return {"error": f"Erreur API OpenAI: {exc}"}
+        estimated_tokens = estimate_prompt_tokens_approx(instructions, input_items)
+        last_profile = profile
+        last_estimated_tokens = estimated_tokens
+        last_notes = compaction_notes
 
-    report_md = getattr(response, "output_text", None) or ""
-    if not report_md:
-        return {"error": "Reponse API vide."}
+        try:
+            response = client.responses.create(
+                model=MODEL,
+                instructions=instructions,
+                input=input_items,
+                max_output_tokens=MAX_COMPLETION_TOKENS,
+                reasoning={"effort": REASONING_EFFORT},
+            )
+        except Exception as exc:
+            last_error = str(exc)
+            if is_context_overflow_error(exc) and attempt_idx < len(retry_sequence) - 1:
+                continue
+            return {
+                "error": f"Erreur API OpenAI: {exc}",
+                "context_profile_used": profile,
+                "context_retry_count": int(attempt_idx),
+                "context_estimated_input_tokens": int(estimated_tokens),
+                "context_compaction_notes": compaction_notes,
+            }
 
-    usage = getattr(response, "usage", None)
-    tokens_in = getattr(usage, "input_tokens", 0) if usage else 0
-    tokens_out = getattr(usage, "output_tokens", 0) if usage else 0
+        report_md = getattr(response, "output_text", None) or ""
+        if not report_md:
+            if attempt_idx < len(retry_sequence) - 1:
+                continue
+            return {
+                "error": "Reponse API vide.",
+                "context_profile_used": profile,
+                "context_retry_count": int(attempt_idx),
+                "context_estimated_input_tokens": int(estimated_tokens),
+                "context_compaction_notes": compaction_notes,
+            }
 
-    selection = bundle_data.get("selection", {})
-    countries = selection.get("countries", [selection.get("country", "?")])
+        usage = getattr(response, "usage", None)
+        tokens_in = getattr(usage, "input_tokens", 0) if usage else 0
+        tokens_out = getattr(usage, "output_tokens", 0) if usage else 0
 
-    report = {
-        "question_id": question_id.upper(),
-        "bundle_hash": bundle_hash,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "model": MODEL,
-        "reasoning_effort": REASONING_EFFORT,
-        "report_md": report_md,
-        "tokens_input": tokens_in,
-        "tokens_output": tokens_out,
-        "selection_summary": {
-            "countries": countries if isinstance(countries, list) else [countries],
-            "years": selection.get("years", []),
-            "scenario_ids": selection.get("scenario_ids", []),
-        },
+        selection = compressed_bundle.get("selection", {})
+        countries = selection.get("countries", [selection.get("country", "?")])
+
+        report = {
+            "question_id": question_id.upper(),
+            "bundle_hash": bundle_hash,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "model": MODEL,
+            "reasoning_effort": REASONING_EFFORT,
+            "report_md": report_md,
+            "tokens_input": tokens_in,
+            "tokens_output": tokens_out,
+            "context_profile_used": profile,
+            "context_retry_count": int(attempt_idx),
+            "context_estimated_input_tokens": int(estimated_tokens),
+            "context_compaction_notes": compaction_notes,
+            "selection_summary": {
+                "countries": countries if isinstance(countries, list) else [countries],
+                "years": selection.get("years", []),
+                "scenario_ids": selection.get("scenario_ids", []),
+            },
+        }
+
+        _save_report(question_id, bundle_hash, report)
+        return report
+
+    return {
+        "error": f"Echec LLM apres retries contextuels. Derniere erreur: {last_error or 'inconnue'}",
+        "context_profile_used": last_profile,
+        "context_retry_count": int(max(len(retry_sequence) - 1, 0)),
+        "context_estimated_input_tokens": int(last_estimated_tokens),
+        "context_compaction_notes": last_notes,
     }
-
-    _save_report(question_id, bundle_hash, report)
-    return report
 
 
 # ---------------------------------------------------------------------------
@@ -574,8 +724,8 @@ def render_llm_analysis_section(
     st.markdown("---")
     st.markdown("## Analyse IA (GPT reasoning)")
 
-    # Check for existing report
-    saved = load_saved_report(qid, bundle_hash)
+    # Check for existing report with fallback on latest valid by question.
+    saved, is_fallback = load_report_with_fallback(qid, bundle_hash)
 
     if saved and "report_md" in saved and not saved.get("error"):
         gen_date = saved.get("generated_at", "?")
@@ -586,6 +736,13 @@ def render_llm_analysis_section(
             gen_label = str(gen_date)
 
         st.caption(f"Rapport genere le {gen_label} | Modele: {saved.get('model', MODEL)}")
+        if is_fallback:
+            fallback_hash = str(saved.get("bundle_hash", "")).strip()
+            st.warning(
+                "Rapport precedent (bundle different) charge en fallback; "
+                + (f"bundle rapport={fallback_hash}, bundle courant={bundle_hash}." if fallback_hash else "bundle courant sans rapport exact.")
+            )
+            st.caption("Regenerer l'analyse IA pour obtenir une version strictement alignee au bundle courant.")
 
         with st.expander("Rapport d'analyse IA consultant", expanded=True):
             st.markdown(saved["report_md"])
@@ -594,6 +751,10 @@ def render_llm_analysis_section(
         tokens_out = saved.get("tokens_output", 0)
         if tokens_in or tokens_out:
             st.caption(f"Tokens: {tokens_in:,} input + {tokens_out:,} output")
+        context_profile = str(saved.get("context_profile_used", "")).strip()
+        context_retry_count = int(saved.get("context_retry_count", 0) or 0)
+        if context_profile:
+            st.caption(f"Contexte IA: profil={context_profile} | retries={context_retry_count}")
 
         if st.button("Regenerer l'analyse IA", key=f"llm_regen_{qid}"):
             _run_and_display(qid, bundle, bundle_hash)
@@ -633,3 +794,7 @@ def _run_and_display(question_id: str, bundle: QuestionBundleResult, bundle_hash
     tokens_out = report.get("tokens_output", 0)
     if tokens_in or tokens_out:
         st.caption(f"Tokens: {tokens_in:,} input + {tokens_out:,} output")
+    context_profile = str(report.get("context_profile_used", "")).strip()
+    context_retry_count = int(report.get("context_retry_count", 0) or 0)
+    if context_profile:
+        st.caption(f"Contexte IA: profil={context_profile} | retries={context_retry_count}")
