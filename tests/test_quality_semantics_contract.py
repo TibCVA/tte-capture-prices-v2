@@ -30,9 +30,18 @@ def test_q1_floor_and_effect_trace_contract_present() -> None:
 def test_q3_differentiation_check_contract_present() -> None:
     content = Path("src/modules/question_bundle_runner.py").read_text(encoding="utf-8")
     assert "Q3_SCENARIO_DIFFERENTIATION" in content
+    assert "effect_share_status" in content
+    assert "effect_share_numeric" in content
+    assert "signal_share_upstream" in content
+    assert "Q3_scenario_diff_trace" in content
+    assert "delta_h_negative_at_end_year" in content
+    assert "delta_far_energy_at_end_year" in content
+    assert "delta_ir_p10_at_end_year" in content
 
 
 def test_auto_audit_bundle_exports_global_and_scope_status_files() -> None:
     content = Path("src/reporting/auto_audit_bundle.py").read_text(encoding="utf-8")
     assert "question_status_summary_global_" in content
     assert "question_status_summary_scope_DE_ES_" in content
+    assert "technical_scope_status_by_q" in content
+    assert "decision_scope_status_by_q" in content

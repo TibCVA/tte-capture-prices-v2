@@ -133,6 +133,12 @@ def build_delivery_package(
         "critical_fail_codes_scope_de_es": list(audit_manifest.get("critical_fail_codes_scope_de_es", []))
         if isinstance(audit_manifest.get("critical_fail_codes_scope_de_es", []), list)
         else [],
+        "technical_scope_status_by_q": dict(audit_manifest.get("technical_scope_status_by_q", {}))
+        if isinstance(audit_manifest.get("technical_scope_status_by_q", {}), dict)
+        else {},
+        "decision_scope_status_by_q": dict(audit_manifest.get("decision_scope_status_by_q", {}))
+        if isinstance(audit_manifest.get("decision_scope_status_by_q", {}), dict)
+        else {},
         "ceo_decision": str(audit_manifest.get("ceo_decision", "")).strip(),
         "ceo_critical_fail_codes_scope_de_es": list(audit_manifest.get("ceo_critical_fail_codes_scope_de_es", []))
         if isinstance(audit_manifest.get("ceo_critical_fail_codes_scope_de_es", []), list)

@@ -1,4 +1,4 @@
-"""Unified HIST+SCEN question runner with test ledger and comparison output."""
+﻿"""Unified HIST+SCEN question runner with test ledger and comparison output."""
 
 from __future__ import annotations
 
@@ -1568,13 +1568,28 @@ def _q3_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
     if hist.empty:
         return pd.DataFrame()
     rows: list[dict[str, Any]] = []
+    optional_metrics = [
+        "required_demand_uplift_mw",
+        "required_mustrun_reduction_ratio",
+        "h_negative_at_end_year",
+        "far_energy_at_end_year",
+        "ir_p10_at_end_year",
+        "h_negative_after",
+        "far_energy_after",
+        "ir_p10_after",
+    ]
     for sid, res in scen_results.items():
         scen = res.tables.get("Q3_status", pd.DataFrame())
         if scen.empty:
             continue
-        optional_cols = ["required_demand_uplift_mw", "required_mustrun_reduction_ratio"]
-        hist_cols = ["country", "status", "inversion_k_demand", "inversion_r_mustrun"] + [c for c in optional_cols if c in hist.columns]
-        scen_cols = ["country", "status", "inversion_k_demand", "inversion_r_mustrun"] + [c for c in optional_cols if c in scen.columns]
+        metric_cols = [c for c in ["inversion_k_demand", "inversion_r_mustrun"] if c in hist.columns and c in scen.columns]
+        for metric in optional_metrics:
+            if metric in hist.columns and metric in scen.columns and metric not in metric_cols:
+                metric_cols.append(metric)
+        if not metric_cols:
+            continue
+        hist_cols = ["country", "status"] + metric_cols
+        scen_cols = ["country", "status"] + metric_cols
         merged = hist[hist_cols].merge(
             scen[scen_cols],
             on="country",
@@ -1582,45 +1597,17 @@ def _q3_comparison(hist_result: ModuleResult, scen_results: dict[str, ModuleResu
             suffixes=("_hist", "_scen"),
         )
         for _, r in merged.iterrows():
-            hk = _safe_float(r.get("inversion_k_demand_hist"), np.nan)
-            sk = _safe_float(r.get("inversion_k_demand_scen"), np.nan)
-            hr = _safe_float(r.get("inversion_r_mustrun_hist"), np.nan)
-            sr = _safe_float(r.get("inversion_r_mustrun_scen"), np.nan)
-            rows.append(
-                {
-                    "country": r["country"],
-                    "scenario_id": sid,
-                    "metric": "inversion_k_demand",
-                    "hist_value": hk,
-                    "scen_value": sk,
-                    "delta": sk - hk if np.isfinite(hk) and np.isfinite(sk) else np.nan,
-                    "hist_status": str(r.get("status_hist", "")),
-                    "scen_status": str(r.get("status_scen", "")),
-                }
-            )
-            rows.append(
-                {
-                    "country": r["country"],
-                    "scenario_id": sid,
-                    "metric": "inversion_r_mustrun",
-                    "hist_value": hr,
-                    "scen_value": sr,
-                    "delta": sr - hr if np.isfinite(hr) and np.isfinite(sr) else np.nan,
-                    "hist_status": str(r.get("status_hist", "")),
-                    "scen_status": str(r.get("status_scen", "")),
-                }
-            )
-            if "required_demand_uplift_mw_hist" in merged.columns and "required_demand_uplift_mw_scen" in merged.columns:
-                hu = _safe_float(r.get("required_demand_uplift_mw_hist"), np.nan)
-                su = _safe_float(r.get("required_demand_uplift_mw_scen"), np.nan)
+            for metric in metric_cols:
+                h = _safe_float(r.get(f"{metric}_hist"), np.nan)
+                s = _safe_float(r.get(f"{metric}_scen"), np.nan)
                 rows.append(
                     {
                         "country": r["country"],
                         "scenario_id": sid,
-                        "metric": "required_demand_uplift_mw",
-                        "hist_value": hu,
-                        "scen_value": su,
-                        "delta": su - hu if np.isfinite(hu) and np.isfinite(su) else np.nan,
+                        "metric": metric,
+                        "hist_value": h,
+                        "scen_value": s,
+                        "delta": s - h if np.isfinite(h) and np.isfinite(s) else np.nan,
                         "hist_status": str(r.get("status_hist", "")),
                         "scen_status": str(r.get("status_scen", "")),
                     }
@@ -2619,6 +2606,273 @@ def _check_q3_scenario_stress_sufficiency(comparison: pd.DataFrame) -> list[dict
     ]
 
 
+Q3_NUMERIC_DIFF_THRESHOLDS: dict[str, float] = {
+    "inversion_k_demand": 0.02,
+    "inversion_r_mustrun": 0.02,
+}
+Q3_UPSTREAM_DIFF_THRESHOLDS: dict[str, float] = {
+    "h_negative_at_end_year": 24.0,
+    "far_energy_at_end_year": 0.01,
+    "ir_p10_at_end_year": 0.05,
+}
+Q3_UPSTREAM_METRIC_ALIASES: dict[str, str] = {
+    "h_negative_after": "h_negative_at_end_year",
+    "far_energy_after": "far_energy_at_end_year",
+    "ir_p10_after": "ir_p10_at_end_year",
+}
+
+
+def _q3_required_uplift_threshold(base_value: float) -> float:
+    base_abs = abs(float(base_value)) if np.isfinite(base_value) else 0.0
+    return float(max(25.0, 0.05 * base_abs))
+
+
+def _q3_metric_numeric_effect(metric: str, delta_vs_base: float, base_value: float) -> bool:
+    metric_key = str(metric).strip()
+    if not np.isfinite(delta_vs_base):
+        return False
+    if metric_key in Q3_NUMERIC_DIFF_THRESHOLDS:
+        return bool(abs(float(delta_vs_base)) >= float(Q3_NUMERIC_DIFF_THRESHOLDS[metric_key]))
+    if metric_key == "required_demand_uplift_mw":
+        return bool(abs(float(delta_vs_base)) >= _q3_required_uplift_threshold(base_value))
+    return False
+
+
+def _q3_metric_upstream_signal(metric: str, delta_vs_base: float) -> bool:
+    metric_key = str(metric).strip()
+    canonical_metric = Q3_UPSTREAM_METRIC_ALIASES.get(metric_key, metric_key)
+    threshold = Q3_UPSTREAM_DIFF_THRESHOLDS.get(canonical_metric)
+    if threshold is None:
+        return False
+    if not np.isfinite(delta_vs_base):
+        return False
+    return bool(abs(float(delta_vs_base)) >= float(threshold))
+
+
+def _build_q3_scenario_diff_trace(comparison: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "country",
+        "scenario_id",
+        "base_status",
+        "scenario_status",
+        "delta_status_flag",
+        "delta_inversion_k_demand",
+        "delta_inversion_r_mustrun",
+        "delta_required_demand_uplift_mw",
+        "delta_h_negative_at_end_year",
+        "delta_far_energy_at_end_year",
+        "delta_ir_p10_at_end_year",
+        "effect_numeric_flag",
+        "effect_upstream_flag",
+        "effect_pair_flag",
+        "n_metric_rows",
+    ]
+    if comparison is None or comparison.empty:
+        return pd.DataFrame(columns=cols)
+    if "scenario_id" not in comparison.columns or "country" not in comparison.columns:
+        return pd.DataFrame(columns=cols)
+
+    cmp = comparison.copy()
+    if "metric" not in cmp.columns:
+        cmp["metric"] = "inversion_k_demand"
+    if "scen_value" not in cmp.columns:
+        cmp["scen_value"] = np.nan
+    if "delta" not in cmp.columns:
+        cmp["delta"] = np.nan
+    if "scen_status" not in cmp.columns:
+        cmp["scen_status"] = ""
+    cmp["scenario_id"] = cmp["scenario_id"].astype(str).str.upper().str.strip()
+    cmp["metric"] = cmp["metric"].astype(str).str.strip()
+
+    base = cmp[cmp["scenario_id"] == "BASE"].copy()
+    non_base = cmp[cmp["scenario_id"] != "BASE"].copy()
+    if base.empty or non_base.empty:
+        return pd.DataFrame(columns=cols)
+
+    base_map = base[["country", "metric", "scen_value", "delta", "scen_status"]].copy().rename(
+        columns={
+            "scen_value": "scen_value_base",
+            "delta": "delta_base",
+            "scen_status": "status_base",
+        }
+    )
+    non_base_map = non_base[["country", "scenario_id", "metric", "scen_value", "delta", "scen_status"]].copy().rename(
+        columns={
+            "scen_value": "scen_value_nb",
+            "delta": "delta_nb",
+            "scen_status": "status_nb",
+        }
+    )
+    merged = non_base_map.merge(base_map, on=["country", "metric"], how="inner")
+    if merged.empty:
+        return pd.DataFrame(columns=cols)
+
+    row_level: list[dict[str, Any]] = []
+    for _, row in merged.iterrows():
+        metric = str(row.get("metric", "")).strip()
+        scen_val_nb = _safe_float(row.get("scen_value_nb"), np.nan)
+        scen_val_base = _safe_float(row.get("scen_value_base"), np.nan)
+        delta_nb = _safe_float(row.get("delta_nb"), np.nan)
+        delta_base = _safe_float(row.get("delta_base"), np.nan)
+        if np.isfinite(scen_val_nb) and np.isfinite(scen_val_base):
+            delta_vs_base = scen_val_nb - scen_val_base
+        elif np.isfinite(delta_nb) and np.isfinite(delta_base):
+            delta_vs_base = delta_nb - delta_base
+        else:
+            delta_vs_base = np.nan
+
+        status_base = str(row.get("status_base", "")).strip()
+        status_nb = str(row.get("status_nb", "")).strip()
+        delta_status_flag = bool(status_base and status_nb and status_base.upper() != status_nb.upper())
+        numeric_flag = _q3_metric_numeric_effect(metric, delta_vs_base, scen_val_base)
+        upstream_flag = _q3_metric_upstream_signal(metric, delta_vs_base)
+
+        row_level.append(
+            {
+                "country": str(row.get("country", "")),
+                "scenario_id": str(row.get("scenario_id", "")),
+                "metric": metric,
+                "base_status": status_base,
+                "scenario_status": status_nb,
+                "delta_status_flag": delta_status_flag,
+                "delta_inversion_k_demand": delta_vs_base if metric == "inversion_k_demand" else np.nan,
+                "delta_inversion_r_mustrun": delta_vs_base if metric == "inversion_r_mustrun" else np.nan,
+                "delta_required_demand_uplift_mw": delta_vs_base if metric == "required_demand_uplift_mw" else np.nan,
+                "delta_h_negative_at_end_year": delta_vs_base
+                if Q3_UPSTREAM_METRIC_ALIASES.get(metric, metric) == "h_negative_at_end_year"
+                else np.nan,
+                "delta_far_energy_at_end_year": delta_vs_base
+                if Q3_UPSTREAM_METRIC_ALIASES.get(metric, metric) == "far_energy_at_end_year"
+                else np.nan,
+                "delta_ir_p10_at_end_year": delta_vs_base
+                if Q3_UPSTREAM_METRIC_ALIASES.get(metric, metric) == "ir_p10_at_end_year"
+                else np.nan,
+                "effect_numeric_flag": bool(numeric_flag),
+                "effect_upstream_flag": bool(upstream_flag),
+            }
+        )
+
+    if not row_level:
+        return pd.DataFrame(columns=cols)
+
+    detail = pd.DataFrame(row_level)
+
+    def _first_non_empty(series: pd.Series) -> str:
+        for value in series.astype(str).tolist():
+            txt = str(value).strip()
+            if txt:
+                return txt
+        return ""
+
+    def _first_finite(series: pd.Series) -> float:
+        values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return float("nan")
+        return float(values[0])
+
+    grouped_rows: list[dict[str, Any]] = []
+    for (country, scenario_id), grp in detail.groupby(["country", "scenario_id"]):
+        delta_status_flag = bool(pd.Series(grp["delta_status_flag"]).fillna(False).astype(bool).any())
+        effect_numeric_flag = bool(pd.Series(grp["effect_numeric_flag"]).fillna(False).astype(bool).any())
+        effect_upstream_flag = bool(pd.Series(grp["effect_upstream_flag"]).fillna(False).astype(bool).any())
+        grouped_rows.append(
+            {
+                "country": str(country),
+                "scenario_id": str(scenario_id),
+                "base_status": _first_non_empty(grp["base_status"]),
+                "scenario_status": _first_non_empty(grp["scenario_status"]),
+                "delta_status_flag": delta_status_flag,
+                "delta_inversion_k_demand": _first_finite(grp["delta_inversion_k_demand"]),
+                "delta_inversion_r_mustrun": _first_finite(grp["delta_inversion_r_mustrun"]),
+                "delta_required_demand_uplift_mw": _first_finite(grp["delta_required_demand_uplift_mw"]),
+                "delta_h_negative_at_end_year": _first_finite(grp["delta_h_negative_at_end_year"]),
+                "delta_far_energy_at_end_year": _first_finite(grp["delta_far_energy_at_end_year"]),
+                "delta_ir_p10_at_end_year": _first_finite(grp["delta_ir_p10_at_end_year"]),
+                "effect_numeric_flag": effect_numeric_flag,
+                "effect_upstream_flag": effect_upstream_flag,
+                "effect_pair_flag": bool(delta_status_flag or effect_numeric_flag),
+                "n_metric_rows": int(len(grp)),
+            }
+        )
+
+    out = pd.DataFrame(grouped_rows, columns=cols)
+    if out.empty:
+        return pd.DataFrame(columns=cols)
+    return out.sort_values(["scenario_id", "country"]).reset_index(drop=True)
+
+
+def _prepare_q3_comparison_for_checks(comparison: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    trace = _build_q3_scenario_diff_trace(comparison)
+    if comparison is None or comparison.empty:
+        return pd.DataFrame(), trace
+
+    enriched = comparison.copy()
+    if "scenario_id" not in enriched.columns or "country" not in enriched.columns:
+        return enriched, trace
+
+    q3_cols = [
+        "base_status",
+        "scenario_status",
+        "delta_status_flag",
+        "delta_inversion_k_demand",
+        "delta_inversion_r_mustrun",
+        "delta_required_demand_uplift_mw",
+        "delta_h_negative_at_end_year",
+        "delta_far_energy_at_end_year",
+        "delta_ir_p10_at_end_year",
+        "effect_numeric_flag",
+        "effect_upstream_flag",
+    ]
+    for col in q3_cols:
+        if col not in enriched.columns:
+            if col.endswith("_flag"):
+                enriched[col] = False
+            elif "status" in col:
+                enriched[col] = ""
+            else:
+                enriched[col] = np.nan
+
+    if isinstance(trace, pd.DataFrame) and not trace.empty:
+        join_cols = ["country", "scenario_id"]
+        enriched = enriched.merge(trace[join_cols + q3_cols], on=join_cols, how="left", suffixes=("", "_trace"))
+        for col in q3_cols:
+            trace_col = f"{col}_trace"
+            if trace_col not in enriched.columns:
+                continue
+            if col.endswith("_flag"):
+                enriched[col] = (
+                    pd.Series(enriched[col]).fillna(False).astype(bool)
+                    | pd.Series(enriched[trace_col]).fillna(False).astype(bool)
+                )
+            elif "status" in col:
+                base_series = pd.Series(enriched[col]).astype(str)
+                trace_series = pd.Series(enriched[trace_col]).astype(str)
+                replace_mask = base_series.str.strip().eq("") & trace_series.str.strip().ne("")
+                enriched.loc[replace_mask, col] = trace_series[replace_mask]
+            else:
+                base_num = pd.to_numeric(enriched[col], errors="coerce")
+                trace_num = pd.to_numeric(enriched[trace_col], errors="coerce")
+                use_trace = base_num.isna() & trace_num.notna()
+                enriched.loc[use_trace, col] = trace_num[use_trace]
+            enriched.drop(columns=[trace_col], inplace=True)
+
+    if "scen_status" in enriched.columns:
+        scen_status = enriched["scen_status"].astype(str)
+        scen_mask = enriched["scenario_status"].astype(str).str.strip().eq("")
+        enriched.loc[scen_mask, "scenario_status"] = scen_status[scen_mask]
+        base_mask = (
+            enriched["scenario_id"].astype(str).str.upper().eq("BASE")
+            & enriched["base_status"].astype(str).str.strip().eq("")
+        )
+        enriched.loc[base_mask, "base_status"] = scen_status[base_mask]
+
+    for col in ["delta_status_flag", "effect_numeric_flag", "effect_upstream_flag"]:
+        enriched[col] = pd.Series(enriched[col]).fillna(False).astype(bool)
+
+    return enriched, trace
+
+
 def _check_q3_scenario_differentiation(comparison: pd.DataFrame) -> list[dict[str, Any]]:
     if comparison is None or comparison.empty:
         return [
@@ -2630,22 +2884,19 @@ def _check_q3_scenario_differentiation(comparison: pd.DataFrame) -> list[dict[st
                 "scenario_id": "",
             }
         ]
-    if "scenario_id" not in comparison.columns:
+    if "scenario_id" not in comparison.columns or "country" not in comparison.columns:
         return [
             {
                 "status": "NON_TESTABLE",
                 "code": "Q3_SCENARIO_DIFFERENTIATION",
-                "message": "Colonne scenario_id manquante pour Q3.",
+                "message": "Colonnes scenario_id/country manquantes pour Q3.",
                 "scope": "BUNDLE",
                 "scenario_id": "",
             }
         ]
 
-    cmp = comparison.copy()
-    cmp["scenario_id"] = cmp["scenario_id"].astype(str)
-    base = cmp[cmp["scenario_id"].str.upper() == "BASE"].copy()
-    non_base = cmp[cmp["scenario_id"].str.upper() != "BASE"].copy()
-    if base.empty or non_base.empty:
+    trace = _build_q3_scenario_diff_trace(comparison)
+    if trace.empty:
         return [
             {
                 "status": "NON_TESTABLE",
@@ -2656,73 +2907,44 @@ def _check_q3_scenario_differentiation(comparison: pd.DataFrame) -> list[dict[st
             }
         ]
 
-    key_cols = ["country", "metric"]
-    if "metric" not in cmp.columns:
-        key_cols = ["country"]
-    base_keys = [k for k in key_cols if k in base.columns]
-    if not base_keys:
-        return [
-            {
-                "status": "NON_TESTABLE",
-                "code": "Q3_SCENARIO_DIFFERENTIATION",
-                "message": "Clés de comparaison Q3 insuffisantes.",
-                "scope": "BUNDLE",
-                "scenario_id": "",
-            }
-        ]
-    base_map = base[base_keys + [c for c in ["delta", "scen_status"] if c in base.columns]].copy()
-    rows_total = 0
-    rows_different = 0
-    details: list[str] = []
-    for sid, grp in non_base.groupby("scenario_id"):
-        merged = grp.merge(base_map, on=base_keys, how="inner", suffixes=("_nb", "_base"))
-        if merged.empty:
-            continue
-        d_nb = pd.to_numeric(merged.get("delta_nb"), errors="coerce")
-        d_base = pd.to_numeric(merged.get("delta_base"), errors="coerce")
-        diff_delta = (d_nb - d_base).abs() > 1e-9
-        s_nb = merged.get("scen_status_nb", pd.Series("", index=merged.index)).astype(str).str.upper().str.strip()
-        s_base = merged.get("scen_status_base", pd.Series("", index=merged.index)).astype(str).str.upper().str.strip()
-        diff_status = s_nb != s_base
-        diff_any = diff_delta.fillna(False) | diff_status.fillna(False)
-        n_total = int(len(merged))
-        n_diff = int(diff_any.sum())
-        share = (n_diff / n_total) if n_total > 0 else 0.0
-        rows_total += n_total
-        rows_different += n_diff
-        details.append(f"{sid}:{n_diff}/{n_total}({share:.0%})")
-    if rows_total == 0:
-        return [
-            {
-                "status": "NON_TESTABLE",
-                "code": "Q3_SCENARIO_DIFFERENTIATION",
-                "message": "Aucune ligne comparable BASE/non-BASE pour Q3.",
-                "scope": "BUNDLE",
-                "scenario_id": "",
-            }
-        ]
-    share_global = rows_different / rows_total
-    if share_global <= 0.01:
-        status = "FAIL"
-    elif share_global < 0.20:
+    n_pairs = int(len(trace))
+    effect_share_status = float(pd.Series(trace["delta_status_flag"]).fillna(False).astype(bool).mean()) if n_pairs > 0 else 0.0
+    effect_share_numeric = float(pd.Series(trace["effect_numeric_flag"]).fillna(False).astype(bool).mean()) if n_pairs > 0 else 0.0
+    signal_share_upstream = float(pd.Series(trace["effect_upstream_flag"]).fillna(False).astype(bool).mean()) if n_pairs > 0 else 0.0
+    effect_share = max(effect_share_status, effect_share_numeric)
+    if effect_share >= 0.20:
+        status = "PASS"
+    elif signal_share_upstream >= 0.20:
         status = "WARN"
     else:
-        status = "PASS"
+        status = "FAIL"
+
+    details: list[str] = []
+    for sid, grp in trace.groupby("scenario_id"):
+        n_sid = int(len(grp))
+        sid_status = float(pd.Series(grp["delta_status_flag"]).fillna(False).astype(bool).mean()) if n_sid > 0 else 0.0
+        sid_numeric = float(pd.Series(grp["effect_numeric_flag"]).fillna(False).astype(bool).mean()) if n_sid > 0 else 0.0
+        sid_upstream = float(pd.Series(grp["effect_upstream_flag"]).fillna(False).astype(bool).mean()) if n_sid > 0 else 0.0
+        details.append(
+            f"{sid}:effect_share_status={sid_status:.2%},effect_share_numeric={sid_numeric:.2%},signal_share_upstream={sid_upstream:.2%},n_pairs={n_sid}"
+        )
+
+    status_msg = "Differenciation scenario Q3 significative."
+    if status == "WARN":
+        status_msg = "Invariance Q3 mais signaux amont detectes; gouvernance en vigilance."
+    elif status == "FAIL":
+        status_msg = "No-op scenario Q3 probable: pas de differenciation et pas de signal amont."
     return [
         {
             "status": status,
             "code": "Q3_SCENARIO_DIFFERENTIATION",
             "message": (
-                f"differentiation_share={share_global:.2%}; details={' ; '.join(details)}. "
-                + (
-                    "Differenciation scenario Q3 nulle/quasi nulle."
-                    if status == "FAIL"
-                    else (
-                        "Differenciation scenario Q3 faible."
-                        if status == "WARN"
-                        else "Differenciation scenario Q3 significative."
-                    )
-                )
+                f"effect_share_status={effect_share_status:.2%}; "
+                f"effect_share_numeric={effect_share_numeric:.2%}; "
+                f"signal_share_upstream={signal_share_upstream:.2%}; "
+                f"n_pairs={n_pairs}; "
+                f"thresholds=status_or_numeric>=20%, upstream_warn>=20%. "
+                f"details={' ; '.join(details)}. {status_msg}"
             ),
             "scope": "BUNDLE",
             "scenario_id": "",
@@ -2866,6 +3088,9 @@ def run_question_bundle(
     )
     comparison = _comparison_for_question(qid, hist_result, scen_results, extra_hist)
     comparison = _annotate_comparison_interpretability(qid, comparison)
+    if qid == "Q3":
+        comparison, q3_diff_trace = _prepare_q3_comparison_for_checks(comparison)
+        hist_result.tables["Q3_scenario_diff_trace"] = q3_diff_trace.copy()
     if qid == "Q1" and comparison is not None and not comparison.empty:
         delta_vals = pd.to_numeric(comparison.get("delta"), errors="coerce")
         metrics = comparison.get("metric", pd.Series("bascule_year_market", index=comparison.index))
@@ -3293,3 +3518,4 @@ def run_question_bundle(
         warnings=warnings,
         narrative_md=narrative,
     )
+

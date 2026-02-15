@@ -26,6 +26,7 @@ DEFAULT_LLM_REPORTS_DIR = Path("outputs/llm_reports")
 DEFAULT_COUNTRY_SCOPE = ["ES", "DE"]
 CEO_CRITICAL_FAIL_CODES = {
     "Q1_SCENARIO_EFFECT_PRESENT",
+    "Q3_SCENARIO_DIFFERENTIATION",
     "Q3_SCENARIO_STRESS_SUFFICIENCY",
     "Q4_ENERGY_BALANCE",
     "Q4_SOC_END_BOUNDARY",
@@ -343,11 +344,37 @@ def _parse_top_fail_codes(raw: Any) -> list[str]:
     return out
 
 
+def _build_scope_status_maps(status_scope: pd.DataFrame) -> tuple[dict[str, str], dict[str, str]]:
+    technical: dict[str, str] = {}
+    decision: dict[str, str] = {}
+    if status_scope is None or status_scope.empty:
+        return technical, decision
+
+    for _, row in status_scope.iterrows():
+        qid = str(row.get("question_id", "")).strip()
+        if not qid:
+            continue
+        quality_status = str(row.get("quality_status", "")).upper().strip()
+        technical[qid] = quality_status or "UNKNOWN"
+        fail_codes = _parse_top_fail_codes(row.get("top_fail_codes", ""))
+        has_critical = any(code in CEO_CRITICAL_FAIL_CODES for code in fail_codes)
+        if has_critical:
+            decision[qid] = "FAIL"
+        elif quality_status == "FAIL":
+            decision[qid] = "WARN"
+        elif quality_status in {"WARN", "NON_TESTABLE", "MISSING", "MISSING_SCOPE", "UNKNOWN", ""}:
+            decision[qid] = "WARN"
+        else:
+            decision[qid] = "PASS"
+    return technical, decision
+
+
 def _build_ceo_readiness_markdown(
     *,
     run_id: str,
     status_global: pd.DataFrame,
     status_scope: pd.DataFrame,
+    checks_catalog: pd.DataFrame | None,
     output_path: Path,
 ) -> tuple[str, list[str], list[str], list[dict[str, str]], list[dict[str, str]]]:
     fail_rows_scope = status_scope[status_scope.get("quality_status", pd.Series(dtype=object)).astype(str).str.upper() == "FAIL"].copy()
@@ -441,6 +468,24 @@ def _build_ceo_readiness_markdown(
             lines.append(f"- {item.get('question_id','')}:{item.get('code','')} -> {item.get('reason','')}")
     else:
         lines.append("- none")
+    lines.append("")
+    lines.append("## WHY_Q3_PASS_WARN_FAIL")
+    lines.append("- PASS: max(effect_share_status, effect_share_numeric) >= 20%.")
+    lines.append("- WARN: max(effect_share_status, effect_share_numeric) < 20% but signal_share_upstream >= 20%.")
+    lines.append("- FAIL: max(effect_share_status, effect_share_numeric) < 20% and signal_share_upstream < 20%.")
+    q3_rows = pd.DataFrame()
+    if isinstance(checks_catalog, pd.DataFrame) and not checks_catalog.empty:
+        q3_rows = checks_catalog[
+            checks_catalog.get("question_id", pd.Series(dtype=object)).astype(str).str.upper().eq("Q3")
+            & checks_catalog.get("code", pd.Series(dtype=object)).astype(str).str.upper().eq("Q3_SCENARIO_DIFFERENTIATION")
+        ].copy()
+    if q3_rows.empty:
+        lines.append("- Latest Q3 check evidence: not available.")
+    else:
+        preferred = q3_rows[q3_rows.get("scope", pd.Series(dtype=object)).astype(str).str.upper().eq("BUNDLE")].copy()
+        row = preferred.iloc[0] if not preferred.empty else q3_rows.iloc[0]
+        lines.append(f"- Latest status: {str(row.get('status', '')).strip()}")
+        lines.append(f"- Latest evidence: {str(row.get('message', '')).strip()}")
     lines.append("")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -546,6 +591,7 @@ def build_auto_audit_bundle(
     )
     critical_fail_codes_global = _critical_fail_codes_from_status(q_status)
     critical_fail_codes_scope_de_es = _critical_fail_codes_from_status(q_status_scope)
+    technical_scope_status_by_q, decision_scope_status_by_q = _build_scope_status_maps(q_status_scope)
     fail_matrix = _build_question_fail_matrix(run_id_clean, checks_catalog)
 
     evidence_path = reports_dir / f"evidence_catalog_{run_id_clean}.csv"
@@ -581,6 +627,7 @@ def build_auto_audit_bundle(
         run_id=run_id_clean,
         status_global=q_status,
         status_scope=q_status_scope,
+        checks_catalog=checks_catalog,
         output_path=ceo_readiness_path,
     )
 
@@ -613,6 +660,8 @@ def build_auto_audit_bundle(
         "llm_reports": llm_info,
         "critical_fail_codes_global": critical_fail_codes_global,
         "critical_fail_codes_scope_de_es": critical_fail_codes_scope_de_es,
+        "technical_scope_status_by_q": technical_scope_status_by_q,
+        "decision_scope_status_by_q": decision_scope_status_by_q,
         "ceo_decision": ceo_decision,
         "ceo_critical_fail_codes_scope_de_es": ceo_critical_scope,
         "ceo_non_critical_fail_codes_scope_de_es": ceo_non_critical_scope,
@@ -636,6 +685,8 @@ def build_auto_audit_bundle(
         "ceo_decision": ceo_decision,
         "critical_fail_codes_global": critical_fail_codes_global,
         "critical_fail_codes_scope_de_es": critical_fail_codes_scope_de_es,
+        "technical_scope_status_by_q": technical_scope_status_by_q,
+        "decision_scope_status_by_q": decision_scope_status_by_q,
         "ceo_critical_fail_codes_scope_de_es": ceo_critical_scope,
         "ceo_non_critical_fail_codes_scope_de_es": ceo_non_critical_scope,
         "ceo_no_go_reasons": ceo_no_go_reasons,

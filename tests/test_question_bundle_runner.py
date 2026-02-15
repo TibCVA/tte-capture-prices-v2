@@ -729,6 +729,40 @@ def test_q3_scenario_differentiation_fails_when_non_base_equals_base() -> None:
     assert checks[0]["status"] == "FAIL"
 
 
+def test_q3_scenario_differentiation_warns_when_upstream_signal_exists_but_outputs_invariant() -> None:
+    comparison = pd.DataFrame(
+        [
+            {"country": "DE", "scenario_id": "BASE", "metric": "inversion_k_demand", "scen_value": 0.0, "delta": 0.0, "scen_status": "STOP_CONFIRMED"},
+            {"country": "DE", "scenario_id": "DEMAND_UP", "metric": "inversion_k_demand", "scen_value": 0.0, "delta": 0.0, "scen_status": "STOP_CONFIRMED"},
+            {"country": "DE", "scenario_id": "BASE", "metric": "inversion_r_mustrun", "scen_value": 0.0, "delta": 0.0, "scen_status": "STOP_CONFIRMED"},
+            {"country": "DE", "scenario_id": "DEMAND_UP", "metric": "inversion_r_mustrun", "scen_value": 0.0, "delta": 0.0, "scen_status": "STOP_CONFIRMED"},
+            {"country": "DE", "scenario_id": "BASE", "metric": "h_negative_after", "scen_value": 320.0, "delta": 0.0, "scen_status": "STOP_CONFIRMED"},
+            {"country": "DE", "scenario_id": "DEMAND_UP", "metric": "h_negative_after", "scen_value": 260.0, "delta": -60.0, "scen_status": "STOP_CONFIRMED"},
+        ]
+    )
+    checks = _check_q3_scenario_differentiation(comparison)
+    assert len(checks) == 1
+    assert checks[0]["code"] == "Q3_SCENARIO_DIFFERENTIATION"
+    assert checks[0]["status"] == "WARN"
+    assert "signal_share_upstream=" in str(checks[0]["message"])
+
+
+def test_q3_scenario_differentiation_passes_when_numeric_effect_share_is_high() -> None:
+    comparison = pd.DataFrame(
+        [
+            {"country": "DE", "scenario_id": "BASE", "metric": "inversion_k_demand", "scen_value": 0.00, "delta": 0.00, "scen_status": "STOP_CONFIRMED"},
+            {"country": "DE", "scenario_id": "DEMAND_UP", "metric": "inversion_k_demand", "scen_value": 0.05, "delta": 0.05, "scen_status": "STOP_CONFIRMED"},
+            {"country": "ES", "scenario_id": "BASE", "metric": "inversion_r_mustrun", "scen_value": 0.00, "delta": 0.00, "scen_status": "STOP_CONFIRMED"},
+            {"country": "ES", "scenario_id": "DEMAND_UP", "metric": "inversion_r_mustrun", "scen_value": 0.04, "delta": 0.04, "scen_status": "STOP_CONFIRMED"},
+        ]
+    )
+    checks = _check_q3_scenario_differentiation(comparison)
+    assert len(checks) == 1
+    assert checks[0]["code"] == "Q3_SCENARIO_DIFFERENTIATION"
+    assert checks[0]["status"] == "PASS"
+    assert "effect_share_numeric=" in str(checks[0]["message"])
+
+
 def test_derive_q1_hourly_scenario_params_applies_floor_on_noop_sources() -> None:
     assumptions_phase2 = pd.DataFrame(
         [
