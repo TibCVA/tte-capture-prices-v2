@@ -1317,12 +1317,46 @@ def render() -> None:
                         loaded_q, failed_q = _hydrate_question_pages_from_prepared(prepared_items)
 
                         prep_status.text("Generation IA en parallele en cours...")
+                        llm_progress = st.progress(0.0)
+                        llm_status = st.empty()
+                        llm_total = max(
+                            1,
+                            len(
+                                [
+                                    item
+                                    for item in prepared_items
+                                    if str(item.get("question_id", "")).strip()
+                                ]
+                            ),
+                        )
+                        llm_done = {"count": 0}
+
+                        def _on_llm_item_done(row: dict) -> None:
+                            llm_done["count"] = int(llm_done.get("count", 0)) + 1
+                            done = int(llm_done["count"])
+                            qid = str(row.get("question_id", "")).upper()
+                            status = str(row.get("status", "")).upper()
+                            llm_progress.progress(min(done / llm_total, 1.0))
+                            llm_status.text(f"IA {done}/{llm_total}: {qid} -> {status}")
+
+                        raw_timeout = str(os.getenv("LLM_BATCH_TIMEOUT_S", "420")).strip()
+                        try:
+                            batch_timeout_s = int(raw_timeout)
+                        except Exception:
+                            batch_timeout_s = 420
+                        if batch_timeout_s <= 0:
+                            batch_timeout_s = 420
+
                         with st.spinner("Appels IA Q1->Q5 en execution parallele..."):
                             raw_rows = run_parallel_llm_generation(
                                 prepared_items=prepared_items,
                                 api_key=api_key,
                                 max_workers=5,
+                                batch_timeout_s=batch_timeout_s,
+                                on_item_done=_on_llm_item_done,
                             )
+                        llm_progress.progress(1.0)
+                        llm_status.text(f"IA {llm_total}/{llm_total}: traitement termine.")
                         expected_by_qid = {
                             str(item.get("question_id", "")).upper(): str(item.get("bundle_hash", "")).strip()
                             for item in prepared_items
@@ -1333,6 +1367,8 @@ def render() -> None:
                         prep_progress.progress(1.0)
                         prep_status.empty()
                         prep_progress.empty()
+                        llm_status.empty()
+                        llm_progress.empty()
 
                         previous_batch = st.session_state.get("last_llm_batch_result")
                         previous_rows = []

@@ -34,6 +34,7 @@ from src.reporting.interpretation_rules import QUESTION_BUSINESS_TEXT, QUESTION_
 MODEL = "gpt-5.2-pro"
 REASONING_EFFORT = "high"
 MAX_COMPLETION_TOKENS = 16_000
+DEFAULT_OPENAI_REQUEST_TIMEOUT_S = 240
 LLM_REPORTS_DIR = Path("outputs/llm_reports")
 AUDIT_METHODS_PATH = Path(__file__).resolve().parents[1] / "AUDIT_METHODS_Q1_Q5.md"
 
@@ -554,6 +555,19 @@ def load_saved_report(question_id: str, bundle_hash: str) -> dict[str, Any] | No
         return None
 
 
+def _resolve_request_timeout_s(request_timeout_s: int | float | None = None) -> float:
+    raw = request_timeout_s
+    if raw is None:
+        raw = os.getenv("OPENAI_REQUEST_TIMEOUT_S", DEFAULT_OPENAI_REQUEST_TIMEOUT_S)
+    try:
+        timeout = float(raw)
+    except Exception:
+        timeout = float(DEFAULT_OPENAI_REQUEST_TIMEOUT_S)
+    if timeout <= 0:
+        timeout = float(DEFAULT_OPENAI_REQUEST_TIMEOUT_S)
+    return timeout
+
+
 def _is_valid_report_payload(payload: dict[str, Any] | None) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -608,6 +622,7 @@ def run_llm_analysis(
     bundle_hash: str,
     bundle_data: dict[str, Any],
     api_key_override: str | None = None,
+    request_timeout_s: int | float | None = None,
 ) -> dict[str, Any]:
     """Call OpenAI Responses API and return the report dict. Saves to disk on success."""
     client = get_openai_client(api_key_override=api_key_override)
@@ -625,6 +640,7 @@ def run_llm_analysis(
     last_profile = initial_profile
     last_estimated_tokens = 0
     last_notes: list[str] = []
+    timeout_s = _resolve_request_timeout_s(request_timeout_s)
 
     for attempt_idx, profile in enumerate(retry_sequence):
         compressed_bundle, compaction_notes = compress_bundle_for_profile(bundle_data, profile)
@@ -646,6 +662,7 @@ def run_llm_analysis(
                 input=input_items,
                 max_output_tokens=MAX_COMPLETION_TOKENS,
                 reasoning={"effort": REASONING_EFFORT},
+                timeout=timeout_s,
             )
         except Exception as exc:
             last_error = str(exc)

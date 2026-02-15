@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
+from typing import Any, Callable
+import os
 
 import pandas as pd
 
@@ -15,6 +16,16 @@ from app.page_utils import (
 from src.modules.test_registry import get_default_scenarios
 
 QUESTION_ORDER = ["Q1", "Q2", "Q3", "Q4", "Q5"]
+DEFAULT_LLM_BATCH_TIMEOUT_S = 420
+
+
+def _emit_progress(callback: Callable[[dict[str, Any]], None] | None, row: dict[str, Any]) -> None:
+    if not callable(callback):
+        return
+    try:
+        callback(row)
+    except Exception:
+        return
 
 
 def _normalized_country_cfg(countries_cfg: dict[str, Any] | None) -> dict[str, Any]:
@@ -144,6 +155,8 @@ def run_parallel_llm_generation(
     prepared_items: list[dict[str, Any]],
     api_key: str,
     max_workers: int = 5,
+    batch_timeout_s: int | None = None,
+    on_item_done: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     if not api_key:
         raise ValueError("API key OpenAI manquante.")
@@ -155,124 +168,166 @@ def run_parallel_llm_generation(
         qid = str(item.get("question_id", "")).upper()
         bundle_hash = str(item.get("bundle_hash", ""))
         if item.get("status") == "FAILED_PREP":
-            results.append(
-                {
-                    "question_id": qid,
-                    "status": "FAILED_PREP",
-                    "bundle_hash": bundle_hash,
-                    "tokens_input": 0,
-                    "tokens_output": 0,
-                    "error": str(item.get("error", "Preparation echouee.")),
-                    "report_file": None,
-                }
-            )
+            row = {
+                "question_id": qid,
+                "status": "FAILED_PREP",
+                "bundle_hash": bundle_hash,
+                "tokens_input": 0,
+                "tokens_output": 0,
+                "error": str(item.get("error", "Preparation echouee.")),
+                "report_file": None,
+            }
+            results.append(row)
+            _emit_progress(on_item_done, row)
             continue
         if not bundle_hash or not item.get("bundle_data"):
-            results.append(
-                {
-                    "question_id": qid,
-                    "status": "FAILED_PREP",
-                    "bundle_hash": bundle_hash,
-                    "tokens_input": 0,
-                    "tokens_output": 0,
-                    "error": "Bundle incomplet pour l'appel LLM.",
-                    "report_file": None,
-                }
-            )
+            row = {
+                "question_id": qid,
+                "status": "FAILED_PREP",
+                "bundle_hash": bundle_hash,
+                "tokens_input": 0,
+                "tokens_output": 0,
+                "error": "Bundle incomplet pour l'appel LLM.",
+                "report_file": None,
+            }
+            results.append(row)
+            _emit_progress(on_item_done, row)
             continue
         runnable.append(item)
 
+    timeout_value = batch_timeout_s
+    if timeout_value is None:
+        raw_timeout = str(os.getenv("LLM_BATCH_TIMEOUT_S", DEFAULT_LLM_BATCH_TIMEOUT_S)).strip()
+        try:
+            timeout_value = int(raw_timeout)
+        except Exception:
+            timeout_value = int(DEFAULT_LLM_BATCH_TIMEOUT_S)
+    if not isinstance(timeout_value, int) or timeout_value <= 0:
+        timeout_value = int(DEFAULT_LLM_BATCH_TIMEOUT_S)
+
+    pending_futures = set()
+    future_map: dict[Any, dict[str, Any]] = {}
+    pool = ThreadPoolExecutor(max_workers=max(1, int(max_workers)))
+    timed_out = False
     try:
-        with ThreadPoolExecutor(max_workers=max(1, int(max_workers))) as pool:
-            future_map = {
-                pool.submit(
-                    run_llm_analysis,
-                    item["question_id"],
-                    item["bundle_hash"],
-                    item["bundle_data"],
-                    api_key,
-                ): item
-                for item in runnable
+        future_map = {
+            pool.submit(
+                run_llm_analysis,
+                item["question_id"],
+                item["bundle_hash"],
+                item["bundle_data"],
+                api_key,
+            ): item
+            for item in runnable
+        }
+        pending_futures = set(future_map.keys())
+
+        for future in as_completed(future_map, timeout=timeout_value):
+            pending_futures.discard(future)
+            item = future_map[future]
+            qid = str(item["question_id"]).upper()
+            bundle_hash = str(item["bundle_hash"])
+            report_file = LLM_REPORTS_DIR / f"{qid}_{bundle_hash}.json"
+            try:
+                report = future.result()
+            except Exception as exc:
+                row = {
+                    "question_id": qid,
+                    "status": "FAILED_LLM",
+                    "bundle_hash": bundle_hash,
+                    "tokens_input": 0,
+                    "tokens_output": 0,
+                    "error": str(exc),
+                    "report_file": None,
+                }
+                results.append(row)
+                _emit_progress(on_item_done, row)
+                continue
+
+            error = report.get("error")
+            if error:
+                row = {
+                    "question_id": qid,
+                    "status": "FAILED_LLM",
+                    "bundle_hash": bundle_hash,
+                    "tokens_input": 0,
+                    "tokens_output": 0,
+                    "error": str(error),
+                    "report_file": None,
+                }
+                results.append(row)
+                _emit_progress(on_item_done, row)
+                continue
+
+            if not report_file.exists():
+                row = {
+                    "question_id": qid,
+                    "status": "FAILED_SAVE",
+                    "bundle_hash": bundle_hash,
+                    "tokens_input": int(report.get("tokens_input", 0) or 0),
+                    "tokens_output": int(report.get("tokens_output", 0) or 0),
+                    "error": "Rapport non trouve apres generation.",
+                    "report_file": None,
+                }
+                results.append(row)
+                _emit_progress(on_item_done, row)
+                continue
+
+            row = {
+                "question_id": qid,
+                "status": "OK",
+                "bundle_hash": bundle_hash,
+                "tokens_input": int(report.get("tokens_input", 0) or 0),
+                "tokens_output": int(report.get("tokens_output", 0) or 0),
+                "error": "",
+                "report_file": str(report_file),
             }
-
-            for future in as_completed(future_map):
-                item = future_map[future]
-                qid = str(item["question_id"]).upper()
-                bundle_hash = str(item["bundle_hash"])
-                report_file = LLM_REPORTS_DIR / f"{qid}_{bundle_hash}.json"
-                try:
-                    report = future.result()
-                except Exception as exc:
-                    results.append(
-                        {
-                            "question_id": qid,
-                            "status": "FAILED_LLM",
-                            "bundle_hash": bundle_hash,
-                            "tokens_input": 0,
-                            "tokens_output": 0,
-                            "error": str(exc),
-                            "report_file": None,
-                        }
-                    )
-                    continue
-
-                error = report.get("error")
-                if error:
-                    results.append(
-                        {
-                            "question_id": qid,
-                            "status": "FAILED_LLM",
-                            "bundle_hash": bundle_hash,
-                            "tokens_input": 0,
-                            "tokens_output": 0,
-                            "error": str(error),
-                            "report_file": None,
-                        }
-                    )
-                    continue
-
-                if not report_file.exists():
-                    results.append(
-                        {
-                            "question_id": qid,
-                            "status": "FAILED_SAVE",
-                            "bundle_hash": bundle_hash,
-                            "tokens_input": int(report.get("tokens_input", 0) or 0),
-                            "tokens_output": int(report.get("tokens_output", 0) or 0),
-                            "error": "Rapport non trouve apres generation.",
-                            "report_file": None,
-                        }
-                    )
-                    continue
-
-                results.append(
-                    {
-                        "question_id": qid,
-                        "status": "OK",
-                        "bundle_hash": bundle_hash,
-                        "tokens_input": int(report.get("tokens_input", 0) or 0),
-                        "tokens_output": int(report.get("tokens_output", 0) or 0),
-                        "error": "",
-                        "report_file": str(report_file),
-                    }
-                )
+            results.append(row)
+            _emit_progress(on_item_done, row)
+    except FuturesTimeoutError:
+        timed_out = True
+        for future in list(pending_futures):
+            future.cancel()
+        for future in list(pending_futures):
+            item = future_map.get(future)
+            if not isinstance(item, dict):
+                continue
+            qid = str(item.get("question_id", "")).upper()
+            if not qid:
+                continue
+            row = {
+                "question_id": qid,
+                "status": "FAILED_TIMEOUT",
+                "bundle_hash": str(item.get("bundle_hash", "")),
+                "tokens_input": 0,
+                "tokens_output": 0,
+                "error": f"Timeout batch IA (> {timeout_value}s) pour cette question.",
+                "report_file": None,
+            }
+            results.append(row)
+            _emit_progress(on_item_done, row)
     except Exception as exc:
         existing_qids = {str(r.get("question_id", "")).upper() for r in results if isinstance(r, dict)}
         for item in runnable:
             qid = str(item.get("question_id", "")).upper()
             if not qid or qid in existing_qids:
                 continue
-            results.append(
-                {
-                    "question_id": qid,
-                    "status": "FAILED_LLM",
-                    "bundle_hash": str(item.get("bundle_hash", "")),
-                    "tokens_input": 0,
-                    "tokens_output": 0,
-                    "error": f"Echec global batch IA: {exc}",
-                    "report_file": None,
-                }
-            )
+            row = {
+                "question_id": qid,
+                "status": "FAILED_LLM",
+                "bundle_hash": str(item.get("bundle_hash", "")),
+                "tokens_input": 0,
+                "tokens_output": 0,
+                "error": f"Echec global batch IA: {exc}",
+                "report_file": None,
+            }
+            results.append(row)
+            _emit_progress(on_item_done, row)
+    finally:
+        if timed_out:
+            pool.shutdown(wait=False, cancel_futures=True)
+        else:
+            pool.shutdown(wait=True, cancel_futures=False)
 
     order = {qid: idx for idx, qid in enumerate(QUESTION_ORDER)}
     return sorted(results, key=lambda row: (order.get(str(row.get("question_id", "")).upper(), 99), str(row.get("question_id", ""))))
