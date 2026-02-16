@@ -19,7 +19,7 @@ def _read(path: Path) -> str:
 def test_q_pages_restore_payload_from_session_cache_contract() -> None:
     for page in Q_PAGES:
         text = _read(page)
-        assert "restore_question_payload_from_session_cache" in text
+        assert "restore_question_payload_with_latest_run_fallback" in text
         assert "if RESULT_KEY not in st.session_state:" in text
 
 

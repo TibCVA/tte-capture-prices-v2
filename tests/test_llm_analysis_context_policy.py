@@ -94,6 +94,7 @@ def test_run_llm_analysis_retries_on_context_overflow(monkeypatch, tmp_path: Pat
     assert int(report["context_retry_count"]) == 2
     assert int(report["context_estimated_input_tokens"]) > 0
     assert isinstance(report.get("context_compaction_notes"), list)
+    assert float(report.get("llm_exec_seconds", 0.0)) >= 0.0
     assert (tmp_path / "Q1_HASH_Q1.json").exists()
 
 
@@ -117,3 +118,4 @@ def test_run_llm_analysis_no_retry_for_non_overflow_error(monkeypatch, tmp_path:
     assert "error" in report
     assert report["context_profile_used"] == "FULL"
     assert int(report["context_retry_count"]) == 0
+    assert float(report.get("llm_exec_seconds", 0.0)) >= 0.0

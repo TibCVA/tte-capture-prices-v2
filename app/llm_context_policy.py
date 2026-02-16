@@ -8,6 +8,12 @@ import pandas as pd
 
 ContextProfile = Literal["FULL", "COMPACT", "MINIMAL"]
 PROFILE_ORDER: tuple[ContextProfile, ...] = ("FULL", "COMPACT", "MINIMAL")
+PROFILE_SOFT_TOKEN_BUDGET: dict[ContextProfile, int] = {
+    "FULL": 30000,
+    "COMPACT": 22000,
+    "MINIMAL": 14000,
+}
+HARD_CONTEXT_TOKEN_BUDGET = 18000
 
 PROFILE_LIMITS: dict[ContextProfile, dict[str, int]] = {
     "FULL": {
@@ -212,6 +218,33 @@ def compress_bundle_for_profile(
     if len(kept_checks) < len(checks_rows):
         notes.append(f"checks:{len(kept_checks)}/{len(checks_rows)}")
 
+    hard_budget = int(HARD_CONTEXT_TOKEN_BUDGET)
+    estimated = estimate_prompt_tokens_approx("", [{"role": "user", "content": json.dumps(out, ensure_ascii=False, default=str)}])
+    if estimated > hard_budget:
+        hist_tables_trimmed = {}
+        for tname, table in list(out.get("hist_tables", {}).items())[:2]:
+            rows, note = _normalize_rows(table)
+            hist_tables_trimmed[str(tname)] = {"rows": rows[:10], "note": str(note)}
+        out["hist_tables"] = hist_tables_trimmed
+
+        scen_trimmed: dict[str, dict[str, Any]] = {}
+        for sid, table_map in list(out.get("scen_tables", {}).items())[:2]:
+            if not isinstance(table_map, dict):
+                continue
+            scen_trimmed[str(sid)] = {}
+            for tname, table in list(table_map.items())[:2]:
+                rows, note = _normalize_rows(table)
+                scen_trimmed[str(sid)][str(tname)] = {"rows": rows[:8], "note": str(note)}
+        out["scen_tables"] = scen_trimmed
+
+        test_rows, test_note = _normalize_rows(out.get("test_ledger", []))
+        out["test_ledger"] = {"rows": test_rows[:30], "note": str(test_note)}
+        comp_rows, comp_note = _normalize_rows(out.get("comparison_hist_vs_scen", []))
+        out["comparison_hist_vs_scen"] = {"rows": comp_rows[:25], "note": str(comp_note)}
+        checks_rows2, checks_note = _normalize_rows(out.get("checks", []))
+        out["checks"] = {"rows": checks_rows2[:25], "note": str(checks_note)}
+        notes.append(f"hard_cap_applied:{estimated}->{hard_budget}")
+
     return out, notes
 
 
@@ -241,3 +274,9 @@ def is_context_overflow_error(exc: Exception | str) -> bool:
     ]
     return any(p in msg for p in patterns)
 
+
+def soft_budget_for_profile(profile: ContextProfile | str) -> int:
+    prof = str(profile).upper().strip()
+    if prof in PROFILE_SOFT_TOKEN_BUDGET:
+        return int(PROFILE_SOFT_TOKEN_BUDGET[prof])  # type: ignore[index]
+    return int(PROFILE_SOFT_TOKEN_BUDGET["COMPACT"])

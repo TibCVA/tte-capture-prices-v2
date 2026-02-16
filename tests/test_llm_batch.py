@@ -155,3 +155,41 @@ def test_run_parallel_llm_generation_handles_global_executor_failure(monkeypatch
     assert by_q["Q1"]["status"] == "FAILED_LLM"
     assert by_q["Q2"]["status"] == "FAILED_LLM"
     assert "Echec global batch IA" in str(by_q["Q1"]["error"])
+
+
+def test_run_parallel_llm_generation_marks_timeout_for_pending(monkeypatch) -> None:
+    class _NeverFuture:
+        def cancel(self) -> bool:  # noqa: D401
+            return True
+
+    class _Executor:
+        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = args
+            _ = kwargs
+
+        def submit(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = args
+            _ = kwargs
+            return _NeverFuture()
+
+        def shutdown(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = args
+            _ = kwargs
+            return None
+
+    def _raise_timeout(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args
+        _ = kwargs
+        raise llm_batch.FuturesTimeoutError()
+
+    monkeypatch.setattr(llm_batch, "ThreadPoolExecutor", _Executor)
+    monkeypatch.setattr(llm_batch, "as_completed", _raise_timeout)
+
+    prepared_items = [
+        {"question_id": "Q1", "bundle_hash": "hash_q1", "bundle_data": {"x": 1}},
+        {"question_id": "Q2", "bundle_hash": "hash_q2", "bundle_data": {"x": 2}},
+    ]
+    rows = llm_batch.run_parallel_llm_generation(prepared_items=prepared_items, api_key="dummy", batch_timeout_s=1)
+    by_q = {row["question_id"]: row for row in rows}
+    assert by_q["Q1"]["status"] == "FAILED_TIMEOUT"
+    assert by_q["Q2"]["status"] == "FAILED_TIMEOUT"

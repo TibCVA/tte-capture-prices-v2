@@ -154,7 +154,7 @@ def prepare_bundle_for_question(
 def run_parallel_llm_generation(
     prepared_items: list[dict[str, Any]],
     api_key: str,
-    max_workers: int = 5,
+    max_workers: int | None = None,
     batch_timeout_s: int | None = None,
     on_item_done: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
@@ -195,6 +195,16 @@ def run_parallel_llm_generation(
             continue
         runnable.append(item)
 
+    worker_value = max_workers
+    if worker_value is None:
+        raw_workers = str(os.getenv("LLM_BATCH_MAX_WORKERS", "2")).strip()
+        try:
+            worker_value = int(raw_workers)
+        except Exception:
+            worker_value = 2
+    if not isinstance(worker_value, int) or worker_value <= 0:
+        worker_value = 2
+
     timeout_value = batch_timeout_s
     if timeout_value is None:
         raw_timeout = str(os.getenv("LLM_BATCH_TIMEOUT_S", DEFAULT_LLM_BATCH_TIMEOUT_S)).strip()
@@ -207,7 +217,7 @@ def run_parallel_llm_generation(
 
     pending_futures = set()
     future_map: dict[Any, dict[str, Any]] = {}
-    pool = ThreadPoolExecutor(max_workers=max(1, int(max_workers)))
+    pool = ThreadPoolExecutor(max_workers=max(1, int(worker_value)))
     timed_out = False
     try:
         future_map = {
@@ -252,6 +262,7 @@ def run_parallel_llm_generation(
                     "bundle_hash": bundle_hash,
                     "tokens_input": 0,
                     "tokens_output": 0,
+                    "llm_exec_seconds": float(report.get("llm_exec_seconds", 0.0) or 0.0),
                     "error": str(error),
                     "report_file": None,
                 }
@@ -279,6 +290,7 @@ def run_parallel_llm_generation(
                 "bundle_hash": bundle_hash,
                 "tokens_input": int(report.get("tokens_input", 0) or 0),
                 "tokens_output": int(report.get("tokens_output", 0) or 0),
+                "llm_exec_seconds": float(report.get("llm_exec_seconds", 0.0) or 0.0),
                 "error": "",
                 "report_file": str(report_file),
             }
@@ -324,10 +336,11 @@ def run_parallel_llm_generation(
             results.append(row)
             _emit_progress(on_item_done, row)
     finally:
-        if timed_out:
-            pool.shutdown(wait=False, cancel_futures=True)
-        else:
-            pool.shutdown(wait=True, cancel_futures=False)
+        if hasattr(pool, "shutdown"):
+            if timed_out:
+                pool.shutdown(wait=False, cancel_futures=True)
+            else:
+                pool.shutdown(wait=True, cancel_futures=False)
 
     order = {qid: idx for idx, qid in enumerate(QUESTION_ORDER)}
     return sorted(results, key=lambda row: (order.get(str(row.get("question_id", "")).upper(), 99), str(row.get("question_id", ""))))

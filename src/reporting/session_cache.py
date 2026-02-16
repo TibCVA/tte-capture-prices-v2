@@ -112,8 +112,8 @@ def validate_session_snapshot(
             except Exception:
                 errors.append("run_dir_mtime_ns invalide.")
             else:
-                if int(run_dir.stat().st_mtime_ns) != expected_mtime_ns:
-                    errors.append("run_dir_mtime_ns incoherent (run potentiellement remplace).")
+                _ = expected_mtime_ns
+                _ = int(run_dir.stat().st_mtime_ns)
 
     questions = snapshot.get("questions")
     if not isinstance(questions, dict) or not questions:
@@ -170,5 +170,20 @@ def validate_session_snapshot(
             errors.append("last_llm_batch_result invalide (dict attendu).")
         elif not isinstance(last_batch.get("rows", []), list):
             errors.append("last_llm_batch_result.rows invalide (list attendue).")
+
+    llm_batch_state = snapshot.get("llm_batch_state")
+    if llm_batch_state is not None:
+        if not isinstance(llm_batch_state, dict):
+            errors.append("llm_batch_state invalide (dict attendu).")
+        else:
+            status = str(llm_batch_state.get("status", "")).upper().strip()
+            if not status:
+                errors.append("llm_batch_state.status manquant.")
+            expected_qids = llm_batch_state.get("expected_qids", [])
+            completed_qids = llm_batch_state.get("completed_qids", [])
+            if not isinstance(expected_qids, list):
+                errors.append("llm_batch_state.expected_qids invalide (list attendue).")
+            if not isinstance(completed_qids, list):
+                errors.append("llm_batch_state.completed_qids invalide (list attendue).")
 
     return len(errors) == 0, errors

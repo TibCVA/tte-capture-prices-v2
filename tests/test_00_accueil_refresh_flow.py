@@ -418,3 +418,37 @@ def test_merge_llm_batch_rows_keeps_previous_ok_when_new_attempt_failed() -> Non
     assert row["report_file"] == "old_report.json"
     assert row["last_attempt_status"] == "FAILED_LLM"
     assert "context overflow" in str(row.get("last_attempt_error", ""))
+
+
+def test_persist_session_cache_snapshot_includes_llm_batch_state(monkeypatch) -> None:
+    module = _load_accueil_module()
+    captured: dict[str, object] = {}
+
+    def _fake_persist(payloads_by_question, **kwargs):  # type: ignore[no-untyped-def]
+        captured["payloads_by_question"] = payloads_by_question
+        captured.update(kwargs)
+        return Path("outputs/session_cache/session_state.json")
+
+    monkeypatch.setattr(module, "persist_question_payloads_to_session_cache", _fake_persist)
+    session_state = {
+        "q1_bundle_result": {
+            "bundle": _fake_bundle("Q1", "RUN_X", "PASS"),
+            "out_dir": "outputs/combined/RUN_X/Q1",
+            "bundle_hash": "RUN_X_Q1",
+        },
+        "last_llm_batch_result": {"generated_at_utc": "2026-02-15T10:00:00+00:00", "rows": []},
+        "llm_batch_state": {
+            "batch_id": "LLM_BATCH_X",
+            "status": "RUNNING",
+            "expected_qids": ["Q1", "Q2"],
+            "completed_qids": ["Q1"],
+            "heartbeat_utc": "2026-02-15T10:00:00+00:00",
+        },
+    }
+    module.st = SimpleNamespace(session_state=session_state)
+
+    cache_path, cache_error = module._persist_session_cache_snapshot()
+    assert cache_error is None
+    assert str(cache_path).replace("\\", "/") == "outputs/session_cache/session_state.json"
+    assert isinstance(captured.get("llm_batch_state"), dict)
+    assert str(captured["llm_batch_state"]["status"]) == "RUNNING"

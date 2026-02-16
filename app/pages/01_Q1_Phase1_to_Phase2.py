@@ -15,7 +15,7 @@ try:
         default_analysis_scenario_years,
         load_annual_metrics,
         load_phase2_assumptions_table,
-        restore_question_payload_from_session_cache,
+        restore_question_payload_with_latest_run_fallback,
         run_question_bundle_cached,
     )
 except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud stale caches
@@ -33,7 +33,7 @@ except Exception as exc:  # pragma: no cover - defensive for Streamlit cloud sta
     default_analysis_scenario_years = _page_utils_unavailable  # type: ignore[assignment]
     load_annual_metrics = _page_utils_unavailable  # type: ignore[assignment]
     load_phase2_assumptions_table = _page_utils_unavailable  # type: ignore[assignment]
-    restore_question_payload_from_session_cache = _page_utils_unavailable  # type: ignore[assignment]
+    restore_question_payload_with_latest_run_fallback = _page_utils_unavailable  # type: ignore[assignment]
     run_question_bundle_cached = _page_utils_unavailable  # type: ignore[assignment]
 _UI_COMPONENTS_IMPORT_ERROR: Exception | None = None
 try:
@@ -202,12 +202,16 @@ def render() -> None:
         st.session_state[RESULT_KEY] = {"bundle": bundle, "out_dir": str(out_dir), "bundle_hash": bundle_hash}
 
     if RESULT_KEY not in st.session_state:
+        restored_ok = False
         try:
-            restore_question_payload_from_session_cache("Q1", RESULT_KEY)
+            restored_ok = bool(restore_question_payload_with_latest_run_fallback("Q1", RESULT_KEY))
         except Exception:
-            pass
+            restored_ok = False
+        if not restored_ok:
+            st.info("Aucune analyse Q1 chargee. Lance un refresh global ou recharge un run combine valide.")
     payload = st.session_state.get(RESULT_KEY)
     if not payload:
+        st.info("Etat Q1 vide: aucune donnee exploitable restauree.")
         return
 
     bundle = payload["bundle"]

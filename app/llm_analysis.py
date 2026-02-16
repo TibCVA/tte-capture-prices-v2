@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,10 +22,12 @@ import pandas as pd
 import streamlit as st
 
 from app.llm_context_policy import (
+    HARD_CONTEXT_TOKEN_BUDGET,
     compress_bundle_for_profile,
     estimate_prompt_tokens_approx,
     is_context_overflow_error,
     select_initial_profile,
+    soft_budget_for_profile,
 )
 from src.modules.bundle_result import QuestionBundleResult
 from src.reporting.interpretation_rules import QUESTION_BUSINESS_TEXT, QUESTION_DEFINITIONS
@@ -37,6 +41,9 @@ MAX_COMPLETION_TOKENS = 16_000
 DEFAULT_OPENAI_REQUEST_TIMEOUT_S = 240
 LLM_REPORTS_DIR = Path("outputs/llm_reports")
 AUDIT_METHODS_PATH = Path(__file__).resolve().parents[1] / "AUDIT_METHODS_Q1_Q5.md"
+_AUDIT_METHODS_LOCK = threading.Lock()
+_AUDIT_METHODS_CACHE_TEXT: str | None = None
+_AUDIT_METHODS_CACHE_MTIME_NS: int | None = None
 
 # Mapping question -> section header in AUDIT_METHODS_Q1_Q5.md
 _Q_SECTION_HEADERS: dict[str, str] = {
@@ -158,6 +165,8 @@ ecarts par rapport aux hypotheses methodologiques)
 # ---------------------------------------------------------------------------
 def _ensure_audit_methods_fresh() -> None:
     """Regenerate AUDIT_METHODS_Q1_Q5.md if any source file is newer."""
+    if str(os.getenv("LLM_DISABLE_AUDIT_METHODS_REFRESH", "1")).strip().lower() in {"1", "true", "yes"}:
+        return
     try:
         from scripts.generate_audit_methods import is_stale, write
         if is_stale():
@@ -168,10 +177,26 @@ def _ensure_audit_methods_fresh() -> None:
 
 def _load_audit_methods() -> str:
     """Ensure freshness then read AUDIT_METHODS_Q1_Q5.md."""
-    _ensure_audit_methods_fresh()
-    if not AUDIT_METHODS_PATH.exists():
-        return "(fichier AUDIT_METHODS_Q1_Q5.md introuvable)"
-    return AUDIT_METHODS_PATH.read_text(encoding="utf-8")
+    global _AUDIT_METHODS_CACHE_TEXT, _AUDIT_METHODS_CACHE_MTIME_NS
+    with _AUDIT_METHODS_LOCK:
+        _ensure_audit_methods_fresh()
+        if not AUDIT_METHODS_PATH.exists():
+            return "(fichier AUDIT_METHODS_Q1_Q5.md introuvable)"
+        try:
+            mtime_ns = int(AUDIT_METHODS_PATH.stat().st_mtime_ns)
+        except Exception:
+            mtime_ns = None
+        if (
+            _AUDIT_METHODS_CACHE_TEXT is not None
+            and _AUDIT_METHODS_CACHE_MTIME_NS is not None
+            and mtime_ns is not None
+            and _AUDIT_METHODS_CACHE_MTIME_NS == mtime_ns
+        ):
+            return _AUDIT_METHODS_CACHE_TEXT
+        text = AUDIT_METHODS_PATH.read_text(encoding="utf-8")
+        _AUDIT_METHODS_CACHE_TEXT = text
+        _AUDIT_METHODS_CACHE_MTIME_NS = mtime_ns
+        return text
 
 
 def _extract_common_sections(full_text: str) -> str:
@@ -641,6 +666,7 @@ def run_llm_analysis(
     last_estimated_tokens = 0
     last_notes: list[str] = []
     timeout_s = _resolve_request_timeout_s(request_timeout_s)
+    started_at = time.perf_counter()
 
     for attempt_idx, profile in enumerate(retry_sequence):
         compressed_bundle, compaction_notes = compress_bundle_for_profile(bundle_data, profile)
@@ -654,6 +680,28 @@ def run_llm_analysis(
         last_profile = profile
         last_estimated_tokens = estimated_tokens
         last_notes = compaction_notes
+        soft_budget = soft_budget_for_profile(profile)
+        if estimated_tokens > soft_budget and attempt_idx < len(retry_sequence) - 1:
+            last_error = f"Contexte estime trop grand pour {profile} ({estimated_tokens}>{soft_budget}), downgrade profil."
+            continue
+        if estimated_tokens > int(HARD_CONTEXT_TOKEN_BUDGET):
+            if attempt_idx < len(retry_sequence) - 1:
+                last_error = (
+                    f"Contexte estime depasse la borne dure ({estimated_tokens}>{int(HARD_CONTEXT_TOKEN_BUDGET)}), "
+                    "downgrade profil."
+                )
+                continue
+            return {
+                "error": (
+                    "Contexte trop volumineux meme en profil minimal "
+                    f"({estimated_tokens}>{int(HARD_CONTEXT_TOKEN_BUDGET)})."
+                ),
+                "context_profile_used": profile,
+                "context_retry_count": int(attempt_idx),
+                "context_estimated_input_tokens": int(estimated_tokens),
+                "context_compaction_notes": compaction_notes,
+                "llm_exec_seconds": float(max(time.perf_counter() - started_at, 0.0)),
+            }
 
         try:
             response = client.responses.create(
@@ -674,6 +722,7 @@ def run_llm_analysis(
                 "context_retry_count": int(attempt_idx),
                 "context_estimated_input_tokens": int(estimated_tokens),
                 "context_compaction_notes": compaction_notes,
+                "llm_exec_seconds": float(max(time.perf_counter() - started_at, 0.0)),
             }
 
         report_md = getattr(response, "output_text", None) or ""
@@ -686,6 +735,7 @@ def run_llm_analysis(
                 "context_retry_count": int(attempt_idx),
                 "context_estimated_input_tokens": int(estimated_tokens),
                 "context_compaction_notes": compaction_notes,
+                "llm_exec_seconds": float(max(time.perf_counter() - started_at, 0.0)),
             }
 
         usage = getattr(response, "usage", None)
@@ -708,6 +758,7 @@ def run_llm_analysis(
             "context_retry_count": int(attempt_idx),
             "context_estimated_input_tokens": int(estimated_tokens),
             "context_compaction_notes": compaction_notes,
+            "llm_exec_seconds": float(max(time.perf_counter() - started_at, 0.0)),
             "selection_summary": {
                 "countries": countries if isinstance(countries, list) else [countries],
                 "years": selection.get("years", []),
@@ -724,6 +775,7 @@ def run_llm_analysis(
         "context_retry_count": int(max(len(retry_sequence) - 1, 0)),
         "context_estimated_input_tokens": int(last_estimated_tokens),
         "context_compaction_notes": last_notes,
+        "llm_exec_seconds": float(max(time.perf_counter() - started_at, 0.0)),
     }
 
 

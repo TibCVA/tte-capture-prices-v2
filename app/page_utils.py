@@ -30,11 +30,13 @@ from src.storage import (
 try:
     from src.reporting.evidence_loader import (
         compute_question_bundle_signature,
+        discover_complete_runs,
         load_question_bundle_from_combined_run_verified as _load_question_bundle_from_combined_run_verified,
         validate_combined_run,
     )
 except Exception:
     compute_question_bundle_signature = None  # type: ignore[assignment]
+    discover_complete_runs = None  # type: ignore[assignment]
     _load_question_bundle_from_combined_run_verified = None  # type: ignore[assignment]
     validate_combined_run = None  # type: ignore[assignment]
 from src.reporting.session_cache import (
@@ -889,17 +891,86 @@ def restore_question_payload_from_session_cache(
     last_batch = snapshot.get("last_llm_batch_result")
     if isinstance(last_batch, dict) and isinstance(last_batch.get("rows"), list):
         st.session_state["last_llm_batch_result"] = last_batch
+    llm_batch_state = snapshot.get("llm_batch_state")
+    if isinstance(llm_batch_state, dict):
+        st.session_state["llm_batch_state"] = dict(llm_batch_state)
     return True
+
+
+def restore_question_payload_with_latest_run_fallback(
+    question_id: str,
+    result_key: str,
+    *,
+    base_dir: str = "outputs/combined",
+) -> bool:
+    qid = str(question_id).upper().strip()
+    if qid not in _RESULT_STATE_KEY_BY_QUESTION:
+        return False
+    if restore_question_payload_from_session_cache(qid, result_key, base_dir=base_dir):
+        return True
+    if not callable(load_question_bundle_from_combined_run_safe):
+        return False
+
+    combined_base = _to_abs_project_path(base_dir)
+    candidate_run_ids: list[str] = []
+    preferred_run_id = str(st.session_state.get("last_full_refresh_run_id", "")).strip()
+    if preferred_run_id:
+        candidate_run_ids.append(preferred_run_id)
+
+    if callable(discover_complete_runs):
+        try:
+            runs = discover_complete_runs(combined_base)
+        except Exception:
+            runs = []
+        for run in runs:
+            run_id = str(getattr(run, "name", "")).strip()
+            if run_id and run_id not in candidate_run_ids:
+                candidate_run_ids.append(run_id)
+
+    for run_id in candidate_run_ids:
+        run_dir = combined_base / run_id
+        if callable(validate_combined_run):
+            try:
+                valid, _ = validate_combined_run(run_dir)
+            except Exception:
+                valid = False
+            if not valid:
+                continue
+        try:
+            bundle, out_dir = load_question_bundle_from_combined_run_safe(
+                run_id=run_id,
+                question_id=qid,
+                base_dir=base_dir,
+                allow_fail_checks=True,
+            )
+        except Exception:
+            continue
+
+        check_counts = _extract_check_counts(bundle.checks)
+        quality_status = _quality_status_from_counts(check_counts)
+        fail_codes = _extract_fail_codes(bundle.checks, limit=5)
+        st.session_state[result_key] = {
+            "bundle": bundle,
+            "out_dir": str(out_dir),
+            "bundle_hash": f"{bundle.run_id}_{qid}",
+            "quality_status": quality_status,
+            "check_counts": check_counts,
+            "fail_codes_top5": fail_codes,
+        }
+        st.session_state["last_full_refresh_run_id"] = str(bundle.run_id)
+        return True
+    return False
 
 
 def persist_question_payloads_to_session_cache(
     payloads_by_question: dict[str, dict[str, Any]],
     *,
     last_llm_batch_result: dict[str, Any] | None = None,
+    llm_batch_state: dict[str, Any] | None = None,
     base_dir: str = "outputs/combined",
 ) -> Path | None:
-    if not isinstance(payloads_by_question, dict) or not payloads_by_question:
-        return None
+    if not isinstance(payloads_by_question, dict):
+        payloads_by_question = {}
 
     prepared: dict[str, tuple[QuestionBundleResult, dict[str, Any]]] = {}
     run_ids: set[str] = set()
@@ -919,7 +990,26 @@ def persist_question_payloads_to_session_cache(
         prepared[qid] = (bundle, payload)
 
     if not prepared:
-        return None
+        snapshot_existing = load_session_snapshot()
+        if not isinstance(snapshot_existing, dict):
+            return None
+        questions_existing = snapshot_existing.get("questions", {})
+        if not isinstance(questions_existing, dict) or not questions_existing:
+            return None
+        snapshot: dict[str, Any] = {
+            "active_run_id": str(snapshot_existing.get("active_run_id", "")).strip() or "MIXED",
+            "questions": questions_existing,
+        }
+        if snapshot_existing.get("run_dir_mtime_ns") is not None:
+            snapshot["run_dir_mtime_ns"] = snapshot_existing.get("run_dir_mtime_ns")
+        if isinstance(last_llm_batch_result, dict) and isinstance(last_llm_batch_result.get("rows"), list):
+            snapshot["last_llm_batch_result"] = {
+                "generated_at_utc": str(last_llm_batch_result.get("generated_at_utc", "")),
+                "rows": list(last_llm_batch_result.get("rows", [])),
+            }
+        if isinstance(llm_batch_state, dict):
+            snapshot["llm_batch_state"] = dict(llm_batch_state)
+        return save_session_snapshot(snapshot)
 
     active_run_id = next(iter(run_ids)) if len(run_ids) == 1 else "MIXED"
 
@@ -970,5 +1060,7 @@ def persist_question_payloads_to_session_cache(
             "generated_at_utc": str(last_llm_batch_result.get("generated_at_utc", "")),
             "rows": list(last_llm_batch_result.get("rows", [])),
         }
+    if isinstance(llm_batch_state, dict):
+        snapshot["llm_batch_state"] = dict(llm_batch_state)
 
     return save_session_snapshot(snapshot)

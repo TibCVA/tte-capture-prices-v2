@@ -316,15 +316,12 @@ if not callable(persist_question_payloads_to_session_cache):
 
 _LLM_BATCH_IMPORT_ERROR: Exception | None = None
 try:
-    from app.llm_analysis import resolve_openai_api_key
+    from app.llm_analysis import resolve_openai_api_key, serialize_bundle_for_llm
     from app.llm_batch import (
         QUESTION_ORDER,
-        build_default_selection,
-        prepare_bundle_for_question,
         run_parallel_llm_generation,
         validate_llm_batch_rows,
     )
-    from src.config_loader import load_countries
     from src.pipeline import load_assumptions_table
 except Exception as exc:  # pragma: no cover - defensive
     _LLM_BATCH_IMPORT_ERROR = exc
@@ -333,11 +330,8 @@ except Exception as exc:  # pragma: no cover - defensive
     def resolve_openai_api_key(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("resolve_openai_api_key indisponible.")
 
-    def build_default_selection(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("build_default_selection indisponible.")
-
-    def prepare_bundle_for_question(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("prepare_bundle_for_question indisponible.")
+    def serialize_bundle_for_llm(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("serialize_bundle_for_llm indisponible.")
 
     def run_parallel_llm_generation(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("run_parallel_llm_generation indisponible.")
@@ -345,11 +339,14 @@ except Exception as exc:  # pragma: no cover - defensive
     def validate_llm_batch_rows(*args, **kwargs):  # type: ignore[no-redef]
         return [], ["validate_llm_batch_rows indisponible."]
 
-    def load_countries(*args, **kwargs):  # type: ignore[no-redef]
-        raise RuntimeError("load_countries indisponible.")
-
     def load_assumptions_table(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("load_assumptions_table indisponible.")
+
+try:
+    from src.runtime.llm_batch_events import append_llm_batch_event
+except Exception:
+    def append_llm_batch_event(*args, **kwargs):  # type: ignore[no-redef]
+        return None
 
 from app.ui_components import (
     guided_header,
@@ -379,6 +376,7 @@ def _snapshot_question_bundle_session_state() -> dict[str, object]:
         "last_full_refresh_run_id",
         "last_llm_batch_result",
         "llm_batch_running",
+        "llm_batch_state",
         "last_delivery_zip_path",
         "last_delivery_manifest",
         "last_onedrive_upload_status",
@@ -394,6 +392,7 @@ def _restore_question_bundle_session_state(snapshot: dict[str, object]) -> None:
     st.session_state.pop("last_full_refresh_run_id", None)
     st.session_state.pop("last_llm_batch_result", None)
     st.session_state.pop("llm_batch_running", None)
+    st.session_state.pop("llm_batch_state", None)
     st.session_state.pop("last_delivery_zip_path", None)
     st.session_state.pop("last_delivery_manifest", None)
     st.session_state.pop("last_onedrive_upload_status", None)
@@ -459,12 +458,17 @@ def _current_question_payloads() -> dict[str, dict[str, object]]:
 
 def _persist_session_cache_snapshot() -> tuple[str | None, str | None]:
     payloads = _current_question_payloads()
-    if not payloads:
+    last_batch = st.session_state.get("last_llm_batch_result")
+    llm_batch_state = st.session_state.get("llm_batch_state")
+    has_batch_payload = isinstance(last_batch, dict) and isinstance(last_batch.get("rows"), list)
+    has_batch_state = isinstance(llm_batch_state, dict)
+    if not payloads and not has_batch_payload and not has_batch_state:
         return None, None
     try:
         cache_path = persist_question_payloads_to_session_cache(
             payloads,
-            last_llm_batch_result=st.session_state.get("last_llm_batch_result"),
+            last_llm_batch_result=last_batch if isinstance(last_batch, dict) else None,
+            llm_batch_state=llm_batch_state if isinstance(llm_batch_state, dict) else None,
             base_dir="outputs/combined",
         )
     except Exception as exc:
@@ -533,6 +537,8 @@ def _clear_question_bundle_session_state() -> None:
     st.session_state.pop("last_full_refresh_run_id", None)
     st.session_state.pop("last_llm_batch_result", None)
     st.session_state.pop("llm_batch_running", None)
+    st.session_state.pop("llm_batch_state", None)
+    st.session_state.pop("llm_batch_started_at_utc", None)
     st.session_state.pop("last_delivery_zip_path", None)
     st.session_state.pop("last_delivery_manifest", None)
     st.session_state.pop("last_onedrive_upload_status", None)
@@ -846,6 +852,107 @@ def _hydrate_question_pages_from_prepared(prepared_items: list[dict]) -> tuple[l
     return loaded, failed
 
 
+def _prepared_item_from_payload(qid: str, payload: dict[str, object], source: str) -> dict[str, object]:
+    bundle = payload.get("bundle")
+    if not isinstance(bundle, QuestionBundleResult):
+        raise TypeError(f"{qid}: payload bundle invalide.")
+    bundle_hash = str(payload.get("bundle_hash", "")).strip() or f"{bundle.run_id}_{qid}"
+    bundle_data = serialize_bundle_for_llm(bundle)
+    return {
+        "question_id": qid,
+        "bundle_hash": bundle_hash,
+        "bundle": bundle,
+        "bundle_data": bundle_data,
+        "source": source,
+    }
+
+
+def build_prepared_items_for_llm_batch() -> tuple[list[dict[str, object]], dict[str, str], dict[str, str]]:
+    prepared_items: list[dict[str, object]] = []
+    failed: dict[str, str] = {}
+    source_by_qid: dict[str, str] = {}
+    fallback_run_id: str | None = None
+
+    for qid in _ACCUEIL_QUESTION_ORDER:
+        result_key = _RESULT_STATE_KEY_BY_QUESTION.get(qid, "")
+        payload = st.session_state.get(result_key)
+        if isinstance(payload, dict):
+            try:
+                prepared_items.append(_prepared_item_from_payload(qid, payload, "session"))
+                source_by_qid[qid] = "session"
+                continue
+            except Exception:
+                pass
+
+        restored_ok = False
+        try:
+            restored_ok = bool(
+                restore_question_payload_from_session_cache(
+                    question_id=qid,
+                    result_key=result_key,
+                    base_dir="outputs/combined",
+                )
+            )
+        except Exception:
+            restored_ok = False
+        if restored_ok:
+            payload = st.session_state.get(result_key)
+            if isinstance(payload, dict):
+                try:
+                    prepared_items.append(_prepared_item_from_payload(qid, payload, "session_cache"))
+                    source_by_qid[qid] = "session_cache"
+                    continue
+                except Exception:
+                    pass
+
+        if fallback_run_id is None:
+            try:
+                preferred = str(st.session_state.get("last_full_refresh_run_id", "")).strip() or None
+                fallback_run_id, _ = _load_preferred_run_id(preferred, base_dir="outputs/combined")
+            except Exception:
+                fallback_run_id = ""
+        if fallback_run_id:
+            try:
+                bundle, out_dir = load_question_bundle_from_combined_run_safe(
+                    run_id=fallback_run_id,
+                    question_id=qid,
+                    base_dir="outputs/combined",
+                    allow_fail_checks=True,
+                )
+                checks = _extract_check_counts(bundle.checks)
+                fail_codes = _extract_fail_codes(bundle.checks, limit=5)
+                payload = {
+                    "bundle": bundle,
+                    "out_dir": str(out_dir),
+                    "bundle_hash": f"{bundle.run_id}_{qid}",
+                    "quality_status": _quality_status_from_counts(checks),
+                    "check_counts": checks,
+                    "fail_codes_top5": fail_codes,
+                }
+                st.session_state[result_key] = payload
+                st.session_state["last_full_refresh_run_id"] = str(bundle.run_id)
+                prepared_items.append(_prepared_item_from_payload(qid, payload, "combined_run"))
+                source_by_qid[qid] = "combined_run"
+                continue
+            except Exception as exc:
+                failed[qid] = f"chargement run combine impossible: {exc}"
+
+        if qid not in failed:
+            failed[qid] = "aucun bundle disponible (session/cache/run combine)."
+        prepared_items.append(
+            {
+                "question_id": qid,
+                "status": "FAILED_PREP",
+                "bundle_hash": "",
+                "error": failed[qid],
+                "source": "missing",
+            }
+        )
+        source_by_qid[qid] = "missing"
+
+    return prepared_items, failed, source_by_qid
+
+
 def _merge_llm_batch_rows(
     previous_rows: list[dict[str, object]],
     new_rows: list[dict[str, object]],
@@ -885,6 +992,97 @@ def _merge_llm_batch_rows(
     )
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _heartbeat_timeout_seconds() -> int:
+    raw = str(os.getenv("LLM_BATCH_HEARTBEAT_TIMEOUT_S", "180")).strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 180
+    return value if value > 0 else 180
+
+
+def _mark_running_batch_interrupted_if_stale() -> bool:
+    state = st.session_state.get("llm_batch_state")
+    if not isinstance(state, dict):
+        return False
+    if str(state.get("status", "")).upper().strip() != "RUNNING":
+        return False
+    hb_raw = str(state.get("heartbeat_utc", "")).strip()
+    if not hb_raw:
+        return False
+    try:
+        heartbeat = datetime.fromisoformat(hb_raw.replace("Z", "+00:00"))
+    except Exception:
+        return False
+    age_seconds = (datetime.now(timezone.utc) - heartbeat.astimezone(timezone.utc)).total_seconds()
+    if age_seconds <= float(_heartbeat_timeout_seconds()):
+        return False
+    state["status"] = "INTERRUPTED"
+    state["interrupted_at_utc"] = _utc_now_iso()
+    state["last_error"] = f"Batch interrompu (heartbeat > {_heartbeat_timeout_seconds()}s)."
+    st.session_state["llm_batch_state"] = state
+    _persist_session_cache_snapshot()
+    append_llm_batch_event(
+        "interrupted",
+        {
+            "batch_id": str(state.get("batch_id", "")),
+            "reason": str(state.get("last_error", "")),
+            "completed_qids": list(state.get("completed_qids", [])),
+            "expected_qids": list(state.get("expected_qids", [])),
+        },
+    )
+    return True
+
+
+def _upsert_llm_batch_state(
+    *,
+    batch_id: str,
+    status: str,
+    expected_qids: list[str],
+    completed_qids: list[str],
+    last_error: str = "",
+) -> None:
+    st.session_state["llm_batch_state"] = {
+        "batch_id": str(batch_id),
+        "started_at_utc": str(st.session_state.get("llm_batch_started_at_utc", _utc_now_iso())),
+        "status": str(status).upper(),
+        "expected_qids": [str(q).upper() for q in expected_qids if str(q).strip()],
+        "completed_qids": [str(q).upper() for q in completed_qids if str(q).strip()],
+        "heartbeat_utc": _utc_now_iso(),
+        "last_error": str(last_error or "").strip(),
+    }
+
+
+def _last_llm_batch_event_label() -> str:
+    log_path = Path("outputs/audit/llm_batch_events.jsonl")
+    abs_path = _to_abs_project_path(log_path)
+    if not abs_path.exists():
+        return ""
+    try:
+        lines = abs_path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return ""
+    if not lines:
+        return ""
+    try:
+        payload = json.loads(lines[-1])
+    except Exception:
+        return ""
+    event_type = str(payload.get("event_type", "")).strip()
+    ts = str(payload.get("timestamp_utc", "")).strip()
+    details = payload.get("payload", {})
+    if isinstance(details, dict):
+        qid = str(details.get("question_id", "")).strip()
+        status = str(details.get("status", "")).strip()
+        if qid and status:
+            return f"Dernier evenement batch IA: {event_type} | {qid} -> {status} | {ts}"
+    return f"Dernier evenement batch IA: {event_type} | {ts}"
+
+
 def render() -> None:
     inject_theme()
     guided_header(
@@ -899,6 +1097,22 @@ def render() -> None:
             "Restauration automatique des analyses depuis le cache local: "
             + ", ".join(restored_q)
         )
+    if _mark_running_batch_interrupted_if_stale():
+        st.warning("Batch IA interrompu detecte apres reprise runtime. Les resultats partiels ont ete restaures.")
+
+    llm_batch_state = st.session_state.get("llm_batch_state")
+    if isinstance(llm_batch_state, dict):
+        status = str(llm_batch_state.get("status", "")).upper().strip()
+        expected = list(llm_batch_state.get("expected_qids", []))
+        completed = list(llm_batch_state.get("completed_qids", []))
+        if status:
+            st.caption(
+                f"Etat batch IA: {status} | progression {len(completed)}/{len(expected)}"
+                + (f" | batch_id={llm_batch_state.get('batch_id', '')}" if llm_batch_state.get("batch_id") else "")
+            )
+    last_event_label = _last_llm_batch_event_label()
+    if last_event_label:
+        st.caption(last_event_label)
 
     render_kpi_cards_styled(
         [
@@ -1266,152 +1480,210 @@ def render() -> None:
         else:
             st.session_state["llm_batch_running"] = True
             try:
-                try:
-                    annual_hist = load_annual_metrics()
-                except Exception as exc:
-                    st.error(f"Impossible de charger annual_metrics: {exc}")
-                    annual_hist = pd.DataFrame()
-
-                if annual_hist.empty:
-                    st.error("Aucune metrique annuelle disponible. Le batch IA est bloque.")
+                api_key = resolve_openai_api_key()
+                if not api_key:
+                    st.error("Cle OpenAI manquante. Configure OPENAI_API_KEY dans l'environnement ou les secrets Streamlit.")
                 else:
-                    api_key = resolve_openai_api_key()
-                    if not api_key:
-                        st.error("Cle OpenAI manquante. Configure OPENAI_API_KEY dans l'environnement ou les secrets Streamlit.")
-                    else:
-                        assumptions_phase1 = load_assumptions_table()
-                        assumptions_phase2 = load_phase2_assumptions_table()
-                        countries_cfg = load_countries()
+                    prep_progress = st.progress(0.0)
+                    prep_status = st.empty()
+                    prep_status.text("Preparation IA: reutilisation des bundles existants/cache/run combine...")
+                    prepared_items, prep_failed, prep_sources = build_prepared_items_for_llm_batch()
+                    prep_progress.progress(0.4)
 
-                        prepared_items: list[dict] = []
-                        prep_progress = st.progress(0.0)
-                        prep_status = st.empty()
-                        total_q = len(QUESTION_ORDER)
+                    prep_status.text("Prechargement des sections Q1..Q5...")
+                    loaded_q, failed_q = _hydrate_question_pages_from_prepared(prepared_items)
+                    prep_progress.progress(0.6)
 
-                        for idx, qid in enumerate(QUESTION_ORDER, start=1):
-                            prep_status.text(f"Preparation bundle {qid} ({idx}/{total_q})...")
-                            try:
-                                selection = build_default_selection(
-                                    qid,
-                                    annual_hist=annual_hist,
-                                    assumptions_phase2=assumptions_phase2,
-                                    countries_cfg=countries_cfg,
-                                )
-                                prepared = prepare_bundle_for_question(
-                                    qid,
-                                    selection=selection,
-                                    assumptions_phase1=assumptions_phase1,
-                                    assumptions_phase2=assumptions_phase2,
-                                )
-                            except Exception as exc:
-                                prepared = {
-                                    "question_id": qid,
-                                    "status": "FAILED_PREP",
-                                    "bundle_hash": "",
-                                    "error": str(exc),
-                                }
-                            prepared_items.append(prepared)
-                            prep_progress.progress(idx / max(total_q * 2, 1))
-
-                        prep_status.text("Prechargement des sections Q1..Q5...")
-                        loaded_q, failed_q = _hydrate_question_pages_from_prepared(prepared_items)
-
-                        prep_status.text("Generation IA en parallele en cours...")
-                        llm_progress = st.progress(0.0)
-                        llm_status = st.empty()
-                        llm_total = max(
-                            1,
-                            len(
-                                [
-                                    item
-                                    for item in prepared_items
-                                    if str(item.get("question_id", "")).strip()
-                                ]
-                            ),
+                    if prep_sources:
+                        src_msg = ", ".join([f"{qid}:{src}" for qid, src in sorted(prep_sources.items())])
+                        st.caption("Sources bundles batch IA: " + src_msg)
+                    if prep_failed:
+                        st.warning(
+                            "Questions sans bundle pret (skip non bloquant): "
+                            + " | ".join([f"{qid}: {msg}" for qid, msg in prep_failed.items()])
                         )
-                        llm_done = {"count": 0}
 
-                        def _on_llm_item_done(row: dict) -> None:
-                            llm_done["count"] = int(llm_done.get("count", 0)) + 1
-                            done = int(llm_done["count"])
-                            qid = str(row.get("question_id", "")).upper()
-                            status = str(row.get("status", "")).upper()
-                            llm_progress.progress(min(done / llm_total, 1.0))
-                            llm_status.text(f"IA {done}/{llm_total}: {qid} -> {status}")
+                    expected_qids = [
+                        str(item.get("question_id", "")).upper()
+                        for item in prepared_items
+                        if str(item.get("question_id", "")).strip()
+                    ]
+                    st.session_state["llm_batch_started_at_utc"] = _utc_now_iso()
+                    batch_id = f"LLM_BATCH_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+                    _upsert_llm_batch_state(
+                        batch_id=batch_id,
+                        status="RUNNING",
+                        expected_qids=expected_qids,
+                        completed_qids=[],
+                    )
+                    _persist_session_cache_snapshot()
+                    append_llm_batch_event(
+                        "start",
+                        {
+                            "batch_id": batch_id,
+                            "expected_qids": expected_qids,
+                            "sources": prep_sources,
+                        },
+                    )
 
-                        raw_timeout = str(os.getenv("LLM_BATCH_TIMEOUT_S", "420")).strip()
-                        try:
-                            batch_timeout_s = int(raw_timeout)
-                        except Exception:
-                            batch_timeout_s = 420
-                        if batch_timeout_s <= 0:
-                            batch_timeout_s = 420
+                    prep_status.text("Generation IA en parallele en cours...")
+                    llm_progress = st.progress(0.0)
+                    llm_status = st.empty()
+                    llm_total = max(1, len(expected_qids))
+                    llm_done = {"count": 0}
 
-                        with st.spinner("Appels IA Q1->Q5 en execution parallele..."):
-                            raw_rows = run_parallel_llm_generation(
-                                prepared_items=prepared_items,
-                                api_key=api_key,
-                                max_workers=5,
-                                batch_timeout_s=batch_timeout_s,
-                                on_item_done=_on_llm_item_done,
-                            )
-                        llm_progress.progress(1.0)
-                        llm_status.text(f"IA {llm_total}/{llm_total}: traitement termine.")
-                        expected_by_qid = {
-                            str(item.get("question_id", "")).upper(): str(item.get("bundle_hash", "")).strip()
-                            for item in prepared_items
-                            if str(item.get("status", "")).upper() != "FAILED_PREP"
-                            and str(item.get("bundle_hash", "")).strip()
-                        }
-                        rows, row_issues = validate_llm_batch_rows(raw_rows, expected_by_qid)
-                        prep_progress.progress(1.0)
-                        prep_status.empty()
-                        prep_progress.empty()
-                        llm_status.empty()
-                        llm_progress.empty()
+                    def _on_llm_item_done(row: dict) -> None:
+                        llm_done["count"] = int(llm_done.get("count", 0)) + 1
+                        done = int(llm_done["count"])
+                        qid = str(row.get("question_id", "")).upper()
+                        status = str(row.get("status", "")).upper()
+                        llm_progress.progress(min(done / llm_total, 1.0))
+                        llm_status.text(f"IA {done}/{llm_total}: {qid} -> {status}")
 
                         previous_batch = st.session_state.get("last_llm_batch_result")
                         previous_rows = []
                         if isinstance(previous_batch, dict) and isinstance(previous_batch.get("rows"), list):
                             previous_rows = list(previous_batch.get("rows", []))
-                        merged_rows = _merge_llm_batch_rows(previous_rows, rows)
+                        merged_incremental = _merge_llm_batch_rows(previous_rows, [row])
                         st.session_state["last_llm_batch_result"] = {
-                            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-                            "rows": merged_rows,
+                            "generated_at_utc": _utc_now_iso(),
+                            "rows": merged_incremental,
                         }
+                        state = st.session_state.get("llm_batch_state")
+                        if isinstance(state, dict):
+                            completed = {str(q).upper() for q in state.get("completed_qids", []) if str(q).strip()}
+                            if qid:
+                                completed.add(qid)
+                            _upsert_llm_batch_state(
+                                batch_id=str(state.get("batch_id", batch_id)),
+                                status=str(state.get("status", "RUNNING")),
+                                expected_qids=list(state.get("expected_qids", expected_qids)),
+                                completed_qids=sorted(completed),
+                                last_error=str(state.get("last_error", "")),
+                            )
                         _persist_session_cache_snapshot()
+                        append_llm_batch_event(
+                            "item_done",
+                            {
+                                "batch_id": batch_id,
+                                "question_id": qid,
+                                "status": status,
+                                "error": str(row.get("error", "")).strip(),
+                            },
+                        )
 
-                        if loaded_q:
-                            st.info(f"Sections prechargees apres batch IA: {', '.join(loaded_q)}")
-                        if failed_q:
-                            st.warning(
-                                "Prechargement partiel apres batch IA: "
-                                + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()])
-                            )
-                        if row_issues:
-                            st.warning("Controles batch IA: " + " | ".join(row_issues))
-                        ok_count = sum(1 for row in merged_rows if str(row.get("status", "")).upper() == "OK")
-                        raw_fail_rows = [row for row in rows if str(row.get("status", "")).upper().startswith("FAILED_")]
-                        raw_fail_count = len(raw_fail_rows)
-                        preserved_rows = [
-                            row
-                            for row in merged_rows
-                            if str(row.get("status", "")).upper() == "OK"
-                            and str(row.get("last_attempt_status", "")).upper().startswith("FAILED_")
-                        ]
-                        if preserved_rows:
-                            preserved_q = ", ".join(str(r.get("question_id", "")) for r in preserved_rows if str(r.get("question_id", "")).strip())
-                            st.info(
-                                "Generation IA: rapports precedents conserves pour les questions en echec de la tentative courante"
-                                + (f" ({preserved_q})." if preserved_q else ".")
-                            )
-                        if raw_fail_count == 0:
-                            st.success(f"Generation IA terminee: {ok_count}/{len(merged_rows)} questions traitees.")
-                        else:
-                            st.warning(
-                                "Generation IA terminee avec succes partiel non bloquant: "
-                                + f"{ok_count} questions disponibles, {raw_fail_count} echec(s) sur la tentative courante."
-                            )
+                    raw_timeout = str(os.getenv("LLM_BATCH_TIMEOUT_S", "420")).strip()
+                    try:
+                        batch_timeout_s = int(raw_timeout)
+                    except Exception:
+                        batch_timeout_s = 420
+                    if batch_timeout_s <= 0:
+                        batch_timeout_s = 420
+
+                    raw_workers = str(os.getenv("LLM_BATCH_MAX_WORKERS", "2")).strip()
+                    try:
+                        max_workers = int(raw_workers)
+                    except Exception:
+                        max_workers = 2
+                    if max_workers <= 0:
+                        max_workers = 2
+
+                    with st.spinner("Appels IA Q1->Q5 en execution parallele..."):
+                        raw_rows = run_parallel_llm_generation(
+                            prepared_items=prepared_items,
+                            api_key=api_key,
+                            max_workers=max_workers,
+                            batch_timeout_s=batch_timeout_s,
+                            on_item_done=_on_llm_item_done,
+                        )
+                    llm_progress.progress(1.0)
+                    llm_status.text(f"IA {llm_total}/{llm_total}: traitement termine.")
+                    expected_by_qid = {
+                        str(item.get("question_id", "")).upper(): str(item.get("bundle_hash", "")).strip()
+                        for item in prepared_items
+                        if str(item.get("status", "")).upper() != "FAILED_PREP"
+                        and str(item.get("bundle_hash", "")).strip()
+                    }
+                    rows, row_issues = validate_llm_batch_rows(raw_rows, expected_by_qid)
+                    prep_progress.progress(1.0)
+                    prep_status.empty()
+                    prep_progress.empty()
+                    llm_status.empty()
+                    llm_progress.empty()
+
+                    previous_batch = st.session_state.get("last_llm_batch_result")
+                    previous_rows = []
+                    if isinstance(previous_batch, dict) and isinstance(previous_batch.get("rows"), list):
+                        previous_rows = list(previous_batch.get("rows", []))
+                    merged_rows = _merge_llm_batch_rows(previous_rows, rows)
+                    st.session_state["last_llm_batch_result"] = {
+                        "generated_at_utc": _utc_now_iso(),
+                        "rows": merged_rows,
+                    }
+
+                    if loaded_q:
+                        st.info(f"Sections prechargees apres batch IA: {', '.join(loaded_q)}")
+                    if failed_q:
+                        st.warning(
+                            "Prechargement partiel apres batch IA: "
+                            + " | ".join([f"{qid}: {msg}" for qid, msg in failed_q.items()])
+                        )
+                    if row_issues:
+                        st.warning("Controles batch IA: " + " | ".join(row_issues))
+                    ok_count = sum(1 for row in merged_rows if str(row.get("status", "")).upper() == "OK")
+                    raw_fail_rows = [row for row in rows if str(row.get("status", "")).upper().startswith("FAILED_")]
+                    raw_fail_count = len(raw_fail_rows)
+                    preserved_rows = [
+                        row
+                        for row in merged_rows
+                        if str(row.get("status", "")).upper() == "OK"
+                        and str(row.get("last_attempt_status", "")).upper().startswith("FAILED_")
+                    ]
+                    if preserved_rows:
+                        preserved_q = ", ".join(str(r.get("question_id", "")) for r in preserved_rows if str(r.get("question_id", "")).strip())
+                        st.info(
+                            "Generation IA: rapports precedents conserves pour les questions en echec de la tentative courante"
+                            + (f" ({preserved_q})." if preserved_q else ".")
+                        )
+                    final_status = "COMPLETED" if raw_fail_count == 0 else "COMPLETED_PARTIAL"
+                    _upsert_llm_batch_state(
+                        batch_id=batch_id,
+                        status=final_status,
+                        expected_qids=expected_qids,
+                        completed_qids=expected_qids,
+                        last_error="" if raw_fail_count == 0 else "Batch termine avec echecs partiels.",
+                    )
+                    _persist_session_cache_snapshot()
+                    append_llm_batch_event(
+                        "completed",
+                        {
+                            "batch_id": batch_id,
+                            "status": final_status,
+                            "ok_count": ok_count,
+                            "failed_count": raw_fail_count,
+                            "issues": row_issues,
+                        },
+                    )
+                    if raw_fail_count == 0:
+                        st.success(f"Generation IA terminee: {ok_count}/{len(merged_rows)} questions traitees.")
+                    else:
+                        st.warning(
+                            "Generation IA terminee avec succes partiel non bloquant: "
+                            + f"{ok_count} questions disponibles, {raw_fail_count} echec(s) sur la tentative courante."
+                        )
+            except Exception as exc:
+                state = st.session_state.get("llm_batch_state")
+                if isinstance(state, dict):
+                    _upsert_llm_batch_state(
+                        batch_id=str(state.get("batch_id", "")),
+                        status="FAILED",
+                        expected_qids=list(state.get("expected_qids", [])),
+                        completed_qids=list(state.get("completed_qids", [])),
+                        last_error=str(exc),
+                    )
+                    _persist_session_cache_snapshot()
+                append_llm_batch_event("failed", {"error": str(exc)})
+                st.error(f"Echec batch IA: {exc}")
             finally:
                 st.session_state["llm_batch_running"] = False
 

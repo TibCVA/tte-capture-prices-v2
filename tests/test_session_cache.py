@@ -174,3 +174,66 @@ def test_validate_session_snapshot_rejects_old_schema(tmp_path: Path) -> None:
     valid, errors = validate_session_snapshot(snapshot, combined_base)
     assert valid is False
     assert any("Schema snapshot incompatible" in err for err in errors)
+
+
+def test_validate_session_snapshot_allows_run_mtime_mismatch(tmp_path: Path) -> None:
+    combined_base = tmp_path / "outputs" / "combined"
+    run_dir = _build_run(combined_base, "RUN_MTIME")
+    questions: dict[str, dict[str, object]] = {}
+    for qid in ["Q1", "Q2", "Q3", "Q4", "Q5"]:
+        signature = compute_question_bundle_signature(run_dir, qid)
+        questions[qid] = build_question_snapshot_entry(
+            question_id=qid,
+            result_key=f"{qid.lower()}_bundle_result",
+            run_id="RUN_MTIME",
+            out_dir=str(run_dir / qid),
+            bundle_hash=f"RUN_MTIME_{qid}",
+            signature=signature,
+            quality_status="PASS",
+            check_counts={"PASS": 1, "WARN": 0, "FAIL": 0, "NON_TESTABLE": 0, "UNKNOWN": 0},
+            fail_codes_top5=[],
+        )
+    snapshot = {
+        "schema_version": SESSION_CACHE_SCHEMA_VERSION,
+        "active_run_id": "RUN_MTIME",
+        "run_dir_mtime_ns": int(run_dir.stat().st_mtime_ns) - 1,
+        "questions": questions,
+    }
+    valid, errors = validate_session_snapshot(snapshot, combined_base)
+    assert valid is True
+    assert errors == []
+
+
+def test_validate_session_snapshot_accepts_llm_batch_state(tmp_path: Path) -> None:
+    combined_base = tmp_path / "outputs" / "combined"
+    run_dir = _build_run(combined_base, "RUN_BATCH")
+    questions: dict[str, dict[str, object]] = {}
+    for qid in ["Q1", "Q2", "Q3", "Q4", "Q5"]:
+        signature = compute_question_bundle_signature(run_dir, qid)
+        questions[qid] = build_question_snapshot_entry(
+            question_id=qid,
+            result_key=f"{qid.lower()}_bundle_result",
+            run_id="RUN_BATCH",
+            out_dir=str(run_dir / qid),
+            bundle_hash=f"RUN_BATCH_{qid}",
+            signature=signature,
+            quality_status="PASS",
+            check_counts={"PASS": 1, "WARN": 0, "FAIL": 0, "NON_TESTABLE": 0, "UNKNOWN": 0},
+            fail_codes_top5=[],
+        )
+    snapshot = {
+        "schema_version": SESSION_CACHE_SCHEMA_VERSION,
+        "active_run_id": "RUN_BATCH",
+        "run_dir_mtime_ns": int(run_dir.stat().st_mtime_ns),
+        "questions": questions,
+        "llm_batch_state": {
+            "batch_id": "LLM_BATCH_X",
+            "status": "RUNNING",
+            "expected_qids": ["Q1", "Q2", "Q3", "Q4", "Q5"],
+            "completed_qids": ["Q1", "Q2"],
+            "heartbeat_utc": "2026-02-15T00:00:00+00:00",
+        },
+    }
+    valid, errors = validate_session_snapshot(snapshot, combined_base)
+    assert valid is True
+    assert errors == []
